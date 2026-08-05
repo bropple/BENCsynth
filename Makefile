@@ -39,7 +39,8 @@ GUI_SRC  := src/gui/main.cpp \
             src/gui/bs_gui.cpp \
             src/gui/bs_rope.cpp \
             src/gui/bs_rack.cpp \
-            src/gui/bs_keyboard.cpp
+            src/gui/bs_keyboard.cpp \
+            src/gui/bs_filedlg.cpp
 GUI_OBJ  := $(GUI_SRC:.cpp=.o)
 GUI      := bencsynth$(EXE)
 
@@ -115,7 +116,7 @@ LDLIBS_GUI := $(RL_LIBS) $(RL_SYS)
 # place the answer lives is the import table.
 ifeq ($(OS),Windows_NT)
   GUI_RES  := src/gui/bencsynth.res.o
-  GUI_LINK := -mwindows -static
+  GUI_LINK := -mwindows -static -lcomdlg32
 else
   GUI_RES  :=
   GUI_LINK :=

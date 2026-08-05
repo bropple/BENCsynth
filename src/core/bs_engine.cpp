@@ -5,7 +5,7 @@
 
 namespace bs {
 
-Engine::Engine() : load(0.0f), cachedRev(0), blockPos(BS_BLOCK)
+Engine::Engine() : load(0.0f), cachedRev(0), blockPos(BS_BLOCK), havePending(false)
 {
     for (int i = 0; i < BS_BLOCK; i++) { blockL[i] = 0.0f; blockR[i] = 0.0f; }
 }
@@ -74,30 +74,64 @@ void Engine::clear()
     keys.allNotesOff();
 }
 
-static NoteEvent ev(int kind, int note, float value)
+static NoteEvent ev(int kind, int note, float value, int atFrame)
 {
     NoteEvent e;
-    e.kind  = (uint8_t)kind;
-    e.note  = (uint8_t)(note < 0 ? 0 : (note > 127 ? 127 : note));
-    e.value = value;
+    e.kind   = (uint8_t)kind;
+    e.note   = (uint8_t)(note < 0 ? 0 : (note > 127 ? 127 : note));
+    e.value  = value;
+    e.offset = (uint32_t)(atFrame < 0 ? 0 : atFrame);
     return e;
 }
 
-void Engine::noteOn(int note, float velocity)
+void Engine::noteOn(int note, float velocity, int atFrame)
 {
     if (note < 0 || note > 127) return;
-    events.push(ev(NE_NOTE_ON, note, velocity));
+    events.push(ev(NE_NOTE_ON, note, velocity, atFrame));
 }
 
-void Engine::noteOff(int note)
+void Engine::noteOff(int note, int atFrame)
 {
     if (note < 0 || note > 127) return;
-    events.push(ev(NE_NOTE_OFF, note, 0.0f));
+    events.push(ev(NE_NOTE_OFF, note, 0.0f, atFrame));
 }
 
-void Engine::setBend(float b)    { events.push(ev(NE_BEND, 0, clampf(b, -1.0f, 1.0f))); }
-void Engine::setMod(float m)     { events.push(ev(NE_MOD,  0, clampf(m, 0.0f, 1.0f))); }
-void Engine::setSustain(bool on) { events.push(ev(NE_SUSTAIN, 0, on ? 1.0f : 0.0f)); }
+void Engine::setBend(float b, int atFrame)
+{
+    events.push(ev(NE_BEND, 0, clampf(b, -1.0f, 1.0f), atFrame));
+}
+
+void Engine::setMod(float m, int atFrame)
+{
+    events.push(ev(NE_MOD, 0, clampf(m, 0.0f, 1.0f), atFrame));
+}
+
+void Engine::setSustain(bool on, int atFrame)
+{
+    events.push(ev(NE_SUSTAIN, 0, on ? 1.0f : 0.0f, atFrame));
+}
+
+void Engine::setMacro(int index, float value01)
+{
+    if (index < 0 || index >= BS_MACROS) return;
+    const float v = clampf(value01, 0.0f, 1.0f);
+    for (int i = 0; i < patch.slotCount(); i++) {
+        Module *m = patch.module(i);
+        if (m && m->typeId == "MACRO" && index < m->paramCount())
+            m->params[(size_t)index].value = v;
+    }
+}
+
+float Engine::macroValue(int index) const
+{
+    if (index < 0 || index >= BS_MACROS) return 0.0f;
+    for (int i = 0; i < patch.slotCount(); i++) {
+        const Module *m = patch.module(i);
+        if (m && m->typeId == "MACRO" && index < m->paramCount())
+            return m->params[(size_t)index].value;
+    }
+    return 0.0f;
+}
 
 void Engine::panic()
 {
@@ -106,6 +140,7 @@ void Engine::panic()
      * cannot arrive after the panic and restart a note. */
     NoteEvent e;
     while (events.pop(&e)) { }
+    havePending = false;
     keys.allNotesOff();
     for (int i = 0; i < patch.slotCount(); i++) {
         Module *m = patch.module(i);
@@ -123,13 +158,26 @@ void Engine::render(float *interleaved, int frames)
             {
                 std::lock_guard<std::mutex> g(mutex);
 
-                /* Everything posted since the last block lands here, in order,
+                /* Everything due by this point in the buffer, in order,
                  * before anything reads it. Draining in the engine rather than
                  * in the keyboard module means a rack with two keyboard panels
                  * - or none at all - behaves: the events are consumed exactly
-                 * once either way. */
-                NoteEvent e;
-                while (events.pop(&e)) keys.apply(e);
+                 * once either way.
+                 *
+                 * An event lands on the block that supplies its frame. The
+                 * rack processes whole blocks, so that is as fine as the
+                 * timing gets - 32 frames - and an event asking for frame 400
+                 * of a 512-frame buffer is applied before the block that
+                 * starts at 384 rather than at the top of the call. */
+                for (;;) {
+                    if (!havePending) {
+                        if (!events.pop(&pending)) break;
+                        havePending = true;
+                    }
+                    if (pending.offset > (uint32_t)done) break;
+                    keys.apply(pending);
+                    havePending = false;
+                }
 
                 patch.process();
                 keys.clearRetriggers();
@@ -160,6 +208,13 @@ void Engine::render(float *interleaved, int frames)
         blockPos += n;
         done     += n;
     }
+
+    /* An event whose offset ran past the end of this call belongs to the next
+     * one, at its start. A host should not produce those - the offsets it
+     * gives are inside the buffer it asked for - so this is a guard against
+     * being handed something out of spec rather than a mechanism, and getting
+     * it slightly early is the failure to prefer over never getting it. */
+    if (havePending) pending.offset = 0;
 }
 
 /* ==================================================================== *
@@ -1588,9 +1643,10 @@ void presetGrandTour(Builder &b)
     const int vcf   = b.put("VCF");
 
     b.row(R2);
-    const int lfo1 = b.put("LFO");
-    const int lfo2 = b.put("LFO");
-    const int att  = b.put("ATT");
+    const int lfo1  = b.put("LFO");
+    const int lfo2  = b.put("LFO");
+    const int att   = b.put("ATT");
+    const int macro = b.put("MACRO");
     const int envF = b.put("ADSR");
     const int envA = b.put("ADSR");
     const int vca  = b.put("VCA");
@@ -1622,6 +1678,10 @@ void presetGrandTour(Builder &b)
     b.wire(lfo1, LFO_TRI, vco2, VCO_IN_PWM);
     b.wire(noise, NOISE_SH, att, 0);
     b.wire(att, 0, vcf, VCF_IN_CV2);
+    /* One macro onto the filter's resonance. Nothing in the rack needs it -
+     * it is here because a macro is the one control something outside the rack
+     * can reach, and this is what that looks like once it is cabled. */
+    b.wire(macro, 0, vcf, VCF_IN_RES);
 
     b.wire(vco1, VCO_SAW, mix, MIX_1);
     b.wire(vco2, VCO_PLS, mix, MIX_2);
@@ -1652,8 +1712,9 @@ void presetGrandTour(Builder &b)
     b.set(mix,  MIX_3, 0.45f); b.set(mix, MIX_4, 0.04f);
     b.set(lfo1, LFO_RATE, 0.7f);
     b.set(lfo2, LFO_RATE, 0.13f);
-    b.set(att,  ATT_AMT1, 0.35f);
-    b.set(att,  ATT_OFF1, 0.0f);
+    b.set(att,   ATT_AMT1, 0.35f);
+    b.set(att,   ATT_OFF1, 0.0f);
+    b.set(macro, 0, 0.25f);
     b.set(vcf,  VCF_CUTOFF, 340.0f); b.set(vcf, VCF_RES, 0.52f);
     b.set(vcf,  VCF_DRIVE, 1.7f);
     b.set(vcf,  VCF_CV1, 0.30f);     b.set(vcf, VCF_CV2, 0.55f);

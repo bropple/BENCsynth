@@ -1,13 +1,14 @@
 #include "bs_patchfile.h"
 #include "bs_modules.h"
 
+#include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
 #include <string>
 #include <vector>
 
-/* The only platform-dependent line in the core, and it is here rather than
+/* The only platform-dependent lines in the core, and they are here rather than
  * taken from raylib so that saving a rack does not drag a windowing library
  * into the part of the program a plugin links. */
 #ifdef _WIN32
@@ -25,122 +26,116 @@ using bs::Cable;
 static const char *MAGIC = "BENCSYNTH";
 static const int   VERSION = 1;
 
-const char *bs_patch_slot_path(int slot)
+/* ------------------------------------------------------------------ *
+ * Text
+ * ------------------------------------------------------------------ */
+
+static void appendf(std::string &s, const char *fmt, ...)
 {
-    static char path[64];
-    if (slot < 1) slot = 1;
-    if (slot > 8) slot = 8;
-    std::snprintf(path, sizeof path, "patches/rack-%d.bsp", slot);
-    return path;
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    std::vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    s += buf;
 }
 
-/* ------------------------------------------------------------------ */
-
-int bs_patch_save(bs::Engine *eng, const char *path, char *status, int cap)
+std::string bs_patch_to_string(bs::Engine *eng)
 {
-    /* The directory is made on the way past rather than at startup, so a
-     * program that is only ever played does not leave a folder behind. One
-     * level deep is all the slot paths need; a failure here is ignored,
-     * because the fopen below is the check that matters and it gives a better
-     * message. */
-    const char *slash = std::strrchr(path, '/');
-    if (slash) {
-        const std::string dir(path, (size_t)(slash - path));
-        if (!dir.empty()) BS_MKDIR(dir.c_str());
-    }
+    std::string out;
+    appendf(out, "%s %d\n", MAGIC, VERSION);
 
-    FILE *f = std::fopen(path, "wb");
-    if (!f) {
-        std::snprintf(status, (size_t)cap, "cannot write %s", path);
-        return 0;
-    }
-
-    std::fprintf(f, "%s %d\n", MAGIC, VERSION);
-
-    int modules = 0, cables = 0;
     for (int id = 0; id < eng->patch.slotCount(); id++) {
-        const Module *m = eng->patch.module(id);
+        Module *m = eng->patch.module(id);
         if (!m) continue;
-        std::fprintf(f, "M %d %s %.1f %.1f %d", id, m->typeId.c_str(),
-                     (double)m->x, (double)m->y, m->paramCount());
+
+        appendf(out, "M %d %s %.1f %.1f %d", id, m->typeId.c_str(),
+                (double)m->x, (double)m->y, m->paramCount());
         for (int p = 0; p < m->paramCount(); p++)
-            std::fprintf(f, " %.6g", (double)m->params[(size_t)p].value);
-        std::fputc('\n', f);
+            appendf(out, " %.6g", (double)m->params[(size_t)p].value);
+        out += '\n';
 
         /* A scratchpad's contents, escaped onto one line. The format is
          * line-based, so a newline in the text would otherwise end the record
          * and the rest of the note would be read back as garbage. */
-        const std::string *note = const_cast<Module *>(m)->textBuffer();
+        const std::string *note = m->textBuffer();
         if (note && !note->empty()) {
-            std::fprintf(f, "X %d ", id);
+            appendf(out, "X %d ", id);
             for (size_t k = 0; k < note->size(); k++) {
                 const char c = (*note)[k];
-                if (c == '\\')      std::fputs("\\\\", f);
-                else if (c == '\n') std::fputs("\\n", f);
+                if (c == '\\')      out += "\\\\";
+                else if (c == '\n') out += "\\n";
                 else if (c == '\r') { }
-                else                std::fputc(c, f);
+                else                out += c;
             }
-            std::fputc('\n', f);
+            out += '\n';
         }
-        modules++;
     }
 
     const std::vector<Cable> &cs = eng->patch.cableList();
     for (size_t i = 0; i < cs.size(); i++) {
         if (!cs[i].alive) continue;
-        std::fprintf(f, "C %d %d %d %d %d\n", cs[i].src, cs[i].srcPort,
-                     cs[i].dst, cs[i].dstPort, cs[i].color);
-        cables++;
+        appendf(out, "C %d %d %d %d %d\n", cs[i].src, cs[i].srcPort,
+                cs[i].dst, cs[i].dstPort, cs[i].color);
     }
-
-    std::fclose(f);
-    std::snprintf(status, (size_t)cap, "saved %s - %d modules, %d cables",
-                  path, modules, cables);
-    return 1;
+    return out;
 }
 
-/* ------------------------------------------------------------------ */
-
-int bs_patch_load(bs::Engine *eng, const char *path, char *status, int cap)
+/* Reads one line, without its terminator, and advances `p` past it. */
+static bool nextLine(const char *&p, std::string &line)
 {
-    FILE *f = std::fopen(path, "rb");
-    if (!f) {
-        std::snprintf(status, (size_t)cap, "no patch in %s", path);
+    if (!p || !*p) return false;
+    const char *e = p;
+    while (*e && *e != '\n') e++;
+    line.assign(p, (size_t)(e - p));
+    if (!line.empty() && line[line.size() - 1] == '\r') line.erase(line.size() - 1);
+    p = *e ? e + 1 : e;
+    return true;
+}
+
+int bs_patch_from_string(bs::Engine *eng, const char *text,
+                         char *status, int cap)
+{
+    if (!text) {
+        std::snprintf(status, (size_t)cap, "nothing to load");
         return 0;
     }
+
+    const char *p = text;
+    std::string line;
 
     char magic[32] = "";
     int  version = 0;
-    if (std::fscanf(f, "%31s %d", magic, &version) != 2 ||
+    if (!nextLine(p, line) ||
+        std::sscanf(line.c_str(), "%31s %d", magic, &version) != 2 ||
         std::strcmp(magic, MAGIC) != 0) {
-        std::fclose(f);
-        std::snprintf(status, (size_t)cap, "%s is not a BENCsynth rack", path);
+        std::snprintf(status, (size_t)cap, "not a BENCsynth rack");
         return 0;
     }
     if (version > VERSION) {
-        std::fclose(f);
-        std::snprintf(status, (size_t)cap, "%s was written by a later version", path);
+        std::snprintf(status, (size_t)cap, "written by a later version");
         return 0;
     }
 
     eng->clear();
 
-    /* Saved ids are not reused ids: the file may have holes where modules
-     * were deleted, and add() hands out the densest slot it can. So the two
+    /* Saved ids are not reused ids: the text may have holes where modules were
+     * deleted, and add() hands out the densest slot it can. So the two
      * numbering schemes are kept apart and the cables are translated. */
     std::vector<int> remap;
     int modules = 0, cables = 0, skipped = 0;
 
-    char line[4096];
-    std::fgets(line, sizeof line, f);           /* rest of the header line */
-    while (std::fgets(line, sizeof line, f)) {
-        if (line[0] == 'M') {
+    while (nextLine(p, line)) {
+        const char *l = line.c_str();
+
+        if (l[0] == 'M') {
             int savedId = 0, nparams = 0;
             char type[32] = "";
             float x = 0.0f, y = 0.0f;
             int consumed = 0;
-            if (std::sscanf(line, "M %d %31s %f %f %d%n",
+            if (std::sscanf(l, "M %d %31s %f %f %d%n",
                             &savedId, type, &x, &y, &nparams, &consumed) != 5) continue;
+            if (savedId < 0 || savedId > 4096) continue;
 
             const int id = eng->addModule(type, x, y);
             if ((int)remap.size() <= savedId) remap.resize((size_t)savedId + 1, -1);
@@ -149,21 +144,22 @@ int bs_patch_load(bs::Engine *eng, const char *path, char *status, int cap)
             modules++;
 
             Module *m = eng->patch.module(id);
-            const char *p = line + consumed;
+            const char *q = l + consumed;
             for (int i = 0; i < nparams; i++) {
                 char *end = 0;
-                const double v = std::strtod(p, &end);
-                if (end == p) break;
-                p = end;
-                /* A file written before a knob existed simply runs out of
+                const double v = std::strtod(q, &end);
+                if (end == q) break;
+                q = end;
+                /* Text written before a knob existed simply runs out of
                  * values, and the knobs it never knew about keep their
-                 * defaults. A file written after one was removed has values
-                 * with nowhere to go, and they are dropped. */
+                 * defaults. Text written after one was removed has values with
+                 * nowhere to go, and they are dropped. */
                 if (i < m->paramCount()) m->params[(size_t)i].value = (float)v;
             }
-        } else if (line[0] == 'X') {
+
+        } else if (l[0] == 'X') {
             int savedId = 0, consumed = 0;
-            if (std::sscanf(line, "X %d%n", &savedId, &consumed) != 1) continue;
+            if (std::sscanf(l, "X %d%n", &savedId, &consumed) != 1) continue;
             if (savedId < 0 || savedId >= (int)remap.size()) continue;
             if (remap[(size_t)savedId] < 0) continue;
             Module *m = eng->patch.module(remap[(size_t)savedId]);
@@ -171,19 +167,20 @@ int bs_patch_load(bs::Engine *eng, const char *path, char *status, int cap)
             if (!note) continue;
 
             note->clear();
-            const char *p2 = line + consumed;
-            if (*p2 == ' ') p2++;
-            for (; *p2 && *p2 != '\n'; p2++) {
-                if (*p2 != '\\') { note->push_back(*p2); continue; }
-                p2++;
-                if (*p2 == 'n')       note->push_back('\n');
-                else if (*p2 == '\\') note->push_back('\\');
-                else if (*p2 == 0)    break;
-                else                  note->push_back(*p2);
+            const char *q = l + consumed;
+            if (*q == ' ') q++;
+            for (; *q; q++) {
+                if (*q != '\\') { note->push_back(*q); continue; }
+                q++;
+                if (*q == 'n')       note->push_back('\n');
+                else if (*q == '\\') note->push_back('\\');
+                else if (*q == 0)    break;
+                else                 note->push_back(*q);
             }
-        } else if (line[0] == 'C') {
+
+        } else if (l[0] == 'C') {
             int s = 0, sp = 0, d = 0, dp = 0, col = 0;
-            if (std::sscanf(line, "C %d %d %d %d %d", &s, &sp, &d, &dp, &col) < 4) continue;
+            if (std::sscanf(l, "C %d %d %d %d %d", &s, &sp, &d, &dp, &col) < 4) continue;
             if (s < 0 || d < 0 || s >= (int)remap.size() || d >= (int)remap.size()) continue;
             if (remap[(size_t)s] < 0 || remap[(size_t)d] < 0) continue;
             const int cid = eng->connect(remap[(size_t)s], sp, remap[(size_t)d], dp);
@@ -194,14 +191,82 @@ int bs_patch_load(bs::Engine *eng, const char *path, char *status, int cap)
             }
         }
     }
-    std::fclose(f);
 
     if (skipped)
         std::snprintf(status, (size_t)cap,
-                      "loaded %s - %d modules, %d cables, %d unknown module(s) dropped",
-                      path, modules, cables, skipped);
+                      "%d modules, %d cables, %d unknown module(s) dropped",
+                      modules, cables, skipped);
     else
-        std::snprintf(status, (size_t)cap, "loaded %s - %d modules, %d cables",
-                      path, modules, cables);
+        std::snprintf(status, (size_t)cap, "%d modules, %d cables",
+                      modules, cables);
+    return 1;
+}
+
+/* ------------------------------------------------------------------ *
+ * Files
+ * ------------------------------------------------------------------ */
+
+/* Everything up to the last separator, so a status line can name the file
+ * without the path it came down. */
+static const char *baseName(const char *path)
+{
+    const char *a = std::strrchr(path, '/');
+    const char *b = std::strrchr(path, '\\');
+    const char *s = a > b ? a : b;
+    return s ? s + 1 : path;
+}
+
+int bs_patch_save(bs::Engine *eng, const char *path, char *status, int cap)
+{
+    /* One level of directory, made on the way past rather than at startup, so
+     * a program that is only ever played leaves no folder behind. A failure
+     * here is ignored: the fopen below is the check that matters and it gives
+     * the better message. */
+    const char *slash = std::strrchr(path, '/');
+    if (slash) {
+        const std::string dir(path, (size_t)(slash - path));
+        if (!dir.empty()) BS_MKDIR(dir.c_str());
+    }
+
+    const std::string text = bs_patch_to_string(eng);
+
+    FILE *f = std::fopen(path, "wb");
+    if (!f) {
+        std::snprintf(status, (size_t)cap, "cannot write %s", baseName(path));
+        return 0;
+    }
+    const size_t n = std::fwrite(text.data(), 1, text.size(), f);
+    const int    ok = (n == text.size());
+    std::fclose(f);
+
+    if (!ok) {
+        std::snprintf(status, (size_t)cap, "could not finish writing %s",
+                      baseName(path));
+        return 0;
+    }
+    std::snprintf(status, (size_t)cap, "saved %s", baseName(path));
+    return 1;
+}
+
+int bs_patch_load(bs::Engine *eng, const char *path, char *status, int cap)
+{
+    FILE *f = std::fopen(path, "rb");
+    if (!f) {
+        std::snprintf(status, (size_t)cap, "cannot open %s", baseName(path));
+        return 0;
+    }
+
+    std::string text;
+    char buf[4096];
+    size_t n;
+    while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) text.append(buf, n);
+    std::fclose(f);
+
+    char detail[192] = "";
+    if (!bs_patch_from_string(eng, text.c_str(), detail, (int)sizeof detail)) {
+        std::snprintf(status, (size_t)cap, "%s - %s", baseName(path), detail);
+        return 0;
+    }
+    std::snprintf(status, (size_t)cap, "%s - %s", baseName(path), detail);
     return 1;
 }

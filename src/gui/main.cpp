@@ -14,6 +14,7 @@
 #include "bs_rack.h"
 #include "bs_keyboard.h"
 #include "bs_patchfile.h"
+#include "bs_filedlg.h"
 #include "bs_engine.h"
 #include "bs_modules.h"
 #include "bs_version.h"
@@ -22,8 +23,13 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <string>
 
 enum {
+    /* One size for every buffer that holds a path, so that copying one into
+     * another cannot lose the end of it. */
+    BS_PATH = 2048,
+
     WIN_W = 1440, WIN_H = 900,
     WIN_MIN_W = 900, WIN_MIN_H = 620,
     HEADER_H = 46, TOOLBAR_H = 38, KEYS_H = 132,
@@ -186,7 +192,8 @@ static int draw_info(bs_ui *ui, Rectangle screen)
         "SPACE                 sustain",
         "ESC                   all notes off",
         "F1                    this window",
-        "RACKS                 the factory patches",
+        "CTRL-S / CTRL-O       save / open a rack",
+        "CTRL-SHIFT-S          save as",
         "raylib - zlib licence",
         "Terminus TTF - SIL Open Font Licence",
         "",
@@ -223,16 +230,113 @@ static int draw_info(bs_ui *ui, Rectangle screen)
  * ------------------------------------------------------------------ */
 
 typedef struct {
-    int   slot;
+    /* The file this rack came from or was last written to. Empty until it has
+     * one, which is what makes SAVE ask the first time and not after. */
+    char  path[BS_PATH];
     char  status[192];
     float statusAge;
     int   about;
 } bs_app;
 
+/* The name shown in the title bar and on the SAVE button's tooltip-in-spirit.
+ * Everything after the last separator, or a reminder that there is not one. */
+static const char *app_name(const bs_app *app)
+{
+    if (!app->path[0]) return "untitled";
+    const char *a = std::strrchr(app->path, '/');
+    const char *b = std::strrchr(app->path, '\\');
+    const char *s = a > b ? a : b;
+    return s ? s + 1 : app->path;
+}
+
+static void app_retitle(const bs_app *app)
+{
+    /* Generous, because a path can be as long as the platform allows and the
+     * compiler is right that a smaller one would silently lose the end of it. */
+    char t[BS_PATH + 64];
+    std::snprintf(t, sizeof t, "BENCsynth - %s", app_name(app));
+    SetWindowTitle(t);
+}
+
 static void say(bs_app *app, const char *msg)
 {
     std::snprintf(app->status, sizeof app->status, "%s", msg);
     app->statusAge = 0.0f;
+}
+
+/* Where the dialogs start, and where a rack goes when there is no dialog to
+ * ask with. Beside the program rather than in a home directory: this is a
+ * portable folder someone unzipped, and the racks belong with it. */
+static const char *patch_dir(void)
+{
+    static char dir[BS_PATH];
+    if (!dir[0]) std::snprintf(dir, sizeof dir, "%spatches", GetApplicationDirectory());
+    return dir;
+}
+
+static void app_save(bs_app *app, bs::Engine *eng, int askForName)
+{
+    char chosen[BS_PATH];
+
+    if (askForName || !app->path[0]) {
+        char suggest[BS_PATH + 64];
+        std::snprintf(suggest, sizeof suggest, "%s.%s",
+                      app->path[0] ? app_name(app) : "rack", BS_PATCH_EXT);
+
+        const int r = bs_save_dialog(GetWindowHandle(), "Save rack", suggest,
+                                     BS_PATCH_DESC, BS_PATCH_EXT,
+                                     chosen, sizeof chosen);
+        if (r == BS_DLG_CANCELLED) return;
+        if (r == BS_DLG_UNAVAILABLE) {
+            /* No zenity, no kdialog. Rather than refuse, put it somewhere
+             * findable and say exactly where - a machine without a file dialog
+             * is not a machine that should be unable to save. */
+            /* Assembled and then copied with a length rather than printed:
+             * snprintf truncating a path is correct here, but there is no way
+             * to say so that -Wformat-truncation believes, and a warning
+             * everyone learns to scroll past is worse than three lines. */
+            std::string fallback = std::string(patch_dir()) + "/rack." BS_PATCH_EXT;
+            if (fallback.size() >= sizeof chosen) fallback.resize(sizeof chosen - 1);
+            std::memcpy(chosen, fallback.c_str(), fallback.size() + 1);
+        }
+        std::snprintf(app->path, sizeof app->path, "%s", chosen);
+    }
+
+    /* The dialogs do not all add the extension, and a rack called `bass` that
+     * the open dialog then filters out of view is worse than a rack called
+     * `bass.bencsynth`. */
+    const size_t n = std::strlen(app->path);
+    const size_t e = std::strlen(BS_PATCH_EXT) + 1;
+    if (n < e || std::strcmp(app->path + n - e, "." BS_PATCH_EXT) != 0) {
+        std::snprintf(app->path + n, sizeof app->path - n, ".%s", BS_PATCH_EXT);
+    }
+
+    bs_patch_save(eng, app->path, app->status, (int)sizeof app->status);
+    app->statusAge = 0.0f;
+    app_retitle(app);
+}
+
+static void app_open(bs_app *app, bs::Engine *eng, bs_rack *rack, bs_keyboard *kb)
+{
+    char chosen[BS_PATH];
+    const int r = bs_open_dialog(GetWindowHandle(), "Open rack", patch_dir(),
+                                 BS_PATCH_DESC, BS_PATCH_EXT,
+                                 chosen, sizeof chosen);
+    if (r != BS_DLG_OK) {
+        if (r == BS_DLG_UNAVAILABLE)
+            std::snprintf(app->status, sizeof app->status,
+                          "no file dialog here - install zenity or kdialog, or "
+                          "pass a rack on the command line");
+        app->statusAge = 0.0f;
+        return;
+    }
+
+    bs_keyboard_release_all(kb, eng);
+    if (bs_patch_load(eng, chosen, app->status, (int)sizeof app->status))
+        std::snprintf(app->path, sizeof app->path, "%s", chosen);
+    bs_rack_patch_replaced(rack);
+    app->statusAge = 0.0f;
+    app_retitle(app);
 }
 
 static void draw_toolbar(bs_app *app, bs_ui *ui, bs_rack *rack, bs_keyboard *kb,
@@ -255,39 +359,17 @@ static void draw_toolbar(bs_app *app, bs_ui *ui, bs_rack *rack, bs_keyboard *kb,
     DrawRectangle((int)x, (int)y + 3, 1, (int)h - 6, BS_BORDER);
     x += 9.0f;
 
-    b = (Rectangle){ x, y, 24.0f, h };
-    if (bs_button(ui, 8002, b, "-", app->slot > 1)) app->slot--;
-    x += 26.0f;
-
-    char slot[24];
-    std::snprintf(slot, sizeof slot, "RACK %d", app->slot);
-    b = (Rectangle){ x, y, 68.0f, h };
-    bs_panel(b, BS_PANEL, BS_BORDER);
-    bs_text_center(ui, BS_F_SMALL, slot, b.x + b.width * 0.5f,
-                   b.y + (h - BS_F_SMALL) * 0.5f, BS_TEXT);
-    x += 70.0f;
-
-    b = (Rectangle){ x, y, 24.0f, h };
-    if (bs_button(ui, 8003, b, "+", app->slot < 8)) app->slot++;
-    x += 32.0f;
-
     b = (Rectangle){ x, y, 62.0f, h };
-    if (bs_button(ui, 8004, b, "SAVE", 1)) {
-        bs_patch_save(eng, bs_patch_slot_path(app->slot), app->status,
-                      (int)sizeof app->status);
-        app->statusAge = 0.0f;
-    }
+    if (bs_button(ui, 8002, b, "OPEN", 1)) app_open(app, eng, rack, kb);
     x += 68.0f;
 
     b = (Rectangle){ x, y, 62.0f, h };
-    if (bs_button(ui, 8005, b, "LOAD", 1)) {
-        bs_keyboard_release_all(kb, eng);
-        bs_patch_load(eng, bs_patch_slot_path(app->slot), app->status,
-                      (int)sizeof app->status);
-        bs_rack_patch_replaced(rack);
-        app->statusAge = 0.0f;
-    }
-    x += 76.0f;
+    if (bs_button(ui, 8003, b, "SAVE", 1)) app_save(app, eng, 0);
+    x += 68.0f;
+
+    b = (Rectangle){ x, y, 78.0f, h };
+    if (bs_button(ui, 8004, b, "SAVE AS", 1)) app_save(app, eng, 1);
+    x += 92.0f;
 
     DrawRectangle((int)x, (int)y + 3, 1, (int)h - 6, BS_BORDER);
     x += 9.0f;
@@ -416,12 +498,13 @@ int main(int argc, char **argv)
 
     bs_app app;
     std::memset(&app, 0, sizeof app);
-    app.slot = 1;
     app.about = openInfo;
 
     g_engine.init((float)SAMPLE_RATE);
     if (loadPath) {
-        if (!bs_patch_load(&g_engine, loadPath, app.status, (int)sizeof app.status))
+        if (bs_patch_load(&g_engine, loadPath, app.status, (int)sizeof app.status))
+            std::snprintf(app.path, sizeof app.path, "%s", loadPath);
+        else
             g_engine.buildDefaultPatch();
         bs_rack_patch_replaced(&rack);
     } else if (startRack) {
@@ -437,6 +520,8 @@ int main(int argc, char **argv)
         g_engine.buildDefaultPatch();
         say(&app, "default rack - press Z, or click the keys, or try RACKS");
     }
+
+    app_retitle(&app);
 
     InitAudioDevice();
     SetAudioStreamBufferSizeDefault(512);
@@ -472,6 +557,18 @@ int main(int argc, char **argv)
         if (rview.height < 80.0f) rview.height = 80.0f;
 
         if (IsKeyPressed(KEY_F1)) app.about = !app.about;
+
+        /* Ctrl-S and Ctrl-O, because everything else does. Not while a
+         * scratchpad has the keyboard, where Ctrl-S is somebody's muscle
+         * memory for nothing and Ctrl-O would open a dialog over their
+         * typing. */
+        if (ui.focus == 0) {
+            const int ctrl = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL) ||
+                             IsKeyDown(KEY_LEFT_SUPER)   || IsKeyDown(KEY_RIGHT_SUPER);
+            const int shift = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
+            if (ctrl && IsKeyPressed(KEY_S)) app_save(&app, &g_engine, shift);
+            if (ctrl && IsKeyPressed(KEY_O)) app_open(&app, &g_engine, &rack, &kb);
+        }
         if (IsKeyPressed(KEY_ESCAPE)) {
             /* While a scratchpad has the keyboard, Escape is how you get out
              * of it. Silencing the rack from inside a text field would be a

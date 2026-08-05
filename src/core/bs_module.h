@@ -30,7 +30,11 @@ class KeyboardState;
 
 enum {
     BS_BLOCK    = 32,   /* frames per process() call                        */
-    BS_MAX_POLY = 8     /* channels a cable can carry                       */
+    BS_MAX_POLY = 8,    /* channels a cable can carry                       */
+    /* How many controls the MACRO module offers, and so how many parameters a
+     * plugin wrapper can promise a host before it knows what rack it will be
+     * asked to hold. */
+    BS_MACROS   = 8
 };
 
 /* ------------------------------------------------------------------ *

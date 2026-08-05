@@ -112,7 +112,14 @@ Outputs fan out to as many inputs as you like; an input takes one cable, and a
 second one replaces the first. Patching backwards — from an input, looking for
 a source — works as well.
 
-`RACK 1..8` with `SAVE` and `LOAD` are eight numbered slots under `patches/`.
+`OPEN`, `SAVE` and `SAVE AS` work on named `.bencsynth` files through the
+system's own file dialog — `Ctrl-O`, `Ctrl-S`, `Ctrl-Shift-S`. The window title
+shows which rack is loaded. `./bencsynth some-rack.bencsynth` opens one
+directly.
+
+On a Linux box with neither `zenity` nor `kdialog` installed there is no dialog
+to ask with, so `SAVE` writes to `patches/rack.bencsynth` beside the program
+and says so, rather than refusing.
 
 ---
 
@@ -199,6 +206,7 @@ or a sound card.
 | **ATT** | two attenuverters with offsets. |
 | **DLY** | echo — time with CV, feedback, tone, mix. |
 | **RVB** | a small room. Size, damping, mix, stereo out. |
+| **MACRO** | eight knobs and eight jacks, 0–10 V out. A manual CV source standing in for the controls a plugin host will automate — see `docs/PLUGIN.md`. |
 | **ARP** | takes a polyphonic pitch and gate, plays the held notes one at a time on an internal or external clock. Up / down / up-down / random / as-played, octave range, gate length. |
 | **SCOPE** | two traces with a time base, so you can see what you patched. |
 | **TEXT** | a scratchpad that does nothing to the audio. Somewhere to write down what a rack is for — which is the one thing a patch cannot tell you, since the cables say what is connected and nothing says why. Saves with the patch. |
@@ -237,8 +245,9 @@ that draws the mark in the window — so the icon in your taskbar cannot drift
 from the one in the `.ico`. It needs ImageMagick; the results are committed, so
 a build does not.
 
-`ARCHITECTURE.md` goes into why it is arranged that way, and what has to
-happen for the VST build.
+`ARCHITECTURE.md` goes into why it is arranged that way.
+[`docs/PLUGIN.md`](docs/PLUGIN.md) covers running BENCsynth inside a host —
+which format, which LMMS, and what is left to build.
 
 ---
 

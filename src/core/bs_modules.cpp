@@ -820,6 +820,50 @@ ModuleText::ModuleText()
 }
 
 /* ================================================================== *
+ * MACRO - eight controls something outside the rack can reach
+ *
+ * A knob and a jack, eight times. On its own that is a manual CV source, which
+ * is worth having: somewhere to park a value and cable it to three places at
+ * once.
+ *
+ * Its real job is the plugin one. A host wants a flat, fixed list of
+ * automatable parameters declared before the plugin is instantiated, and a
+ * modular rack has no such thing - its knobs come and go with its modules, and
+ * "the cutoff" is not a stable identity when there may be no filter or four.
+ * Sixteen macros that exist whatever the rack contains give the host something
+ * it can name, and leave the question of what they *do* where it belongs: on
+ * the panel, decided by a cable.
+ * ================================================================== */
+
+class ModuleMacro : public Module {
+public:
+    ModuleMacro()
+    {
+        configure("MACRO", "MACRO", 7, 2);
+        static const char *NAMES[BS_MACROS] = {
+            "1", "2", "3", "4", "5", "6", "7", "8"
+        };
+        for (int i = 0; i < BS_MACROS; i++)
+            addKnob(NAMES[i], 0.0f, 1.0f, 0.0f, "%.2f");
+        for (int i = 0; i < BS_MACROS; i++)
+            addOutput(NAMES[i]);
+    }
+
+    void process()
+    {
+        setAllOutputChannels(1);
+        for (int k = 0; k < BS_MACROS; k++) {
+            /* Nought to ten volts, the same range an envelope covers, so a
+             * macro straight into a VCA's CV opens it fully at the top of its
+             * travel and an attenuverter is only needed when something other
+             * than that is wanted. */
+            const float v = pv(k) * 10.0f;
+            for (int i = 0; i < BS_BLOCK; i++) outs[(size_t)k].v[0][i] = v;
+        }
+    }
+};
+
+/* ================================================================== *
  * ARP - arpeggiator
  *
  * Reads a polyphonic pitch-and-gate pair and plays the held notes one at a
@@ -993,6 +1037,7 @@ static const ModuleType TYPES[] = {
     { "DLY",   "DLY",        "EFFECT", makeT<ModuleDly>   },
     { "RVB",   "RVB",        "EFFECT", makeT<ModuleRvb>   },
     { "ARP",   "ARP",        "SOURCE", makeT<ModuleArp>   },
+    { "MACRO", "MACRO",      "UTILITY",makeT<ModuleMacro> },
     { "SCOPE", "SCOPE",      "UTILITY",makeT<ModuleScope> },
     { "TEXT",  "TEXT / NOTES","UTILITY",makeT<ModuleText> },
     { "OUT",   "OUT",        "OUTPUT", makeT<ModuleOut>   }

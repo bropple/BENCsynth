@@ -49,9 +49,16 @@ enum NoteEventKind {
 };
 
 struct NoteEvent {
-    uint8_t kind;
-    uint8_t note;
-    float   value;
+    uint8_t  kind;
+    uint8_t  note;
+    float    value;
+    /* Which frame of the current render call this belongs to, counted from
+     * the start of that call. The standalone posts zero - a keystroke has no
+     * meaningful position inside a buffer - but a plugin host hands over an
+     * event list with exactly this on every entry, and honouring it is the
+     * difference between a note landing where it was written and landing
+     * wherever the buffer boundary happened to be. */
+    uint32_t offset;
 };
 
 /* A wait-free ring for one producer and one consumer.
@@ -60,10 +67,12 @@ struct NoteEvent {
  * to block behind a block of audio, and the audio thread must not be able to
  * block behind whoever is playing.
  *
- * There is no sample offset on an event yet, so everything posted between two
- * blocks lands at the start of the next one - 32 samples of quantisation, well
- * under a millisecond. A plugin wanting sample-accurate timing adds the offset
- * here and splits the block on it; nothing else has to change.
+ * Events carry a frame offset within the render call they belong to, and the
+ * engine works through them as it works through the buffer rather than
+ * applying them all at the top. The rack processes whole blocks, so the
+ * granularity that actually lands is one block - 32 frames, under a
+ * millisecond - which is as fine as this arrangement can be without splitting
+ * the module graph mid-block.
  */
 class NoteQueue {
 public:

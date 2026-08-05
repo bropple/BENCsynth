@@ -581,6 +581,57 @@ static void test_presets()
 /* The arpeggiator turns a chord into a sequence, and the observable difference
  * between working and not is whether its pitch output has more than one value
  * in it over time. */
+/* An event carries the frame it belongs at, and the engine has to work through
+ * the buffer rather than applying everything at the top. A host's whole idea of
+ * timing rests on this: without it a note written halfway through a bar arrives
+ * wherever the buffer boundary fell.
+ *
+ * Measured by rendering one long buffer with a note asked for at its midpoint
+ * and comparing the two halves. */
+static void test_event_offsets()
+{
+    std::printf("event timing\n");
+
+    const int FRAMES = 4096;
+    const int AT     = FRAMES / 2;
+
+    Engine e;
+    e.init(48000.0f);
+    e.buildPreset(1);                    /* INIT: one oscillator, fast attack */
+
+    std::vector<float> buf((size_t)FRAMES * 2, 0.0f);
+
+    e.noteOn(60, 1.0f, AT);
+    e.render(&buf[0], FRAMES);
+
+    const float before = rmsOf(&buf[0], AT * 2);
+    const float after  = rmsOf(&buf[AT * 2], AT * 2);
+
+    okf(before < 0.002f, "before the offset the buffer was RMS %.5f, expected "
+        "under %.3f", before, 0.002);
+    okf(after > 0.01f, "after the offset it was RMS %.4f, expected above %.2f",
+        after, 0.01);
+
+    /* And the boundary should be where it was asked for, to within the block
+     * the rack processes - not a buffer away. */
+    int firstLoud = -1;
+    for (int i = 0; i < FRAMES && firstLoud < 0; i++)
+        if (std::fabs(buf[(size_t)i * 2]) > 0.005f) firstLoud = i;
+    okf(firstLoud >= AT - BS_BLOCK && firstLoud < AT + 512,
+        "sound started at frame %.0f, expected near %.0f",
+        (double)firstLoud, (double)AT);
+
+    /* Zero, the standalone's offset, still means the top of the buffer. */
+    Engine f;
+    f.init(48000.0f);
+    f.buildPreset(1);
+    f.noteOn(60, 1.0f);
+    f.render(&buf[0], FRAMES);
+    okf(rmsOf(&buf[0], 512 * 2) > 0.005f,
+        "an event at offset zero sounded from the start (RMS %.4f, expected "
+        "above %.3f)", rmsOf(&buf[0], 512 * 2), 0.005);
+}
+
 static void test_arp()
 {
     std::printf("arpeggiator\n");
@@ -719,6 +770,7 @@ int main()
     test_eval_order();
     test_default_patch();
     test_presets();
+    test_event_offsets();
     test_arp();
     test_grand_tour();
     test_sample_rates();

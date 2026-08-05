@@ -70,15 +70,19 @@ public:
 
     /* ---- notes ---- */
 
-    /* Wait-free. These post to a queue the audio thread drains at the top of
-     * the next block; nothing here touches the voice array, which belongs to
-     * the audio thread. Safe to call from any single thread - the queue has
-     * one producer, and in this program that is whoever is playing. */
-    void noteOn(int note, float velocity);
-    void noteOff(int note);
-    void setBend(float b);          /* -1..1 */
-    void setMod(float m);           /*  0..1 */
-    void setSustain(bool on);
+    /* Wait-free. These post to a queue the audio thread drains as it works
+     * through the block; nothing here touches the voice array, which belongs
+     * to the audio thread. Safe to call from any single thread - the queue has
+     * one producer, and in this program that is whoever is playing.
+     *
+     * `atFrame` is the offset into the next render call the event belongs at.
+     * Whoever is playing by hand has no opinion about that and leaves it at
+     * zero; a plugin passes what the host said. */
+    void noteOn(int note, float velocity, int atFrame = 0);
+    void noteOff(int note, int atFrame = 0);
+    void setBend(float b, int atFrame = 0);          /* -1..1 */
+    void setMod(float m, int atFrame = 0);           /*  0..1 */
+    void setSustain(bool on, int atFrame = 0);
 
     /* Not wait-free: takes the lock, because it resets every module's state
      * as well. It is a button someone presses when things have gone wrong,
@@ -89,6 +93,20 @@ public:
      * block, and nothing else about the voice allocator is safe to look at. */
     int voicesSounding() const { return keys.sounding.load(std::memory_order_relaxed); }
     int voicesAllocated() const { return keys.allocated.load(std::memory_order_relaxed); }
+
+    /* The macro controls, by index.
+     *
+     * These write to and read from the knobs of every MACRO module in the rack,
+     * rather than keeping a separate copy: a host automating a parameter should
+     * move the knob that parameter *is*, and one source of truth cannot
+     * disagree with itself. Values are 0..1, which is what every plugin format
+     * wants; the module turns that into volts.
+     *
+     * Safe to call while audio is running, for the same reason turning a knob
+     * is: a float written while the audio thread reads it is either the old
+     * value or the new one. */
+    void  setMacro(int index, float value01);
+    float macroValue(int index) const;
 
     /* A complete subtractive voice, patched the way the front of a Moog manual
      * patches one. Something has to be making a sound when the window opens,
@@ -126,6 +144,12 @@ private:
 
     float blockL[BS_BLOCK], blockR[BS_BLOCK];
     int   blockPos;                  /* how much of the current block is spent */
+
+    /* One event held back because its offset has not been reached yet. The
+     * queue cannot be looked into without taking from it, so the one that does
+     * not belong yet waits here. */
+    NoteEvent pending;
+    bool      havePending;
 
     Engine(const Engine &);
     Engine &operator=(const Engine &);

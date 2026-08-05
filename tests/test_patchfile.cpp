@@ -252,6 +252,59 @@ void test_patchfile()
         }
     }
 
+    /* The string form is the one a plugin host will use - it is handed a blob
+     * and expects one back, and never sees a path. It has to survive a round
+     * trip on the largest rack there is, and a second trip has to produce the
+     * same bytes: a serialiser that drifts each time it is loaded and saved
+     * turns somebody's song into a slightly different song every time they
+     * open it. */
+    {
+        int tour = -1;
+        for (int i = 0; i < rackPresetCount(); i++)
+            if (std::strcmp(rackPresetAt(i)->name, "GRAND TOUR") == 0) tour = i;
+        ok(tour >= 0, "GRAND TOUR is there to round-trip");
+
+        Engine a;
+        a.init(48000.0f);
+        a.buildPreset(tour >= 0 ? tour : 0);
+        const int modsA = liveModules(a), cablesA = liveCables(a);
+
+        const std::string text = bs_patch_to_string(&a);
+        ok(text.size() > 100, "the rack serialised to something");
+
+        Engine b;
+        b.init(48000.0f);
+        ok(bs_patch_from_string(&b, text.c_str(), status, (int)sizeof status) != 0,
+           "it loaded back from the string");
+        okf(liveModules(b) == modsA, "%.0f modules came back, expected %.0f",
+            (double)liveModules(b), (double)modsA);
+        okf(liveCables(b) == cablesA, "%.0f cables came back, expected %.0f",
+            (double)liveCables(b), (double)cablesA);
+
+        ok(bs_patch_to_string(&b) == text, "a second round trip is byte-identical");
+
+        /* And it still sounds like itself. */
+        okf(std::fabs(renderRms(a) - renderRms(b)) < 0.001f,
+            "the reloaded rack rendered rms %.5f against the original's %.5f",
+            renderRms(b), renderRms(a));
+    }
+
+    /* Rubbish in the string form is refused rather than half-applied. */
+    {
+        Engine e;
+        e.init(48000.0f);
+        e.buildDefaultPatch();
+        const int before = liveModules(e);
+        ok(bs_patch_from_string(&e, "not a rack at all\n", status,
+                                (int)sizeof status) == 0,
+           "a string that is not a rack is refused");
+        okf(liveModules(e) == before,
+            "the rack still has %.0f modules after a refused load, expected %.0f",
+            (double)liveModules(e), (double)before);
+        ok(bs_patch_from_string(&e, 0, status, (int)sizeof status) == 0,
+           "a null string is refused rather than crashing");
+    }
+
     std::remove(PATH);
     std::remove(DIR);
 }
