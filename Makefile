@@ -99,12 +99,23 @@ endif
 
 LDLIBS_GUI := $(RL_LIBS) $(RL_SYS)
 
-# Windows: compile the icon into the executable, and link as a GUI subsystem
-# binary so double-clicking it does not also open a console behind the window.
-# Both apply to the GUI only.
+# Windows: compile the icon into the executable, link as a GUI subsystem binary
+# so double-clicking it does not also open a console behind the window, and
+# link the toolchain's own runtime statically.
+#
+# That last one is not an optimisation. Without -static the binary imports
+# libgcc_s_seh-1.dll, libwinpthread-1.dll and libstdc++-6.dll, which live
+# inside an MSYS2 installation and nowhere else. The build succeeds, the
+# program runs perfectly on the machine that built it, and it fails to start on
+# every machine that has just downloaded it - with a missing-DLL dialog naming
+# a file the person has never heard of. C++ makes this worse than it is for C:
+# the standard library and the thread support both arrive as separate DLLs.
+#
+# CI asserts the absence of all three against the built .exe, because the only
+# place the answer lives is the import table.
 ifeq ($(OS),Windows_NT)
   GUI_RES  := src/gui/bencsynth.res.o
-  GUI_LINK := -mwindows
+  GUI_LINK := -mwindows -static
 else
   GUI_RES  :=
   GUI_LINK :=
