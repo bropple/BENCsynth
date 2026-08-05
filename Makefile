@@ -19,6 +19,15 @@ CPPFLAGS += -Isrc/core -Itests
 
 UNAME_S := $(shell uname -s)
 
+# gcc appends .exe on Windows no matter what -o says. A target named without it
+# is a target make never finds, so every invocation relinks and nothing is ever
+# up to date.
+ifeq ($(OS),Windows_NT)
+  EXE := .exe
+else
+  EXE :=
+endif
+
 CORE_SRC := src/core/bs_patch.cpp \
             src/core/bs_modules.cpp \
             src/core/bs_engine.cpp \
@@ -32,15 +41,15 @@ GUI_SRC  := src/gui/main.cpp \
             src/gui/bs_rack.cpp \
             src/gui/bs_keyboard.cpp
 GUI_OBJ  := $(GUI_SRC:.cpp=.o)
-GUI      := bencsynth
+GUI      := bencsynth$(EXE)
 
 TEST_SRC := tests/test_core.cpp tests/test_patchfile.cpp
 TEST_OBJ := $(TEST_SRC:.cpp=.o)
-TEST     := bencsynth-test
+TEST     := bencsynth-test$(EXE)
 
 RENDER_SRC := tools/render_wav.cpp
 RENDER_OBJ := $(RENDER_SRC:.cpp=.o)
-RENDER     := bencsynth-render
+RENDER     := bencsynth-render$(EXE)
 
 # ------------------------------------------------------------------
 # raylib
@@ -106,15 +115,16 @@ endif
 
 .PHONY: all core test clean info run render icons
 
+
+all: $(GUI)
+
+core: $(CORE_LIB)
 # The icon files are generated from bs_star_image(), which is the same code
 # that draws the mark in the window - so they cannot drift from it. Committed
 # rather than built, because a release job should not need ImageMagick.
 icons: $(GUI)
 	./tools/make-icons.sh
 
-all: $(GUI)
-
-core: $(CORE_LIB)
 
 $(CORE_LIB): $(CORE_OBJ)
 	$(AR) rcs $@ $^
