@@ -104,13 +104,39 @@ far down a key you click sets the velocity.
 | shift-drag a knob | turn it slowly |
 | double-click a knob | back to its default |
 | drag empty rack, or middle-drag | pan |
-| wheel / shift-wheel | scroll |
+| wheel on the rack | zoom, toward the pointer |
+| shift-wheel | scroll sideways |
 
 Outputs fan out to as many inputs as you like; an input takes one cable, and a
 second one replaces the first. Patching backwards — from an input, looking for
 a source — works as well.
 
 `RACK 1..8` with `SAVE` and `LOAD` are eight numbered slots under `patches/`.
+
+---
+
+## The factory racks
+
+`RACKS` in the toolbar replaces everything with one of eight worked examples.
+A modular's problem is not that it cannot make a sound, it is that it makes no
+sound until you already know what you are doing — and the fastest way to learn
+what resonance does is to be handed a rack where it is already doing something
+and turn the knob.
+
+| | |
+|---|---|
+| **CLASSIC** | two oscillators, ladder, delay and reverb — what the window opens on |
+| **INIT** | one oscillator, one envelope, one amplifier. A place to start building |
+| **BASS** | legato mono, a sine an octave down under the saw, short filter thump |
+| **SQUARE LEAD** | pulse width on an LFO, glide and echo |
+| **SAW PAD** | eight voices, two saws pulled a few cents apart, long reverb |
+| **PLUCK** | no sustain on either envelope, resonant filter chirp |
+| **DRONE** | the filter is past self-oscillation, so it *is* the oscillator. Makes sound with nothing held down; turn RES down and it stops |
+| **WIND** | noise through a resonant filter and no oscillator anywhere, played from the keyboard |
+
+`./bencsynth --rack PLUCK` opens straight into one, and
+`./bencsynth-render out.wav PLUCK` renders a phrase through it without a window
+or a sound card.
 
 ---
 

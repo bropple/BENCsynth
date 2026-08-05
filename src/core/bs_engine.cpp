@@ -162,115 +162,513 @@ void Engine::render(float *interleaved, int frames)
     }
 }
 
-/* ------------------------------------------------------------------ *
- * The patch the window opens on
- * ------------------------------------------------------------------ */
+/* ==================================================================== *
+ * The factory racks
+ *
+ * Each one is written against a tiny placement helper rather than a page of
+ * coordinates. The helper is the whole reason these stay readable: a preset is
+ * a list of the modules it uses, the cables between them and the handful of
+ * knobs that are not at their defaults, and anything more than that is
+ * bookkeeping that would drown the musical decisions.
+ *
+ * Parameter indices are positional, matching the order each module's
+ * constructor declares its knobs in. That is a real coupling - reordering a
+ * module's knobs silently retunes every preset that touches it - and it is
+ * accepted because the alternative is looking parameters up by name on the
+ * audio thread's data structures, for a gain nothing else in the program
+ * needs. The test suite plays every preset, which is what catches it.
+ * ==================================================================== */
 
-static void setP(Module *m, int idx, float v)
+namespace {
+
+struct Builder {
+    Engine *e;
+    float   x, y;
+
+    void row(float atY) { x = 20.0f; y = atY; }
+    void gap(float w)   { x += w; }
+
+    int put(const char *type)
+    {
+        const int id = e->addModule(type, x, y);
+        Module *m = e->patch.module(id);
+        if (m) x += (float)panelWidth(*m) + 14.0f;
+        return id;
+    }
+
+    void set(int id, int param, float v)
+    {
+        Module *m = e->patch.module(id);
+        if (m && param >= 0 && param < m->paramCount())
+            m->params[(size_t)param].value = v;
+    }
+
+    void wire(int s, int sp, int d, int dp) { e->connect(s, sp, d, dp); }
+};
+
+/* Module parameter and port indices, named. The numbers are positional and
+ * unavoidable; writing them out once here is the difference between a preset
+ * that can be read and one that can only be run. */
+enum { KBD_GLIDE, KBD_OCT, KBD_BEND, KBD_VOICES, KBD_MODE };
+enum { KBD_PITCH = 0, KBD_GATE, KBD_TRIG, KBD_VEL, KBD_MOD, KBD_WHEEL };
+
+enum { VCO_OCT, VCO_COARSE, VCO_FINE, VCO_PW, VCO_FM, VCO_PWM };
+enum { VCO_IN_PITCH = 0, VCO_IN_FM, VCO_IN_PWM, VCO_IN_SYNC };
+enum { VCO_SAW = 0, VCO_PLS, VCO_TRI, VCO_SIN };
+
+enum { LFO_RATE, LFO_CV, LFO_UNI };
+enum { LFO_SIN = 0, LFO_TRI, LFO_SQR, LFO_SAW };
+
+enum { NOISE_LEVEL };
+enum { NOISE_WHT = 0, NOISE_PNK, NOISE_SH };
+
+enum { VCF_CUTOFF, VCF_RES, VCF_DRIVE, VCF_CV1, VCF_CV2, VCF_KTRK };
+enum { VCF_IN = 0, VCF_IN_CV1, VCF_IN_CV2, VCF_IN_PITCH, VCF_IN_RES };
+enum { VCF_LP24 = 0, VCF_LP12 };
+
+enum { VCA_GAIN, VCA_CV, VCA_RESP };
+enum { VCA_IN = 0, VCA_IN_CV };
+
+enum { ADSR_A, ADSR_D, ADSR_S, ADSR_R, ADSR_VEL };
+enum { ADSR_IN_GATE = 0, ADSR_IN_TRIG, ADSR_IN_VEL };
+enum { ADSR_ENV = 0, ADSR_INV };
+
+enum { MIX_1, MIX_2, MIX_3, MIX_4, MIX_MASTER };
+enum { ATT_AMT1, ATT_OFF1, ATT_AMT2, ATT_OFF2 };
+enum { DLY_TIME, DLY_FBK, DLY_TONE, DLY_MIX, DLY_CV };
+enum { RVB_SIZE, RVB_DAMP, RVB_MIX };
+enum { OUT_LEVEL };
+
+const float R1 = 20.0f;
+const float R2 = 375.0f;
+
+/* ---------------------------------------------------------------- */
+
+void presetClassic(Builder &b)
 {
-    if (m && idx >= 0 && idx < m->paramCount()) m->params[(size_t)idx].value = v;
-}
-
-void Engine::buildDefaultPatch()
-{
-    clear();
-
-    const float GAP = 14.0f;
-    const float R1  = 20.0f;
-    const float R2  = 375.0f;
-
-    float x = 20.0f;
-    struct Placer {
-        Engine *e; float *x; float y; float gap;
-        int put(const char *t)
-        {
-            const int id = e->addModule(t, *x, y);
-            Module *m = e->patch.module(id);
-            if (m) *x += (float)panelWidth(*m) + gap;
-            return id;
-        }
-    };
-
-    Placer row = { this, &x, R1, GAP };
-    const int kbd   = row.put("KBD");
-    const int vco1  = row.put("VCO");
-    const int vco2  = row.put("VCO");
-    const int noise = row.put("NOISE");
-    const int mix   = row.put("MIX");
-    const int vcf   = row.put("VCF");
-    const int envF  = row.put("ADSR");
-    const int envA  = row.put("ADSR");
-    const int vca   = row.put("VCA");
+    b.row(R1);
+    const int kbd   = b.put("KBD");
+    const int vco1  = b.put("VCO");
+    const int vco2  = b.put("VCO");
+    const int noise = b.put("NOISE");
+    const int mix   = b.put("MIX");
+    const int vcf   = b.put("VCF");
+    const int envF  = b.put("ADSR");
+    const int envA  = b.put("ADSR");
+    const int vca   = b.put("VCA");
 
     /* The LFO sits under the oscillators it modulates and the tail of the
-     * chain sits under the VCA it comes out of, so the long cables in the
-     * default rack are short ones. A patch laid out by signal flow is also a
-     * patch you can read, and the first thing anyone does with this window is
-     * try to work out what is plugged into what. */
-    x = 20.0f;
-    Placer left = { this, &x, R2, GAP };
-    const int lfo = left.put("LFO");
+     * chain under the VCA it comes out of, so the long cables in the default
+     * rack are short ones. A patch laid out by signal flow is also a patch you
+     * can read, and the first thing anyone does here is try to work out what
+     * is plugged into what. */
+    b.row(R2);
+    const int lfo = b.put("LFO");
+    b.x = 640.0f;
+    const int scope = b.put("SCOPE");
+    const int dly   = b.put("DLY");
+    const int rvb   = b.put("RVB");
+    const int out   = b.put("OUT");
 
-    x = 640.0f;
-    Placer row2 = { this, &x, R2, GAP };
-    const int scope = row2.put("SCOPE");
-    const int dly   = row2.put("DLY");
-    const int rvb   = row2.put("RVB");
-    const int out   = row2.put("OUT");
+    b.wire(kbd, KBD_PITCH, vco1, VCO_IN_PITCH);
+    b.wire(kbd, KBD_PITCH, vco2, VCO_IN_PITCH);
+    b.wire(kbd, KBD_GATE,  envF, ADSR_IN_GATE);
+    b.wire(kbd, KBD_GATE,  envA, ADSR_IN_GATE);
+    b.wire(kbd, KBD_TRIG,  envF, ADSR_IN_TRIG);
+    b.wire(kbd, KBD_TRIG,  envA, ADSR_IN_TRIG);
+    b.wire(kbd, KBD_VEL,   envA, ADSR_IN_VEL);
 
-    /* Two oscillators through a mixer into the ladder, one envelope on the
-     * cutoff and one on the amplifier: the patch every subtractive synth is a
-     * hard-wired version of. */
-    connect(kbd, 0, vco1, 0);
-    connect(kbd, 0, vco2, 0);
-    connect(kbd, 1, envF, 0);
-    connect(kbd, 1, envA, 0);
-    connect(kbd, 2, envF, 1);
-    connect(kbd, 2, envA, 1);
-    connect(kbd, 3, envA, 2);
+    b.wire(vco1,  VCO_SAW, mix, MIX_1);
+    b.wire(vco2,  VCO_PLS, mix, MIX_2);
+    b.wire(noise, NOISE_WHT, mix, MIX_3);
+    b.wire(lfo,   LFO_TRI, vco2, VCO_IN_PWM);
 
-    connect(vco1, 0, mix, 0);      /* saw   */
-    connect(vco2, 1, mix, 1);      /* pulse */
-    connect(noise, 0, mix, 2);
-    connect(lfo, 1, vco2, 2);      /* triangle into pulse width */
+    b.wire(mix,  0, vcf, VCF_IN);
+    b.wire(envF, ADSR_ENV, vcf, VCF_IN_CV1);
+    b.wire(kbd,  KBD_PITCH, vcf, VCF_IN_PITCH);
 
-    connect(mix, 0, vcf, 0);
-    connect(envF, 0, vcf, 1);
-    connect(kbd, 0, vcf, 3);       /* keyboard tracking */
+    b.wire(vcf,  VCF_LP24, vca, VCA_IN);
+    b.wire(envA, ADSR_ENV, vca, VCA_IN_CV);
 
-    connect(vcf, 0, vca, 0);
-    connect(envA, 0, vca, 1);
+    b.wire(vca, 0, dly, 0);
+    b.wire(dly, 0, rvb, 0);
+    b.wire(rvb, 0, out, 0);
+    b.wire(rvb, 1, out, 1);
+    b.wire(vca, 0, scope, 0);
+    b.wire(lfo, LFO_TRI, scope, 1);
 
-    connect(vca, 0, dly, 0);
-    connect(dly, 0, rvb, 0);
-    connect(rvb, 0, out, 0);
-    connect(rvb, 1, out, 1);
-
-    connect(vca, 0, scope, 0);
-    connect(lfo, 1, scope, 1);
-
-    Module *m;
-    if ((m = patch.module(kbd)))   { setP(m, 3, 6.0f); }
-    if ((m = patch.module(vco2)))  { setP(m, 2, 7.0f); setP(m, 5, 0.35f); }
-    if ((m = patch.module(noise))) { setP(m, 0, 1.0f); }
-    if ((m = patch.module(mix)))   { setP(m, 0, 0.70f); setP(m, 1, 0.55f);
-                                     setP(m, 2, 0.05f); setP(m, 4, 1.0f); }
-    if ((m = patch.module(vcf)))   { setP(m, 0, 420.0f); setP(m, 1, 0.36f);
-                                     setP(m, 2, 1.6f);   setP(m, 3, 0.28f);
-                                     setP(m, 5, 0.35f); }
-    if ((m = patch.module(envF)))  { setP(m, 0, 0.004f); setP(m, 1, 0.35f);
-                                     setP(m, 2, 0.22f);  setP(m, 3, 0.40f); }
-    if ((m = patch.module(envA)))  { setP(m, 0, 0.006f); setP(m, 1, 0.60f);
-                                     setP(m, 2, 0.75f);  setP(m, 3, 0.35f);
-                                     setP(m, 4, 0.55f); }
-    if ((m = patch.module(vca)))   { setP(m, 0, 0.0f);  setP(m, 1, 1.0f);
-                                     setP(m, 2, 1.0f); }
-    if ((m = patch.module(lfo)))   { setP(m, 0, 0.35f); }
-    if ((m = patch.module(dly)))   { setP(m, 0, 0.28f); setP(m, 1, 0.30f);
-                                     setP(m, 3, 0.20f); }
-    if ((m = patch.module(rvb)))   { setP(m, 0, 0.55f); setP(m, 1, 0.40f);
-                                     setP(m, 2, 0.22f); }
-    if ((m = patch.module(out)))   { setP(m, 0, 0.60f); }
+    b.set(kbd,   KBD_VOICES, 6.0f);
+    b.set(vco2,  VCO_FINE, 7.0f);   b.set(vco2, VCO_PWM, 0.35f);
+    b.set(mix,   MIX_1, 0.70f);     b.set(mix, MIX_2, 0.55f);
+    b.set(mix,   MIX_3, 0.05f);
+    b.set(vcf,   VCF_CUTOFF, 420.0f); b.set(vcf, VCF_RES, 0.36f);
+    b.set(vcf,   VCF_DRIVE, 1.6f);    b.set(vcf, VCF_CV1, 0.28f);
+    b.set(vcf,   VCF_KTRK, 0.35f);
+    b.set(envF,  ADSR_A, 0.004f); b.set(envF, ADSR_D, 0.35f);
+    b.set(envF,  ADSR_S, 0.22f);  b.set(envF, ADSR_R, 0.40f);
+    b.set(envA,  ADSR_A, 0.006f); b.set(envA, ADSR_D, 0.60f);
+    b.set(envA,  ADSR_S, 0.75f);  b.set(envA, ADSR_R, 0.35f);
+    b.set(envA,  ADSR_VEL, 0.55f);
+    b.set(vca,   VCA_RESP, 1.0f);
+    b.set(lfo,   LFO_RATE, 0.35f);
+    b.set(dly,   DLY_TIME, 0.28f); b.set(dly, DLY_FBK, 0.30f);
+    b.set(dly,   DLY_MIX, 0.20f);
+    b.set(rvb,   RVB_SIZE, 0.55f); b.set(rvb, RVB_DAMP, 0.40f);
+    b.set(rvb,   RVB_MIX, 0.22f);
+    b.set(out,   OUT_LEVEL, 0.60f);
 }
+
+/* The smallest thing that makes a note: one oscillator, one envelope, one
+ * amplifier. Nothing to unpick before you start building. */
+void presetInit(Builder &b)
+{
+    b.row(R1);
+    const int kbd = b.put("KBD");
+    const int vco = b.put("VCO");
+    const int env = b.put("ADSR");
+    const int vca = b.put("VCA");
+    const int out = b.put("OUT");
+
+    b.wire(kbd, KBD_PITCH, vco, VCO_IN_PITCH);
+    b.wire(kbd, KBD_GATE,  env, ADSR_IN_GATE);
+    b.wire(kbd, KBD_TRIG,  env, ADSR_IN_TRIG);
+    b.wire(vco, VCO_SAW,   vca, VCA_IN);
+    b.wire(env, ADSR_ENV,  vca, VCA_IN_CV);
+    b.wire(vca, 0, out, 0);
+
+    b.set(kbd, KBD_VOICES, 6.0f);
+    b.set(env, ADSR_A, 0.005f); b.set(env, ADSR_D, 0.30f);
+    b.set(env, ADSR_S, 0.70f);  b.set(env, ADSR_R, 0.30f);
+    b.set(vca, VCA_RESP, 1.0f);
+    b.set(out, OUT_LEVEL, 0.55f);
+}
+
+/* Legato mono, a sine an octave down under the saw, and a filter envelope
+ * short enough to be a thump rather than a sweep. */
+void presetBass(Builder &b)
+{
+    b.row(R1);
+    const int kbd  = b.put("KBD");
+    const int vco1 = b.put("VCO");
+    const int vco2 = b.put("VCO");
+    const int mix  = b.put("MIX");
+    const int vcf  = b.put("VCF");
+    const int envF = b.put("ADSR");
+    const int envA = b.put("ADSR");
+    const int vca  = b.put("VCA");
+
+    b.row(R2);
+    b.x = 640.0f;
+    const int scope = b.put("SCOPE");
+    const int out   = b.put("OUT");
+
+    b.wire(kbd, KBD_PITCH, vco1, VCO_IN_PITCH);
+    b.wire(kbd, KBD_PITCH, vco2, VCO_IN_PITCH);
+    b.wire(kbd, KBD_GATE,  envF, ADSR_IN_GATE);
+    b.wire(kbd, KBD_GATE,  envA, ADSR_IN_GATE);
+    b.wire(kbd, KBD_TRIG,  envF, ADSR_IN_TRIG);
+    b.wire(kbd, KBD_TRIG,  envA, ADSR_IN_TRIG);
+
+    b.wire(vco1, VCO_SAW, mix, MIX_1);
+    b.wire(vco2, VCO_SIN, mix, MIX_2);
+    b.wire(mix, 0, vcf, VCF_IN);
+    b.wire(envF, ADSR_ENV, vcf, VCF_IN_CV1);
+    b.wire(kbd, KBD_PITCH, vcf, VCF_IN_PITCH);
+    b.wire(vcf, VCF_LP24, vca, VCA_IN);
+    b.wire(envA, ADSR_ENV, vca, VCA_IN_CV);
+    b.wire(vca, 0, out, 0);
+    b.wire(vca, 0, scope, 0);
+
+    b.set(kbd,  KBD_MODE, (float)KM_LEGATO);
+    b.set(kbd,  KBD_VOICES, 1.0f);
+    b.set(kbd,  KBD_GLIDE, 0.02f);
+    b.set(vco2, VCO_OCT, -1.0f);
+    b.set(mix,  MIX_1, 0.80f); b.set(mix, MIX_2, 0.55f);
+    b.set(vcf,  VCF_CUTOFF, 130.0f); b.set(vcf, VCF_RES, 0.45f);
+    b.set(vcf,  VCF_DRIVE, 2.4f);    b.set(vcf, VCF_CV1, 0.34f);
+    b.set(vcf,  VCF_KTRK, 0.30f);
+    b.set(envF, ADSR_A, 0.001f); b.set(envF, ADSR_D, 0.18f);
+    b.set(envF, ADSR_S, 0.05f);  b.set(envF, ADSR_R, 0.15f);
+    b.set(envA, ADSR_A, 0.001f); b.set(envA, ADSR_D, 0.35f);
+    b.set(envA, ADSR_S, 0.55f);  b.set(envA, ADSR_R, 0.12f);
+    b.set(vca,  VCA_RESP, 1.0f);
+    b.set(out,  OUT_LEVEL, 0.65f);
+}
+
+/* A pulse whose width the LFO keeps moving, which is what stops a square wave
+ * from sounding like a test tone, plus glide and an echo. */
+void presetSquareLead(Builder &b)
+{
+    b.row(R1);
+    const int kbd = b.put("KBD");
+    const int vco = b.put("VCO");
+    const int vcf = b.put("VCF");
+    const int env = b.put("ADSR");
+    const int vca = b.put("VCA");
+
+    b.row(R2);
+    const int lfo = b.put("LFO");
+    b.x = 640.0f;
+    const int dly = b.put("DLY");
+    const int out = b.put("OUT");
+
+    b.wire(kbd, KBD_PITCH, vco, VCO_IN_PITCH);
+    b.wire(kbd, KBD_GATE,  env, ADSR_IN_GATE);
+    b.wire(kbd, KBD_TRIG,  env, ADSR_IN_TRIG);
+    b.wire(lfo, LFO_TRI,   vco, VCO_IN_PWM);
+    b.wire(vco, VCO_PLS,   vcf, VCF_IN);
+    b.wire(kbd, KBD_PITCH, vcf, VCF_IN_PITCH);
+    b.wire(env, ADSR_ENV,  vcf, VCF_IN_CV1);
+    b.wire(vcf, VCF_LP24,  vca, VCA_IN);
+    b.wire(env, ADSR_ENV,  vca, VCA_IN_CV);
+    b.wire(vca, 0, dly, 0);
+    b.wire(dly, 0, out, 0);
+
+    b.set(kbd, KBD_MODE, (float)KM_LEGATO);
+    b.set(kbd, KBD_VOICES, 1.0f);
+    b.set(kbd, KBD_GLIDE, 0.06f);
+    b.set(vco, VCO_PWM, 0.45f);
+    b.set(lfo, LFO_RATE, 0.9f);
+    b.set(vcf, VCF_CUTOFF, 2200.0f); b.set(vcf, VCF_RES, 0.28f);
+    b.set(vcf, VCF_CV1, 0.16f);      b.set(vcf, VCF_KTRK, 0.5f);
+    b.set(env, ADSR_A, 0.010f); b.set(env, ADSR_D, 0.30f);
+    b.set(env, ADSR_S, 0.80f);  b.set(env, ADSR_R, 0.25f);
+    b.set(vca, VCA_RESP, 1.0f);
+    b.set(dly, DLY_TIME, 0.33f); b.set(dly, DLY_FBK, 0.38f);
+    b.set(dly, DLY_MIX, 0.28f);
+    b.set(out, OUT_LEVEL, 0.55f);
+}
+
+/* Eight voices, two saws pulled a few cents apart so they beat against each
+ * other, and enough reverb to lose the edges. */
+void presetPad(Builder &b)
+{
+    b.row(R1);
+    const int kbd  = b.put("KBD");
+    const int vco1 = b.put("VCO");
+    const int vco2 = b.put("VCO");
+    const int mix  = b.put("MIX");
+    const int vcf  = b.put("VCF");
+    const int envF = b.put("ADSR");
+    const int envA = b.put("ADSR");
+    const int vca  = b.put("VCA");
+
+    b.row(R2);
+    const int lfo = b.put("LFO");
+    b.x = 640.0f;
+    const int rvb = b.put("RVB");
+    const int out = b.put("OUT");
+
+    b.wire(kbd, KBD_PITCH, vco1, VCO_IN_PITCH);
+    b.wire(kbd, KBD_PITCH, vco2, VCO_IN_PITCH);
+    b.wire(kbd, KBD_GATE,  envF, ADSR_IN_GATE);
+    b.wire(kbd, KBD_GATE,  envA, ADSR_IN_GATE);
+    b.wire(kbd, KBD_VEL,   envA, ADSR_IN_VEL);
+
+    b.wire(vco1, VCO_SAW, mix, MIX_1);
+    b.wire(vco2, VCO_SAW, mix, MIX_2);
+    b.wire(mix, 0, vcf, VCF_IN);
+    b.wire(envF, ADSR_ENV, vcf, VCF_IN_CV1);
+    b.wire(lfo,  LFO_SIN,  vcf, VCF_IN_CV2);
+    b.wire(kbd,  KBD_PITCH, vcf, VCF_IN_PITCH);
+    b.wire(vcf,  VCF_LP24, vca, VCA_IN);
+    b.wire(envA, ADSR_ENV, vca, VCA_IN_CV);
+    b.wire(vca, 0, rvb, 0);
+    b.wire(rvb, 0, out, 0);
+    b.wire(rvb, 1, out, 1);
+
+    b.set(kbd,  KBD_VOICES, 8.0f);
+    b.set(vco1, VCO_FINE, -6.0f);
+    b.set(vco2, VCO_FINE,  7.0f);
+    b.set(mix,  MIX_1, 0.60f); b.set(mix, MIX_2, 0.60f);
+    b.set(vcf,  VCF_CUTOFF, 700.0f); b.set(vcf, VCF_RES, 0.20f);
+    b.set(vcf,  VCF_CV1, 0.18f);     b.set(vcf, VCF_CV2, 0.35f);
+    b.set(vcf,  VCF_KTRK, 0.40f);
+    b.set(lfo,  LFO_RATE, 0.18f);
+    b.set(envF, ADSR_A, 0.80f); b.set(envF, ADSR_D, 1.50f);
+    b.set(envF, ADSR_S, 0.50f); b.set(envF, ADSR_R, 1.20f);
+    b.set(envA, ADSR_A, 0.90f); b.set(envA, ADSR_D, 1.50f);
+    b.set(envA, ADSR_S, 0.80f); b.set(envA, ADSR_R, 1.60f);
+    b.set(vca,  VCA_RESP, 1.0f);
+    b.set(rvb,  RVB_SIZE, 0.85f); b.set(rvb, RVB_DAMP, 0.35f);
+    b.set(rvb,  RVB_MIX, 0.45f);
+    b.set(out,  OUT_LEVEL, 0.50f);
+}
+
+/* No sustain at all on either envelope, and enough resonance that the filter
+ * envelope is audible as a chirp on the front of every note. */
+void presetPluck(Builder &b)
+{
+    b.row(R1);
+    const int kbd  = b.put("KBD");
+    const int vco  = b.put("VCO");
+    const int vcf  = b.put("VCF");
+    const int envF = b.put("ADSR");
+    const int envA = b.put("ADSR");
+    const int vca  = b.put("VCA");
+
+    b.row(R2);
+    b.x = 640.0f;
+    const int dly = b.put("DLY");
+    const int rvb = b.put("RVB");
+    const int out = b.put("OUT");
+
+    b.wire(kbd, KBD_PITCH, vco, VCO_IN_PITCH);
+    b.wire(kbd, KBD_GATE,  envF, ADSR_IN_GATE);
+    b.wire(kbd, KBD_GATE,  envA, ADSR_IN_GATE);
+    b.wire(kbd, KBD_TRIG,  envF, ADSR_IN_TRIG);
+    b.wire(kbd, KBD_TRIG,  envA, ADSR_IN_TRIG);
+    b.wire(kbd, KBD_VEL,   envA, ADSR_IN_VEL);
+    b.wire(vco, VCO_SAW,   vcf, VCF_IN);
+    b.wire(envF, ADSR_ENV, vcf, VCF_IN_CV1);
+    b.wire(kbd, KBD_PITCH, vcf, VCF_IN_PITCH);
+    b.wire(vcf, VCF_LP24,  vca, VCA_IN);
+    b.wire(envA, ADSR_ENV, vca, VCA_IN_CV);
+    b.wire(vca, 0, dly, 0);
+    b.wire(dly, 0, rvb, 0);
+    b.wire(rvb, 0, out, 0);
+    b.wire(rvb, 1, out, 1);
+
+    b.set(kbd,  KBD_VOICES, 6.0f);
+    b.set(vcf,  VCF_CUTOFF, 240.0f); b.set(vcf, VCF_RES, 0.62f);
+    b.set(vcf,  VCF_CV1, 0.42f);     b.set(vcf, VCF_KTRK, 0.50f);
+    b.set(envF, ADSR_A, 0.001f); b.set(envF, ADSR_D, 0.16f);
+    b.set(envF, ADSR_S, 0.00f);  b.set(envF, ADSR_R, 0.12f);
+    b.set(envA, ADSR_A, 0.001f); b.set(envA, ADSR_D, 0.38f);
+    b.set(envA, ADSR_S, 0.00f);  b.set(envA, ADSR_R, 0.22f);
+    b.set(envA, ADSR_VEL, 0.7f);
+    b.set(vca,  VCA_RESP, 1.0f);
+    b.set(dly,  DLY_TIME, 0.26f); b.set(dly, DLY_FBK, 0.32f);
+    b.set(dly,  DLY_MIX, 0.25f);
+    b.set(rvb,  RVB_SIZE, 0.60f); b.set(rvb, RVB_MIX, 0.28f);
+    /* Louder than the rest, and deliberately: an envelope with no sustain
+     * spends most of its life at zero, so the same output level that suits a
+     * held note leaves a plucked one sounding half-finished. */
+    b.set(out,  OUT_LEVEL, 0.85f);
+}
+
+/* The one rack that makes a sound with nothing held down. The filter is past
+ * the edge of self-oscillation, so it is the oscillator; a slow LFO walks its
+ * cutoff and the noise floor gives it something to catch on. Turn RES down and
+ * it stops - which is the clearest demonstration of what resonance is that
+ * the module set can offer. */
+void presetDrone(Builder &b)
+{
+    b.row(R1);
+    const int noise = b.put("NOISE");
+    const int lfo1  = b.put("LFO");
+    const int lfo2  = b.put("LFO");
+    const int att   = b.put("ATT");
+    const int vcf   = b.put("VCF");
+
+    b.row(R2);
+    b.x = 340.0f;
+    const int scope = b.put("SCOPE");
+    const int rvb   = b.put("RVB");
+    const int out   = b.put("OUT");
+
+    b.wire(noise, NOISE_PNK, vcf, VCF_IN);
+    b.wire(lfo1,  LFO_SIN, att, 0);
+    b.wire(lfo2,  LFO_TRI, att, 1);
+    b.wire(att, 0, vcf, VCF_IN_CV1);
+    b.wire(att, 1, vcf, VCF_IN_CV2);
+    b.wire(vcf, VCF_LP24, rvb, 0);
+    b.wire(rvb, 0, out, 0);
+    b.wire(rvb, 1, out, 1);
+    b.wire(vcf, VCF_LP24, scope, 0);
+    b.wire(att, 0, scope, 1);
+
+    b.set(noise, NOISE_LEVEL, 0.35f);
+    b.set(lfo1,  LFO_RATE, 0.05f);
+    b.set(lfo2,  LFO_RATE, 0.13f);
+    b.set(att,   ATT_AMT1, 0.55f);
+    b.set(att,   ATT_AMT2, 0.22f);
+    b.set(vcf,   VCF_CUTOFF, 110.0f);
+    b.set(vcf,   VCF_RES, 1.06f);      /* past the edge: it rings on its own */
+    b.set(vcf,   VCF_DRIVE, 1.4f);
+    b.set(vcf,   VCF_CV1, 1.0f);
+    b.set(vcf,   VCF_CV2, 1.0f);
+    b.set(rvb,   RVB_SIZE, 0.90f); b.set(rvb, RVB_DAMP, 0.25f);
+    b.set(rvb,   RVB_MIX, 0.55f);
+    b.set(out,   OUT_LEVEL, 0.45f);
+}
+
+/* Noise through a resonant filter and nothing else - no oscillator anywhere.
+ * The keyboard opens the amplifier and tracks the cutoff, so it is playable
+ * even though there is no pitch in it. */
+void presetWind(Builder &b)
+{
+    b.row(R1);
+    const int kbd   = b.put("KBD");
+    const int noise = b.put("NOISE");
+    const int vcf   = b.put("VCF");
+    const int env   = b.put("ADSR");
+    const int vca   = b.put("VCA");
+
+    b.row(R2);
+    const int lfo = b.put("LFO");
+    b.x = 640.0f;
+    const int rvb = b.put("RVB");
+    const int out = b.put("OUT");
+
+    b.wire(kbd,   KBD_GATE, env, ADSR_IN_GATE);
+    b.wire(kbd,   KBD_TRIG, env, ADSR_IN_TRIG);
+    b.wire(kbd,   KBD_PITCH, vcf, VCF_IN_PITCH);
+    b.wire(noise, NOISE_WHT, vcf, VCF_IN);
+    b.wire(lfo,   LFO_SIN, vcf, VCF_IN_CV1);
+    b.wire(env,   ADSR_ENV, vcf, VCF_IN_CV2);
+    b.wire(vcf,   VCF_LP24, vca, VCA_IN);
+    b.wire(env,   ADSR_ENV, vca, VCA_IN_CV);
+    b.wire(vca, 0, rvb, 0);
+    b.wire(rvb, 0, out, 0);
+    b.wire(rvb, 1, out, 1);
+
+    b.set(kbd,   KBD_VOICES, 4.0f);
+    b.set(noise, NOISE_LEVEL, 1.0f);
+    b.set(vcf,   VCF_CUTOFF, 600.0f); b.set(vcf, VCF_RES, 0.80f);
+    b.set(vcf,   VCF_CV1, 0.30f);     b.set(vcf, VCF_CV2, 0.20f);
+    b.set(vcf,   VCF_KTRK, 1.0f);
+    b.set(lfo,   LFO_RATE, 0.28f);
+    b.set(env,   ADSR_A, 0.45f); b.set(env, ADSR_D, 0.90f);
+    b.set(env,   ADSR_S, 0.60f); b.set(env, ADSR_R, 1.10f);
+    b.set(vca,   VCA_RESP, 1.0f);
+    b.set(rvb,   RVB_SIZE, 0.80f); b.set(rvb, RVB_DAMP, 0.30f);
+    b.set(rvb,   RVB_MIX, 0.40f);
+    b.set(out,   OUT_LEVEL, 0.55f);
+}
+
+typedef void (*PresetFn)(Builder &);
+
+struct PresetEntry { RackPreset info; PresetFn build; };
+
+const PresetEntry PRESETS[] = {
+    { { "CLASSIC",      "two oscillators, ladder, delay and reverb" },  presetClassic },
+    { { "INIT",         "one oscillator, one envelope - a place to start" }, presetInit },
+    { { "BASS",         "legato mono, sub oscillator, short filter thump" }, presetBass },
+    { { "SQUARE LEAD",  "pulse width on an LFO, glide and echo" },      presetSquareLead },
+    { { "SAW PAD",      "eight voices, two detuned saws, long reverb" }, presetPad },
+    { { "PLUCK",        "no sustain, resonant filter chirp" },          presetPluck },
+    { { "DRONE",        "the filter is the oscillator - no keys needed" }, presetDrone },
+    { { "WIND",         "noise through a resonant filter, no oscillator" }, presetWind }
+};
+
+} /* anonymous namespace */
+
+int rackPresetCount() { return (int)(sizeof PRESETS / sizeof PRESETS[0]); }
+
+const RackPreset *rackPresetAt(int i)
+{
+    return (i >= 0 && i < rackPresetCount()) ? &PRESETS[i].info : 0;
+}
+
+void Engine::buildPreset(int index)
+{
+    if (index < 0 || index >= rackPresetCount()) return;
+    clear();
+    Builder b = { this, 20.0f, 20.0f };
+    PRESETS[index].build(b);
+}
+
+void Engine::buildDefaultPatch() { buildPreset(0); }
 
 } /* namespace bs */

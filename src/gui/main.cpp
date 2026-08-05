@@ -21,6 +21,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 
 enum {
     WIN_W = 1440, WIN_H = 900,
@@ -109,7 +110,7 @@ static void load_logo(void)
     if (g_logo.id != 0) SetTextureFilter(g_logo, TEXTURE_FILTER_BILINEAR);
 }
 
-static void draw_info(bs_ui *ui, Rectangle screen)
+static int draw_info(bs_ui *ui, Rectangle screen)
 {
     DrawRectangleRec(screen, (Color){ 0, 0, 0, 190 });
 
@@ -173,7 +174,8 @@ static void draw_info(bs_ui *ui, Rectangle screen)
         "DRAG / WHEEL a knob   turn it",
         "SHIFT-DRAG a knob     turn it slowly",
         "DOUBLE-CLICK a knob   back to default",
-        "DRAG empty rack       pan"
+        "DRAG empty rack       pan",
+        "WHEEL on the rack     zoom"
     };
     static const char *KEYS[] = {
         "Z S X D C V G B ...   lower octave",
@@ -182,7 +184,7 @@ static void draw_info(bs_ui *ui, Rectangle screen)
         "SPACE                 sustain",
         "ESC                   all notes off",
         "F1                    this window",
-        "",
+        "RACKS                 the factory patches",
         "raylib - zlib licence",
         "Terminus TTF - SIL Open Font Licence",
         "",
@@ -202,8 +204,16 @@ static void draw_info(bs_ui *ui, Rectangle screen)
         bs_text(ui, BS_F_TINY, KEYS[i], p.x + 36.0f + colW, y + (float)i * 14.0f,
                 i >= nk - 4 ? BS_EDGE : BS_DIM);
 
-    bs_text_spaced(ui, BS_F_TINY, "F1 or click to close", p.x + pw - 156.0f,
-                   p.y + ph - 22.0f, BS_EDGE);
+    bs_text_spaced(ui, BS_F_TINY, "F1, or click outside, to close",
+                   p.x + pw - 222.0f, p.y + ph - 22.0f, BS_EDGE);
+
+    /* Released rather than pressed: the click that opened the window is still
+     * going on when this runs on the same frame, and reacting to the press
+     * would shut it in the act of opening. And only outside the panel - a
+     * click on the text you are trying to read is not a request to dismiss
+     * it. */
+    return IsMouseButtonReleased(MOUSE_BUTTON_LEFT) &&
+           !CheckCollisionPointRec(GetMousePosition(), p);
 }
 
 /* ------------------------------------------------------------------ *
@@ -280,14 +290,12 @@ static void draw_toolbar(bs_app *app, bs_ui *ui, bs_rack *rack, bs_keyboard *kb,
     DrawRectangle((int)x, (int)y + 3, 1, (int)h - 6, BS_BORDER);
     x += 9.0f;
 
-    b = (Rectangle){ x, y, 84.0f, h };
-    if (bs_button(ui, 8006, b, "DEFAULT", 1)) {
+    b = (Rectangle){ x, y, 74.0f, h };
+    if (bs_button(ui, 8006, b, "RACKS", 1)) {
         bs_keyboard_release_all(kb, eng);
-        eng->buildDefaultPatch();
-        bs_rack_patch_replaced(rack);
-        say(app, "default rack restored");
+        bs_rack_preset_menu(rack, ui, (Vector2){ b.x, b.y + h });
     }
-    x += 90.0f;
+    x += 80.0f;
 
     b = (Rectangle){ x, y, 62.0f, h };
     if (bs_button(ui, 8007, b, "CLEAR", 1)) {
@@ -334,6 +342,7 @@ int main(int argc, char **argv)
     int shotFrames = 90;
     const char *loadPath = 0;
     const char *iconDir = 0;
+    const char *startRack = 0;
     int openInfo = 0;
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shot = argv[++i];
@@ -342,6 +351,8 @@ int main(int argc, char **argv)
         else if (std::strcmp(argv[i], "--info") == 0) openInfo = 1;
         else if (std::strcmp(argv[i], "--icons") == 0 && i + 1 < argc)
             iconDir = argv[++i];
+        else if (std::strcmp(argv[i], "--rack") == 0 && i + 1 < argc)
+            startRack = argv[++i];
         else loadPath = argv[i];
     }
 
@@ -411,9 +422,18 @@ int main(int argc, char **argv)
         if (!bs_patch_load(&g_engine, loadPath, app.status, (int)sizeof app.status))
             g_engine.buildDefaultPatch();
         bs_rack_patch_replaced(&rack);
+    } else if (startRack) {
+        /* By name or by index, the same spelling the offline renderer takes. */
+        int which = -1;
+        for (int i = 0; i < bs::rackPresetCount(); i++)
+            if (TextIsEqual(bs::rackPresetAt(i)->name, startRack)) which = i;
+        if (which < 0) which = std::atoi(startRack);
+        if (which < 0 || which >= bs::rackPresetCount()) which = 0;
+        g_engine.buildPreset(which);
+        say(&app, bs::rackPresetAt(which)->blurb);
     } else {
         g_engine.buildDefaultPatch();
-        say(&app, "default rack - press Z, or click the keys");
+        say(&app, "default rack - press Z, or click the keys, or try RACKS");
     }
 
     InitAudioDevice();
@@ -473,14 +493,17 @@ int main(int argc, char **argv)
 
         if (app.about) {
             Rectangle screen = { 0, 0, W, H };
-            draw_info(&ui, screen);
-            /* Released, not pressed: the click that opened it is still going
-             * on when this runs on the same frame, and reacting to the press
-             * would shut the window in the act of opening it. */
-            if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) app.about = 0;
+            if (draw_info(&ui, screen)) app.about = 0;
         }
 
-        bs_rack_menu(&rack, &ui, &g_engine);
+        if (bs_rack_menu(&rack, &ui, &g_engine) && rack.presetLoaded >= 0) {
+            const bs::RackPreset *rp = bs::rackPresetAt(rack.presetLoaded);
+            if (rp) {
+                char line[160];
+                std::snprintf(line, sizeof line, "%s - %s", rp->name, rp->blurb);
+                say(&app, line);
+            }
+        }
         bs_ui_overlay(&ui);
 
         EndDrawing();

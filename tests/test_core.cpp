@@ -501,6 +501,77 @@ static void test_default_patch()
         e.load, 0.5);
 }
 
+/* Every factory rack, played.
+ *
+ * The presets address module parameters by position, which is a real coupling:
+ * reorder a module's knobs and every preset that touches it is silently
+ * retuned, with nothing at compile time to say so. This is what notices - a
+ * rack whose filter cutoff has become its resonance does not stay quiet about
+ * it for long. */
+static void test_presets()
+{
+    std::printf("factory racks\n");
+    okf(rackPresetCount() >= 8, "%.0f presets, expected at least %.0f",
+        (double)rackPresetCount(), 8.0);
+
+    for (int i = 0; i < rackPresetCount(); i++) {
+        const RackPreset *rp = rackPresetAt(i);
+        if (!rp) { ok(false, "a preset had no description"); continue; }
+
+        Engine e;
+        e.init(48000.0f);
+        e.buildPreset(i);
+
+        /* Measured over the whole two seconds rather than over the last block
+         * of them. PLUCK has no sustain at all - hold a key and it decays to
+         * silence, which is the entire point of it - so a window that only
+         * looks at the end finds nothing and reports a working rack as
+         * broken. */
+        const int SPAN = 96000;
+        std::vector<float> buf((size_t)SPAN * 2, 0.0f);
+        char msg[160];
+
+        /* Two seconds untouched, which is also long enough for a
+         * self-oscillating rack to get going. */
+        e.render(&buf[0], SPAN);
+        const float idle = rmsOf(&buf[0], SPAN * 2);
+
+        std::snprintf(msg, sizeof msg, "%s is finite before a note", rp->name);
+        ok(finite(&buf[0], SPAN * 2), msg);
+
+        e.noteOn(48, 0.9f);
+        e.noteOn(55, 0.9f);
+        e.noteOn(60, 0.9f);
+        e.render(&buf[0], SPAN);
+        const float played = rmsOf(&buf[0], SPAN * 2);
+
+        std::snprintf(msg, sizeof msg, "%s renders finite audio", rp->name);
+        ok(finite(&buf[0], SPAN * 2), msg);
+
+        std::snprintf(msg, sizeof msg,
+                      "%s made RMS %%.4f while held, expected above %%.3f", rp->name);
+        okf(played > 0.005f, msg, played, 0.005);
+
+        std::snprintf(msg, sizeof msg,
+                      "%s peaked at %%.3f, expected at most %%.1f", rp->name);
+        okf(peakOf(&buf[0], SPAN * 2) <= 1.001f, msg,
+            peakOf(&buf[0], SPAN * 2), 1.0);
+
+        /* DRONE is the one rack that is meant to sound with nothing held, and
+         * the only way that happens is the filter self-oscillating. If it ever
+         * goes quiet, the resonance range has moved. */
+        if (std::strcmp(rp->name, "DRONE") == 0) {
+            okf(idle > 0.005f,
+                "DRONE idled at RMS %.4f, expected above %.3f - the filter is "
+                "supposed to be self-oscillating", idle, 0.005);
+        } else {
+            std::snprintf(msg, sizeof msg,
+                          "%s idled at RMS %%.4f, expected below %%.2f", rp->name);
+            okf(idle < 0.02f, msg, idle, 0.02);
+        }
+    }
+}
+
 static void test_sample_rates()
 {
     std::printf("sample rates\n");
@@ -534,6 +605,7 @@ int main()
     test_event_queue();
     test_eval_order();
     test_default_patch();
+    test_presets();
     test_sample_rates();
     test_patchfile();
 

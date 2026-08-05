@@ -9,7 +9,10 @@
  * with no sound card, and the way to hear the effect of a change to the filter
  * without patching anything by hand.
  *
- *   bencsynth-render out.wav
+ *   bencsynth-render out.wav [preset]
+ *
+ * `preset` is a factory rack by name or index; without one it is the default.
+ * Listing them with no arguments is how you find out what there is.
  */
 
 #include "bs_engine.h"
@@ -18,6 +21,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <cctype>
 #include <vector>
 
 static void put32(FILE *f, unsigned v)
@@ -65,14 +69,50 @@ static int writeWav(const char *path, const std::vector<float> &s, int rate)
  * than as a table of sample offsets. */
 struct Note { float at, len; int note; float vel; };
 
+static int findPreset(const char *want)
+{
+    char *end = 0;
+    const long n = std::strtol(want, &end, 10);
+    if (end && *end == 0 && n >= 0 && n < bs::rackPresetCount()) return (int)n;
+
+    for (int i = 0; i < bs::rackPresetCount(); i++) {
+        const char *name = bs::rackPresetAt(i)->name;
+        size_t j = 0;
+        for (; name[j] && want[j]; j++) {
+            const char a = (char)std::toupper((unsigned char)name[j]);
+            const char b = (char)std::toupper((unsigned char)want[j]);
+            if (a != b) break;
+        }
+        if (!name[j] && !want[j]) return i;
+    }
+    return -1;
+}
+
 int main(int argc, char **argv)
 {
     const char *out = (argc > 1) ? argv[1] : "bencsynth.wav";
     const int RATE = 48000;
 
+    if (argc <= 1) {
+        std::printf("usage: bencsynth-render <out.wav> [preset]\n\nracks:\n");
+        for (int i = 0; i < bs::rackPresetCount(); i++)
+            std::printf("  %d  %-12s %s\n", i, bs::rackPresetAt(i)->name,
+                        bs::rackPresetAt(i)->blurb);
+        return 0;
+    }
+
+    int preset = 0;
+    if (argc > 2) {
+        preset = findPreset(argv[2]);
+        if (preset < 0) {
+            std::fprintf(stderr, "no rack called %s\n", argv[2]);
+            return 1;
+        }
+    }
+
     bs::Engine eng;
     eng.init((float)RATE);
-    eng.buildDefaultPatch();
+    eng.buildPreset(preset);
 
     static const Note PHRASE[] = {
         { 0.00f, 0.45f, 45, 1.00f },
@@ -127,7 +167,8 @@ int main(int argc, char **argv)
         if (a > peak) peak = a;
         sq += (double)buf[i] * buf[i];
     }
-    std::printf("%s - %.2f s, peak %.3f, rms %.4f\n", out,
+    std::printf("%-28s %-12s %.2f s, peak %.3f, rms %.4f\n", out,
+                bs::rackPresetAt(preset)->name,
                 (double)done / RATE, (double)peak,
                 buf.empty() ? 0.0 : std::sqrt(sq / (double)buf.size()));
     return 0;

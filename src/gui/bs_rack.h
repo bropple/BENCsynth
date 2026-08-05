@@ -21,13 +21,19 @@
 #include <vector>
 
 typedef struct bs_rack {
+    /* The rack-space point at the top left of the viewport, and how many
+     * screen pixels a rack unit is worth. Everything inside the viewport is
+     * laid out, hit-tested and simulated in rack units; the camera turns them
+     * into pixels once, at the point of drawing. */
     float scrollX, scrollY;
+    float zoom;
 
     /* Moving a panel. */
     int     dragModule;
     Vector2 dragGrab;      /* where in the panel it was taken hold of */
 
-    /* Dragging the rack itself. */
+    /* Dragging the rack itself. `panGrab` is in screen pixels, because the
+     * gesture is "this many pixels of pointer movement" whatever the zoom. */
     int     panning;
     Vector2 panGrab;
     float   panScrollX, panScrollY;
@@ -53,6 +59,11 @@ typedef struct bs_rack {
 
     /* Set for one frame when the patch changed, so the window can say so. */
     int edited;
+
+    /* The factory rack just loaded from the menu, or -1. The rack owns the
+     * menus, so it is the rack that acts on the choice; the window only wants
+     * to know so it can say which one arrived. */
+    int presetLoaded;
 } bs_rack;
 
 void bs_rack_init(bs_rack *r);
@@ -80,6 +91,9 @@ int  bs_rack_menu(bs_rack *r, bs_ui *ui, bs::Engine *eng);
  * module lands near the top left of what is currently on screen, because a
  * menu opened from the toolbar has no position of its own to speak of. */
 void bs_rack_add_menu(bs_rack *r, bs_ui *ui, Vector2 screenAt, Rectangle view);
+
+/* The factory racks, for a toolbar button. Choosing one replaces everything. */
+void bs_rack_preset_menu(bs_rack *r, bs_ui *ui, Vector2 screenAt);
 
 /* The rack coordinates of a module's jack, in case anything outside needs to
  * point at one. */

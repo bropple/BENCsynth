@@ -193,6 +193,52 @@ taste, and the reasoning is worth keeping:
   be. Since an inextensible cable's resting shape is set by its length and not
   by gravity, weakening gravity costs only settling time.
 
+## The factory racks
+
+Eight of them, in `bs_engine.cpp`, written against a twenty-line placement
+helper rather than a page of coordinates. A preset is the modules it uses, the
+cables between them, and the handful of knobs that are not at their defaults;
+anything more would drown the musical decisions in bookkeeping.
+
+They address module parameters *by position* — `VCF_CUTOFF` is index 0 because
+that is the order the constructor declares its knobs in. That is a real
+coupling, and reordering a module's knobs would silently retune every preset
+that touches it with nothing at compile time to object. It is accepted because
+the alternative is looking parameters up by name on the audio thread's data
+structures, for a benefit nothing else in the program wants. What makes it safe
+is that the test suite plays all eight and checks each one makes sound, stays
+finite and stays inside the rails — a rack whose cutoff has become its
+resonance does not stay quiet about it.
+
+DRONE is the odd one and earns its place: it has no keyboard module at all. The
+filter's resonance is set past the point of self-oscillation, so the filter
+*is* the oscillator, and two slow LFOs walk its cutoff. It is the clearest
+demonstration the module set can offer of what resonance actually is, and the
+test asserts it is still audible with nothing held down.
+
+## Zooming
+
+The rack draws under a `Camera2D`, and everything inside the viewport — panel
+layout, hit-testing, cable simulation — happens in rack units. The camera turns
+them into pixels once, at the point of drawing.
+
+The awkward part was the pointer. Widgets used to call `GetMousePosition()`
+themselves, which answers in screen pixels, while a knob's rectangle is in rack
+units — hit-testing one against the other is wrong by exactly the zoom factor.
+So widgets ask through `bs_mouse()` instead, and the rack pushes the
+world-space pointer for the duration of its pass. Menus are the exception and
+keep the real one, because they are drawn in screen space above everything.
+
+Cables are simulated in rack units too, not screen pixels. A cable is a
+physical thing hanging off a panel, so its slack belongs to the rack: zoom in
+and it gets bigger along with everything else, rather than staying the same
+number of pixels and appearing to shrink.
+
+Zooming is toward the pointer rather than the centre of the window. Zooming
+around the centre means the thing you were looking at slides away and you chase
+it with the other hand. Since scroll *is* the rack point at the viewport's top
+left, keeping the point under the cursor fixed pins the new scroll exactly.
+
 ## Testing what can be wrong quietly
 
 `tests/test_core.cpp` runs against the same objects the synthesizer runs on,

@@ -9,7 +9,7 @@ using bs::Module;
 using bs::Patch;
 using bs::Cable;
 
-enum { MENU_ADD = 1, MENU_MODULE = 2 };
+enum { MENU_ADD = 1, MENU_MODULE = 2, MENU_PRESET = 3 };
 
 static const float PANEL_INSET = 5.0f;
 static const float GRID        = (float)bs::BS_HP;
@@ -87,12 +87,6 @@ Vector2 bs_rack_jack_pos(const Module *m, int port, int isOutput)
     return bs_jack_center(jackCell(m, port, isOutput));
 }
 
-static Rectangle offset(Rectangle a, float ox, float oy)
-{
-    a.x += ox; a.y += oy;
-    return a;
-}
-
 /* ------------------------------------------------------------------ *
  * Cable lookups
  * ------------------------------------------------------------------ */
@@ -144,11 +138,22 @@ static void buildAddMenu()
 
 static const char *MODULE_ITEMS[] = { "UNPATCH", "RESET KNOBS", "REMOVE" };
 
+static const char *presetItems[32];
+static int         presetCount = 0;
+
+static void buildPresetMenu()
+{
+    if (presetCount) return;
+    for (int i = 0; i < bs::rackPresetCount() && i < 32; i++)
+        presetItems[presetCount++] = bs::rackPresetAt(i)->name;
+}
+
 /* ------------------------------------------------------------------ */
 
 void bs_rack_init(bs_rack *r)
 {
     r->scrollX = r->scrollY = 0.0f;
+    r->zoom = 1.0f;
     r->dragModule = -1;
     r->dragGrab = (Vector2){ 0, 0 };
     r->panning = 0;
@@ -164,10 +169,17 @@ void bs_rack_init(bs_rack *r)
     r->menuModule = -1;
     r->menuRackPos = (Vector2){ 0, 0 };
     r->edited = 0;
+    r->presetLoaded = -1;
     buildAddMenu();
+    buildPresetMenu();
 }
 
-void bs_rack_home(bs_rack *r) { r->scrollX = 0.0f; r->scrollY = 0.0f; }
+void bs_rack_home(bs_rack *r)
+{
+    r->scrollX = 0.0f;
+    r->scrollY = 0.0f;
+    r->zoom    = 1.0f;
+}
 
 void bs_rack_patch_replaced(bs_rack *r)
 {
@@ -189,6 +201,13 @@ void bs_rack_add_menu(bs_rack *r, bs_ui *ui, Vector2 screenAt, Rectangle view)
     bs_menu_open(ui, screenAt, addItems, addCount, MENU_ADD);
 }
 
+void bs_rack_preset_menu(bs_rack *r, bs_ui *ui, Vector2 screenAt)
+{
+    buildPresetMenu();
+    r->menuModule = -1;
+    bs_menu_open(ui, screenAt, presetItems, presetCount, MENU_PRESET);
+}
+
 /* ------------------------------------------------------------------ *
  * The frame
  * ------------------------------------------------------------------ */
@@ -196,13 +215,32 @@ void bs_rack_add_menu(bs_rack *r, bs_ui *ui, Vector2 screenAt, Rectangle view)
 void bs_rack_frame(bs_rack *r, bs_ui *ui, bs::Engine *eng, Rectangle view, float dt)
 {
     Patch &patch = eng->patch;
-    const Vector2 m = GetMousePosition();
-    const int overView = CheckCollisionPointRec(m, view) && !bs_ui_blocked(ui, m);
+
+    /* Two pointers, and keeping them straight is most of what this function
+     * has to get right. `sm` is where the mouse is on the screen and is what
+     * the viewport, the panning gesture and the menus are measured against.
+     * `wm` is the same point in rack units and is what every panel, knob and
+     * jack is measured against, because that is the space they are laid out
+     * in. */
+    const Vector2 sm = GetMousePosition();
+    const int overView = CheckCollisionPointRec(sm, view) && !bs_ui_blocked(ui);
 
     r->edited = 0;
+    r->presetLoaded = -1;
 
-    /* ---- scroll extent ---- */
-    float maxX = view.width, maxY = view.height;
+    if (r->zoom < 0.35f) r->zoom = 0.35f;
+    if (r->zoom > 2.50f) r->zoom = 2.50f;
+
+    Camera2D cam;
+    cam.offset   = (Vector2){ view.x, view.y };
+    cam.target   = (Vector2){ r->scrollX, r->scrollY };
+    cam.rotation = 0.0f;
+    cam.zoom     = r->zoom;
+
+    const Vector2 wm = GetScreenToWorld2D(sm, cam);
+
+    /* ---- how far the rack extends, in rack units ---- */
+    float maxX = 0.0f, maxY = 0.0f;
     for (int id = 0; id < patch.slotCount(); id++) {
         const Module *mod = patch.module(id);
         if (!mod) continue;
@@ -210,25 +248,40 @@ void bs_rack_frame(bs_rack *r, bs_ui *ui, bs::Engine *eng, Rectangle view, float
         if (pr.x + pr.width  + 60.0f > maxX) maxX = pr.x + pr.width  + 60.0f;
         if (pr.y + pr.height + 60.0f > maxY) maxY = pr.y + pr.height + 60.0f;
     }
-    const float maxScrollX = maxX - view.width  > 0.0f ? maxX - view.width  : 0.0f;
-    const float maxScrollY = maxY - view.height > 0.0f ? maxY - view.height : 0.0f;
-
-    const float ox = view.x - r->scrollX;
-    const float oy = view.y - r->scrollY;
+    /* What one screenful is worth shrinks as you zoom in, so the amount of
+     * rack you can scroll past grows. */
+    const float pageW = view.width  / r->zoom;
+    const float pageH = view.height / r->zoom;
+    const float maxScrollX = maxX - pageW > 0.0f ? maxX - pageW : 0.0f;
+    const float maxScrollY = maxY - pageH > 0.0f ? maxY - pageH : 0.0f;
 
     /* ---- backdrop ---- */
     DrawRectangleRec(view, BS_BG);
 
+    BeginScissorMode((int)view.x, (int)view.y, (int)view.width, (int)view.height);
+    BeginMode2D(cam);
+    bs_ui_push_mouse(wm);
+
     /* A grid on the rack unit the panels are measured in. Dim enough to read
      * as texture rather than as a control, but present enough that dragging a
-     * panel has something to line up against. */
-    const Color GRIDC = { 0x0e, 0x17, 0x0a, 255 };
-    for (float gx = -std::fmod(r->scrollX, GRID); gx < view.width; gx += GRID)
-        DrawRectangle((int)(view.x + gx), (int)view.y, 1, (int)view.height, GRIDC);
-    for (float gy = -std::fmod(r->scrollY, GRID); gy < view.height; gy += GRID)
-        DrawRectangle((int)view.x, (int)(view.y + gy), (int)view.width, 1, GRIDC);
-
-    BeginScissorMode((int)view.x, (int)view.y, (int)view.width, (int)view.height);
+     * panel has something to line up against. Drawn in rack units, so it is
+     * the grid the panels snap to at any zoom - and its spacing on screen is
+     * the readout for how far in you are.
+     *
+     * Coarsened when zoomed out, because a one-pixel line every seven screen
+     * pixels stops being texture and becomes a moire. */
+    {
+        const Color GRIDC = { 0x0e, 0x17, 0x0a, 255 };
+        float step = GRID;
+        while (step * r->zoom < 12.0f) step *= 4.0f;
+        const float x0 = std::floor(r->scrollX / step) * step;
+        const float y0 = std::floor(r->scrollY / step) * step;
+        const float th = 1.0f / r->zoom;      /* one screen pixel, whatever the zoom */
+        for (float gx = x0; gx < r->scrollX + pageW; gx += step)
+            DrawRectangleRec((Rectangle){ gx, r->scrollY, th, pageH }, GRIDC);
+        for (float gy = y0; gy < r->scrollY + pageH; gy += step)
+            DrawRectangleRec((Rectangle){ r->scrollX, gy, pageW, th }, GRIDC);
+    }
 
     /* ---- which panel is on top under the pointer ---- */
     int top = -1;
@@ -236,7 +289,7 @@ void bs_rack_frame(bs_rack *r, bs_ui *ui, bs::Engine *eng, Rectangle view, float
         for (int id = 0; id < patch.slotCount(); id++) {
             const Module *mod = patch.module(id);
             if (!mod) continue;
-            if (CheckCollisionPointRec(m, offset(panelRect(mod), ox, oy))) top = id;
+            if (CheckCollisionPointRec(wm, panelRect(mod))) top = id;
         }
     }
 
@@ -245,13 +298,16 @@ void bs_rack_frame(bs_rack *r, bs_ui *ui, bs::Engine *eng, Rectangle view, float
     int wheelTaken = 0;
     const float wheel = GetMouseWheelMove();
 
+    /* What is actually on screen, in rack units, for culling. */
+    const Rectangle worldView = { r->scrollX, r->scrollY, pageW, pageH };
+
     /* ---- panels ---- */
     for (int id = 0; id < patch.slotCount(); id++) {
         Module *mod = patch.module(id);
         if (!mod) continue;
 
-        const Rectangle pr = offset(panelRect(mod), ox, oy);
-        if (!CheckCollisionRecs(pr, view)) continue;
+        const Rectangle pr = panelRect(mod);
+        if (!CheckCollisionRecs(pr, worldView)) continue;
 
         bs_panel(pr, BS_PANEL, BS_BORDER);
 
@@ -259,28 +315,29 @@ void bs_rack_frame(bs_rack *r, bs_ui *ui, bs::Engine *eng, Rectangle view, float
          * only way to delete one, which is deliberate - a close button on a
          * module you have spent ten minutes patching into is a trap. */
         Rectangle tb = { pr.x, pr.y, pr.width, (float)bs::BS_PANEL_TOP };
-        const int tbHot = overView && top == id && CheckCollisionPointRec(m, tb)
+        const int tbHot = overView && top == id && CheckCollisionPointRec(wm, tb)
                         && !r->patching;
         DrawRectangleRounded(tb, (float)BS_RADIUS / tb.height, 4,
                              tbHot ? BS_EDGE : BS_PANEL_HI);
-        DrawRectangle((int)tb.x, (int)(tb.y + tb.height - 1), (int)tb.width, 1, BS_BORDER);
+        DrawRectangleRec((Rectangle){ tb.x, tb.y + tb.height - 1.0f, tb.width, 1.0f },
+                         BS_BORDER);
         bs_text_fit(ui, BS_F_SMALL, mod->title.c_str(), pr.x + pr.width * 0.5f,
                     pr.y + (tb.height - BS_F_SMALL) * 0.5f, pr.width - 8.0f,
                     tbHot ? BS_TEXT : BS_DIM);
 
         if (tbHot && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
             r->dragModule = id;
-            r->dragGrab = (Vector2){ m.x - pr.x, m.y - pr.y };
+            r->dragGrab = (Vector2){ wm.x - pr.x, wm.y - pr.y };
         }
         if (tbHot && IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
             r->menuModule = id;
-            bs_menu_open(ui, m, MODULE_ITEMS, 3, MENU_MODULE);
+            bs_menu_open(ui, sm, MODULE_ITEMS, 3, MENU_MODULE);
         }
 
         /* ---- knobs ---- */
         ui->suppress = (top != id) || r->patching;
         for (int i = 0; i < mod->paramCount(); i++) {
-            Rectangle cell = offset(paramCell(mod, i), ox, oy);
+            Rectangle cell = paramCell(mod, i);
             bs::Param *p = &mod->params[(size_t)i];
             const int wid = (id + 1) * 256 + i + 1;
             int hit = 0;
@@ -294,14 +351,14 @@ void bs_rack_frame(bs_rack *r, bs_ui *ui, bs::Engine *eng, Rectangle view, float
 
         /* ---- the two panels that show something ---- */
         if (mod->extraPanelHeight() > 0) {
-            const Rectangle er = offset(extraRect(mod), ox, oy);
+            const Rectangle er = extraRect(mod);
             if (mod->typeId == "SCOPE") {
-                bs::ModuleScope *s = static_cast<bs::ModuleScope *>(mod);
+                bs::ModuleScope *sc = static_cast<bs::ModuleScope *>(mod);
                 Rectangle a = { er.x, er.y, er.width, er.height * 0.5f - 2.0f };
                 Rectangle b = { er.x, er.y + er.height * 0.5f + 2.0f,
                                 er.width, er.height * 0.5f - 2.0f };
-                bs_scope(a, s->traceA, bs::ModuleScope::TRACE, s->writePos, BS_ACCENT);
-                bs_scope(b, s->traceB, bs::ModuleScope::TRACE, s->writePos, BS_AMBER);
+                bs_scope(a, sc->traceA, bs::ModuleScope::TRACE, sc->writePos, BS_ACCENT);
+                bs_scope(b, sc->traceB, bs::ModuleScope::TRACE, sc->writePos, BS_AMBER);
             } else if (mod->typeId == "OUT") {
                 bs::ModuleOut *o = static_cast<bs::ModuleOut *>(mod);
                 Rectangle mr = { er.x, er.y + 14.0f, er.width, er.height - 20.0f };
@@ -316,7 +373,7 @@ void bs_rack_frame(bs_rack *r, bs_ui *ui, bs::Engine *eng, Rectangle view, float
         const int jc = bs::panelJackCols(*mod);
         const int irow = (mod->inputCount() + jc - 1) / jc;
         if (irow && mod->outputCount()) {
-            const float dy = oy + jacksY(mod) + (float)(irow * bs::BS_JACK_ROW)
+            const float dy = jacksY(mod) + (float)(irow * bs::BS_JACK_ROW)
                            + (float)bs::BS_JACK_GAP * 0.5f;
             bs_divider(pr.x + 6.0f, dy, pr.width - 12.0f);
         }
@@ -324,12 +381,12 @@ void bs_rack_frame(bs_rack *r, bs_ui *ui, bs::Engine *eng, Rectangle view, float
         for (int side = 0; side < 2; side++) {
             const int n = side ? mod->outputCount() : mod->inputCount();
             for (int i = 0; i < n; i++) {
-                const Rectangle cell = offset(jackCell(mod, i, side), ox, oy);
+                const Rectangle cell = jackCell(mod, i, side);
                 const Cable *c = side ? cableFromOutput(patch, id, i)
                                       : cableIntoInput(patch, id, i);
-                const Vector2 jc2 = bs_jack_center(cell);
+                const Vector2 jp = bs_jack_center(cell);
                 const int hot = overView && top == id
-                              && CheckCollisionPointCircle(m, jc2, (float)BS_JACK_R + 4.0f);
+                              && CheckCollisionPointCircle(wm, jp, (float)BS_JACK_R + 4.0f);
                 if (hot) { hoverMod = id; hoverPort = i; hoverOut = side; }
 
                 Color plug = c ? BS_CABLE[c->color % BS_CABLE_COLORS] : BS_EDGE;
@@ -387,8 +444,13 @@ void bs_rack_frame(bs_rack *r, bs_ui *ui, bs::Engine *eng, Rectangle view, float
         r->patching = 0;
     }
 
-    /* ---- cables ---- */
-
+    /* ---- cables ----
+     *
+     * Simulated in rack units, not screen pixels. A cable is a physical thing
+     * hanging off a panel, so its slack belongs to the rack: zoom in and it
+     * gets bigger along with everything else, rather than staying the same
+     * number of pixels and appearing to shrink. It also means the geometry
+     * does not have to be resettled every time the view moves. */
     const std::vector<Cable> &cs = patch.cableList();
     if (r->ropes.size() < cs.size()) {
         r->ropes.resize(cs.size());
@@ -401,14 +463,12 @@ void bs_rack_frame(bs_rack *r, bs_ui *ui, bs::Engine *eng, Rectangle view, float
     for (size_t i = 0; i < cs.size(); i++) {
         const Cable &c = cs[i];
         if (!c.alive) { r->ropeKey[i] = 0; continue; }
-        const Module *s = patch.module(c.src);
-        const Module *d = patch.module(c.dst);
-        if (!s || !d) continue;
+        const Module *sMod = patch.module(c.src);
+        const Module *dMod = patch.module(c.dst);
+        if (!sMod || !dMod) continue;
 
-        const Vector2 ja = bs_rack_jack_pos(s, c.srcPort, 1);
-        const Vector2 jb = bs_rack_jack_pos(d, c.dstPort, 0);
-        const Vector2 a = { ja.x + ox, ja.y + oy };
-        const Vector2 b = { jb.x + ox, jb.y + oy };
+        const Vector2 a = bs_rack_jack_pos(sMod, c.srcPort, 1);
+        const Vector2 b = bs_rack_jack_pos(dMod, c.dstPort, 0);
 
         const long key = cableKey(c);
         if (r->ropeKey[i] != key) {
@@ -419,12 +479,13 @@ void bs_rack_frame(bs_rack *r, bs_ui *ui, bs::Engine *eng, Rectangle view, float
 
         /* A polyphonic cable is drawn thicker. It is the only way to see, at
          * a glance, where the eight voices stop and the mono tail begins. */
-        const int poly = s->outs[(size_t)c.srcPort].channels > 1;
+        const int poly = sMod->outs[(size_t)c.srcPort].channels > 1;
         const float thick = poly ? 6.5f : 4.5f;
         const int ci = c.color % BS_CABLE_COLORS;
         bs_rope_draw(&r->ropes[i], BS_CABLE[ci], BS_CABLE_EDGE[ci], thick);
 
-        if (overView && !r->patching && bs_rope_distance(&r->ropes[i], m) < thick + 3.0f) {
+        if (overView && !r->patching &&
+            bs_rope_distance(&r->ropes[i], wm) < thick + 3.0f) {
             r->hoverCable = c.id;
             bs_rope_draw(&r->ropes[i], BS_TEXT, BS_CABLE[ci], 1.5f);
         }
@@ -433,21 +494,31 @@ void bs_rack_frame(bs_rack *r, bs_ui *ui, bs::Engine *eng, Rectangle view, float
     /* The cable in hand. Its free end is the pointer, so it swings from the
      * jack exactly as one would. */
     if (r->patching) {
-        const Module *s = patch.module(r->fromModule);
-        if (!s) {
+        const Module *sMod = patch.module(r->fromModule);
+        if (!sMod) {
             r->patching = 0;
         } else {
-            const Vector2 fixedEnd = { bs_rack_jack_pos(s, r->fromPort, r->fromOutput).x + ox,
-                                       bs_rack_jack_pos(s, r->fromPort, r->fromOutput).y + oy };
-            if (!r->dragRope.seeded) bs_rope_seed(&r->dragRope, fixedEnd, m);
-            bs_rope_step(&r->dragRope, fixedEnd, m, dt);
+            const Vector2 fixedEnd = bs_rack_jack_pos(sMod, r->fromPort, r->fromOutput);
+            if (!r->dragRope.seeded) bs_rope_seed(&r->dragRope, fixedEnd, wm);
+            bs_rope_step(&r->dragRope, fixedEnd, wm, dt);
             const int ci = r->fromColor % BS_CABLE_COLORS;
             bs_rope_draw(&r->dragRope, BS_CABLE[ci], BS_CABLE_EDGE[ci], 5.0f);
-            DrawCircleV(m, 6.0f, BS_CABLE_EDGE[ci]);
-            DrawCircleV(m, 3.0f, BS_CABLE[ci]);
+            DrawCircleV(wm, 6.0f, BS_CABLE_EDGE[ci]);
+            DrawCircleV(wm, 3.0f, BS_CABLE[ci]);
         }
     }
 
+    bs_ui_pop_mouse();
+    EndMode2D();
+
+    /* How far in, when it is not all the way out. Drawn in screen space,
+     * after the camera, so it stays the same size and in the same corner. */
+    if (std::fabs(r->zoom - 1.0f) > 0.01f) {
+        char z[24];
+        snprintf(z, sizeof z, "%.0f%%", (double)(r->zoom * 100.0f));
+        bs_text_spaced(ui, BS_F_TINY, z, view.x + 8.0f,
+                       view.y + view.height - 18.0f, BS_EDGE);
+    }
     EndScissorMode();
 
     /* ---- moving a panel ---- */
@@ -463,39 +534,55 @@ void bs_rack_frame(bs_rack *r, bs_ui *ui, bs::Engine *eng, Rectangle view, float
             }
             r->dragModule = -1;
         } else {
-            mod->x = m.x - r->dragGrab.x - ox;
-            mod->y = m.y - r->dragGrab.y - oy;
+            mod->x = wm.x - r->dragGrab.x;
+            mod->y = wm.y - r->dragGrab.y;
             if (mod->x < 0.0f) mod->x = 0.0f;
             if (mod->y < 0.0f) mod->y = 0.0f;
             r->edited = 1;
         }
     }
 
-    /* ---- panning and scrolling ---- */
+    /* ---- panning and zooming ---- */
 
     if (overView && r->dragModule < 0 && !r->patching) {
         if (IsMouseButtonPressed(MOUSE_BUTTON_MIDDLE) ||
             (top == -1 && hoverMod == -1 && IsMouseButtonPressed(MOUSE_BUTTON_LEFT))) {
             r->panning = 1;
-            r->panGrab = m;
+            r->panGrab = sm;
             r->panScrollX = r->scrollX;
             r->panScrollY = r->scrollY;
         }
     }
     if (r->panning) {
         if (IsMouseButtonDown(MOUSE_BUTTON_LEFT) || IsMouseButtonDown(MOUSE_BUTTON_MIDDLE)) {
-            r->scrollX = r->panScrollX - (m.x - r->panGrab.x);
-            r->scrollY = r->panScrollY - (m.y - r->panGrab.y);
+            /* The gesture is a number of screen pixels however far in the view
+             * is, so the rack keeps up with the pointer rather than crawling
+             * when zoomed in. */
+            r->scrollX = r->panScrollX - (sm.x - r->panGrab.x) / r->zoom;
+            r->scrollY = r->panScrollY - (sm.y - r->panGrab.y) / r->zoom;
         } else {
             r->panning = 0;
         }
     }
 
     if (overView && wheel != 0.0f && !wheelTaken) {
-        if (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT))
-            r->scrollX -= wheel * 60.0f;
-        else
-            r->scrollY -= wheel * 60.0f;
+        if (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) {
+            r->scrollX -= wheel * 60.0f / r->zoom;
+        } else {
+            /* Toward the pointer, not the middle of the window. Zooming
+             * around the centre means the thing you were looking at slides
+             * away, and you chase it with the other hand.
+             *
+             * The rack point under the cursor is `wm`, and it has to still be
+             * under the cursor afterwards - which pins the new scroll exactly,
+             * since scroll is the rack point at the viewport's top left. */
+            float z = r->zoom * std::pow(1.12f, wheel);
+            if (z < 0.35f) z = 0.35f;
+            if (z > 2.50f) z = 2.50f;
+            r->scrollX = wm.x - (sm.x - view.x) / z;
+            r->scrollY = wm.y - (sm.y - view.y) / z;
+            r->zoom = z;
+        }
     }
 
     if (r->scrollX < 0.0f) r->scrollX = 0.0f;
@@ -508,8 +595,8 @@ void bs_rack_frame(bs_rack *r, bs_ui *ui, bs::Engine *eng, Rectangle view, float
     if (overView && top == -1 && hoverMod == -1 && !r->patching &&
         IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
         r->menuModule = -1;
-        r->menuRackPos = (Vector2){ m.x - ox, m.y - oy };
-        bs_menu_open(ui, m, addItems, addCount, MENU_ADD);
+        r->menuRackPos = wm;
+        bs_menu_open(ui, sm, addItems, addCount, MENU_ADD);
     }
 }
 
@@ -520,6 +607,18 @@ int bs_rack_menu(bs_rack *r, bs_ui *ui, bs::Engine *eng)
     int tag = 0;
     const int hit = bs_menu_take(ui, &tag);
     if (hit < 0) return 0;
+
+    if (tag == MENU_PRESET) {
+        if (hit < 0 || hit >= bs::rackPresetCount()) return 0;
+        eng->buildPreset(hit);
+        /* Everything the rack knew about the old patch - cable geometry,
+         * scroll, zoom, what was being dragged - refers to modules that no
+         * longer exist. */
+        bs_rack_patch_replaced(r);
+        r->presetLoaded = hit;
+        r->edited = 1;
+        return 1;
+    }
 
     if (tag == MENU_ADD) {
         const bs::ModuleType *t = bs::moduleTypeAt(hit);

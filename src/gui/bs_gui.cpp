@@ -215,17 +215,32 @@ void bs_divider(float x, float y, float w)
     DrawRectangle((int)x, (int)y, (int)w, 1, BS_BORDER);
 }
 
-int bs_ui_blocked(const bs_ui *ui, Vector2 m)
+/* Null when nothing has overridden it, which is the ordinary case. */
+static int     g_mouseOverride = 0;
+static Vector2 g_mouse = { 0, 0 };
+
+void bs_ui_push_mouse(Vector2 where) { g_mouse = where; g_mouseOverride = 1; }
+void bs_ui_pop_mouse(void)           { g_mouseOverride = 0; }
+
+Vector2 bs_mouse(void)
+{
+    return g_mouseOverride ? g_mouse : GetMousePosition();
+}
+
+int bs_ui_blocked(const bs_ui *ui)
 {
     if (ui->suppress) return 1;
-    return ui->menuOpen && CheckCollisionPointRec(m, ui->menuRect);
+    /* The menu is drawn in screen space, above everything and outside any
+     * transform, so it is tested against the real pointer rather than the
+     * caller's idea of one. */
+    return ui->menuOpen && CheckCollisionPointRec(GetMousePosition(), ui->menuRect);
 }
 
 static int button_common(bs_ui *ui, int id, Rectangle r, const char *label,
                          int enabled, Color fill, Color textCol)
 {
-    const Vector2 m = GetMousePosition();
-    const int hot = enabled && !bs_ui_blocked(ui, m) && CheckCollisionPointRec(m, r);
+    const Vector2 m = bs_mouse();
+    const int hot = enabled && !bs_ui_blocked(ui) && CheckCollisionPointRec(m, r);
     const int down = hot && IsMouseButtonDown(MOUSE_BUTTON_LEFT);
 
     Color f = fill;
@@ -257,10 +272,10 @@ int bs_button_lit(bs_ui *ui, int id, Rectangle r, const char *label, int lit)
 
 int bs_info_button(bs_ui *ui, Rectangle r, int lit)
 {
-    const Vector2 m = GetMousePosition();
+    const Vector2 m = bs_mouse();
     const Vector2 c = { r.x + r.width * 0.5f, r.y + r.height * 0.5f };
     const float   rad = (r.width < r.height ? r.width : r.height) * 0.5f;
-    const int hot = !bs_ui_blocked(ui, m) && CheckCollisionPointCircle(m, c, rad);
+    const int hot = !bs_ui_blocked(ui) && CheckCollisionPointCircle(m, c, rad);
 
     const Color fill = lit ? BS_ACCENT : (hot ? BS_PANEL_HI : BS_PANEL);
     DrawCircleV(c, rad, fill);
@@ -310,9 +325,9 @@ static Vector2 knob_center(Rectangle cell)
 
 int bs_knob(bs_ui *ui, int id, Rectangle cell, bs::Param *p)
 {
-    const Vector2 m = GetMousePosition();
+    const Vector2 m = bs_mouse();
     const Vector2 c = knob_center(cell);
-    const int blocked = bs_ui_blocked(ui, m);
+    const int blocked = bs_ui_blocked(ui);
     const int hot = !blocked && CheckCollisionPointCircle(m, c, KNOB_R + 5.0f);
     int changed = 0;
 
@@ -396,8 +411,8 @@ int bs_knob(bs_ui *ui, int id, Rectangle cell, bs::Param *p)
 
 static int small_button(bs_ui *ui, Rectangle r, const char *label, int lit)
 {
-    const Vector2 m = GetMousePosition();
-    const int hot = !bs_ui_blocked(ui, m) && CheckCollisionPointRec(m, r);
+    const Vector2 m = bs_mouse();
+    const int hot = !bs_ui_blocked(ui) && CheckCollisionPointRec(m, r);
 
     Color f = lit ? BS_ACCENT : (hot ? BS_PANEL_HI : BS_PANEL);
     bs_panel(r, f, hot ? BS_ACCENT : BS_BORDER);
@@ -731,7 +746,7 @@ int bs_menu_take(bs_ui *ui, int *tag)
 {
     if (!ui->menuOpen) return -1;
 
-    const Vector2 m = GetMousePosition();
+    const Vector2 m = bs_mouse();
     ui->menuHover = -1;
     if (CheckCollisionPointRec(m, ui->menuRect)) {
         const int row = (int)((m.y - ui->menuRect.y - 4.0f) / (float)MENU_ROW);

@@ -105,11 +105,11 @@ void bs_keyboard_typing(bs_keyboard *k, bs::Engine *eng, int enabled)
 static void wheel(bs_ui *ui, Rectangle r, const char *label, float *value,
                   int bipolar, int *dragging)
 {
-    const Vector2 m = GetMousePosition();
+    const Vector2 m = bs_mouse();
     const float thumbH = 18.0f;
     Rectangle track = { r.x, r.y, r.width, r.height - 14.0f };
 
-    if (!bs_ui_blocked(ui, m) && CheckCollisionPointRec(m, track) &&
+    if (!bs_ui_blocked(ui) && CheckCollisionPointRec(m, track) &&
         IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) *dragging = 1;
     if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
         if (*dragging && bipolar) *value = 0.0f;   /* pitch springs back */
@@ -146,7 +146,7 @@ static void wheel(bs_ui *ui, Rectangle r, const char *label, float *value,
 
 void bs_keyboard_frame(bs_keyboard *k, bs_ui *ui, bs::Engine *eng, Rectangle area)
 {
-    const Vector2 m = GetMousePosition();
+    const Vector2 m = bs_mouse();
 
     DrawRectangleRec(area, BS_RACK);
     DrawRectangle((int)area.x, (int)area.y, (int)area.width, 1, BS_BORDER);
@@ -192,7 +192,24 @@ void bs_keyboard_frame(bs_keyboard *k, bs_ui *ui, bs::Engine *eng, Rectangle are
                        area.height - 16.0f };
     if (keys.width < 100.0f) { keys.width = 100.0f; }
 
-    const float ww = keys.width / (float)WHITE_KEYS;
+    /* A white key is roughly four times as long as it is wide on the hardware,
+     * and the strip is a fixed height however wide the window is - so dividing
+     * the available width by the key count and taking whatever comes out
+     * makes the keys visibly fatter every time the window grows, and on a
+     * full-screen display they stop reading as piano keys at all.
+     *
+     * Capping the width against the height fixes the proportion, and what is
+     * left over is split either side rather than absorbed, so the keyboard
+     * sits centred under the rack instead of hugging one edge. */
+    float ww = keys.width / (float)WHITE_KEYS;
+    const float wwMax = keys.height * 0.26f;
+    if (ww > wwMax) {
+        ww = wwMax;
+        const float used = ww * (float)WHITE_KEYS;
+        keys.x += (keys.width - used) * 0.5f;
+        keys.width = used;
+    }
+
     const float bw = ww * 0.62f;
     const float bh = keys.height * 0.62f;
     const int   base = baseNote(k);
@@ -202,7 +219,7 @@ void bs_keyboard_frame(bs_keyboard *k, bs_ui *ui, bs::Engine *eng, Rectangle are
      * would make the upper half of every black key play the white beneath. */
     int over = -1;
     float overVel = k->velocity;
-    if (CheckCollisionPointRec(m, keys) && !bs_ui_blocked(ui, m)) {
+    if (CheckCollisionPointRec(m, keys) && !bs_ui_blocked(ui)) {
         for (int i = 0; i < WHITE_KEYS - 1 && over < 0; i++) {
             const int deg = i % 7;
             if (!HAS_SHARP[deg]) continue;

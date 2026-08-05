@@ -114,8 +114,22 @@ const char *bs_find_asset(const char *relative, char *probe, size_t cap);
  * a lowercase i in a circle. */
 int bs_info_button(bs_ui *ui, Rectangle r, int lit);
 
-/* True when a popup owns the mouse this frame. */
-int  bs_ui_blocked(const bs_ui *ui, Vector2 m);
+/* True when something owns the mouse this frame and ordinary controls must
+ * keep their hands off it - an open menu, or a caller that has set `suppress`.
+ * Takes no position: it tests the real pointer against the menu, which is
+ * drawn in screen space even while the rack underneath is not. */
+int  bs_ui_blocked(const bs_ui *ui);
+
+/* The pointer, in whatever space the caller is currently drawing in.
+ *
+ * The rack draws under a zoom transform, so a knob's rectangle is in rack
+ * units while GetMousePosition() answers in screen pixels, and hit-testing one
+ * against the other is wrong by exactly the zoom factor. Widgets ask through
+ * this instead, and the rack answers in the space it is drawing in. Everywhere
+ * else it is GetMousePosition() unchanged. */
+void    bs_ui_push_mouse(Vector2 where);
+void    bs_ui_pop_mouse(void);
+Vector2 bs_mouse(void);
 
 /* ------------------------------------------------------------------ *
  * Text

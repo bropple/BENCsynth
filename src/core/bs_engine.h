@@ -20,6 +20,14 @@
 
 namespace bs {
 
+struct RackPreset {
+    const char *name;    /* menu label                          */
+    const char *blurb;   /* one line, for the status area       */
+};
+
+int               rackPresetCount();
+const RackPreset *rackPresetAt(int i);
+
 class Engine {
 public:
     Engine();
@@ -72,10 +80,19 @@ public:
     int voicesSounding() const { return keys.sounding.load(std::memory_order_relaxed); }
     int voicesAllocated() const { return keys.allocated.load(std::memory_order_relaxed); }
 
-    /* A complete subtractive voice, patched the way the front of a Moog
-     * manual patches one. Something has to be making a sound when the window
-     * opens, or the first impression of a modular is an empty cabinet. */
+    /* A complete subtractive voice, patched the way the front of a Moog manual
+     * patches one. Something has to be making a sound when the window opens,
+     * or the first impression of a modular is an empty cabinet. Preset 0. */
     void buildDefaultPatch();
+
+    /* Builds one of the factory racks over whatever is there now.
+     *
+     * They exist because a modular's problem is not that it cannot make a
+     * sound, it is that it makes no sound until you already know what you are
+     * doing - and the fastest way to learn what a ladder filter's resonance
+     * does is to be handed a rack where it is already doing something and
+     * turn the knob. Each one is a working instrument and a worked example. */
+    void buildPreset(int index);
 
     Patch         patch;
 
