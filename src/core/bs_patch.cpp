@@ -157,33 +157,59 @@ void Patch::rebuildOrder()
     order.clear();
     order.reserve((size_t)n);
 
+    /* Edges are collected into a compressed adjacency list first: `edgeStart`
+     * indexes into `edgeTo`, so the successors of module m are the slice
+     * [edgeStart[m], edgeStart[m+1]).
+     *
+     * The obvious version - rescanning every cable for each module dequeued -
+     * is O(V*E), which is free at fifteen modules and quadratic at three
+     * hundred. Building the index costs two passes over the cables and makes
+     * the sort O(V+E), which is what it should have been. */
     std::vector<int> indeg((size_t)n, 0);
+    std::vector<int> outdeg((size_t)n, 0);
+
+    int edges = 0;
     for (size_t i = 0; i < cables.size(); i++) {
         const Cable &c = cables[i];
         if (!c.alive) continue;
         if (c.src == c.dst) continue;          /* self-patch is a pure cycle */
         if (!module(c.src) || !module(c.dst)) continue;
         indeg[(size_t)c.dst]++;
+        outdeg[(size_t)c.src]++;
+        edges++;
     }
 
-    std::vector<int> queue;
+    edgeStart.assign((size_t)n + 1, 0);
+    for (int i = 0; i < n; i++) edgeStart[(size_t)i + 1] = edgeStart[(size_t)i] + outdeg[(size_t)i];
+
+    edgeTo.assign((size_t)edges, 0);
+    std::vector<int> fill(edgeStart.begin(), edgeStart.end() - 1);
+    for (size_t i = 0; i < cables.size(); i++) {
+        const Cable &c = cables[i];
+        if (!c.alive || c.src == c.dst) continue;
+        if (!module(c.src) || !module(c.dst)) continue;
+        edgeTo[(size_t)fill[(size_t)c.src]++] = c.dst;
+    }
+
+    /* Kahn's algorithm. `order` doubles as the queue - a node is appended when
+     * its last dependency is satisfied, and read back in the same order. */
     for (int i = 0; i < n; i++)
-        if (mods[(size_t)i] && indeg[(size_t)i] == 0) queue.push_back(i);
+        if (mods[(size_t)i] && indeg[(size_t)i] == 0) order.push_back(i);
 
     std::vector<char> done((size_t)n, 0);
     size_t head = 0;
-    while (head < queue.size()) {
-        const int m = queue[head++];
-        order.push_back(m);
+    while (head < order.size()) {
+        const int m = order[head++];
         done[(size_t)m] = 1;
-        for (size_t i = 0; i < cables.size(); i++) {
-            const Cable &c = cables[i];
-            if (!c.alive || c.src != m || c.src == c.dst) continue;
-            if (!module(c.dst) || done[(size_t)c.dst]) continue;
-            if (--indeg[(size_t)c.dst] == 0) queue.push_back(c.dst);
+        for (int e = edgeStart[(size_t)m]; e < edgeStart[(size_t)m + 1]; e++) {
+            const int d = edgeTo[(size_t)e];
+            if (done[(size_t)d]) continue;
+            if (--indeg[(size_t)d] == 0) order.push_back(d);
         }
     }
 
+    /* Whatever the sort could not place is in a cycle. Appended in id order,
+     * which makes one cable per cycle read the previous block's buffer. */
     for (int i = 0; i < n; i++)
         if (mods[(size_t)i] && !done[(size_t)i]) order.push_back(i);
 

@@ -104,6 +104,16 @@ typedef struct bs_ui {
 void bs_ui_init(bs_ui *ui);
 void bs_ui_free(bs_ui *ui);
 
+/* Finds a file shipped beside the program - a font, the wordmark. Tries the
+ * executable's own directory before the working directory, and knows where a
+ * macOS bundle keeps its Resources. Returns a path that exists, written into
+ * `probe`, or null. */
+const char *bs_find_asset(const char *relative, char *probe, size_t cap);
+
+/* A small round information button, the same one BENCmouth puts in its corner:
+ * a lowercase i in a circle. */
+int bs_info_button(bs_ui *ui, Rectangle r, int lit);
+
 /* True when a popup owns the mouse this frame. */
 int  bs_ui_blocked(const bs_ui *ui, Vector2 m);
 
@@ -176,6 +186,16 @@ void bs_scope(Rectangle r, const float *ring, int len, int head, Color c);
  * ------------------------------------------------------------------ */
 
 void bs_star(Vector2 center, float radius, float rotation);
+
+/* The same mark, rasterised into a square RGBA image with a transparent
+ * background - the window icon, and the source every packaged icon file is
+ * generated from.
+ *
+ * Rasterised from the geometry rather than loaded from a file so that the icon
+ * in the taskbar and the icon in the .ico cannot drift apart, and so that a
+ * build which has lost its assets folder still has an icon. The caller owns
+ * the image and must UnloadImage it. */
+Image bs_star_image(int size);
 
 /* ------------------------------------------------------------------ *
  * Menu

@@ -74,15 +74,38 @@ void Engine::clear()
     keys.allNotesOff();
 }
 
-void Engine::noteOn(int note, float velocity)  { keys.noteOn(note, velocity); }
-void Engine::noteOff(int note)                 { keys.noteOff(note); }
-void Engine::setBend(float b)                  { keys.bend = clampf(b, -1.0f, 1.0f); }
-void Engine::setMod(float m)                   { keys.mod  = clampf(m, 0.0f, 1.0f); }
-void Engine::setSustain(bool on)               { keys.setSustain(on); }
+static NoteEvent ev(int kind, int note, float value)
+{
+    NoteEvent e;
+    e.kind  = (uint8_t)kind;
+    e.note  = (uint8_t)(note < 0 ? 0 : (note > 127 ? 127 : note));
+    e.value = value;
+    return e;
+}
+
+void Engine::noteOn(int note, float velocity)
+{
+    if (note < 0 || note > 127) return;
+    events.push(ev(NE_NOTE_ON, note, velocity));
+}
+
+void Engine::noteOff(int note)
+{
+    if (note < 0 || note > 127) return;
+    events.push(ev(NE_NOTE_OFF, note, 0.0f));
+}
+
+void Engine::setBend(float b)    { events.push(ev(NE_BEND, 0, clampf(b, -1.0f, 1.0f))); }
+void Engine::setMod(float m)     { events.push(ev(NE_MOD,  0, clampf(m, 0.0f, 1.0f))); }
+void Engine::setSustain(bool on) { events.push(ev(NE_SUSTAIN, 0, on ? 1.0f : 0.0f)); }
 
 void Engine::panic()
 {
     std::lock_guard<std::mutex> g(mutex);
+    /* Drop anything queued before silencing, so an event posted a moment ago
+     * cannot arrive after the panic and restart a note. */
+    NoteEvent e;
+    while (events.pop(&e)) { }
     keys.allNotesOff();
     for (int i = 0; i < patch.slotCount(); i++) {
         Module *m = patch.module(i);
@@ -99,7 +122,19 @@ void Engine::render(float *interleaved, int frames)
                 std::chrono::steady_clock::now();
             {
                 std::lock_guard<std::mutex> g(mutex);
+
+                /* Everything posted since the last block lands here, in order,
+                 * before anything reads it. Draining in the engine rather than
+                 * in the keyboard module means a rack with two keyboard panels
+                 * - or none at all - behaves: the events are consumed exactly
+                 * once either way. */
+                NoteEvent e;
+                while (events.pop(&e)) keys.apply(e);
+
                 patch.process();
+                keys.clearRetriggers();
+                keys.publish();
+
                 if (cachedRev != patch.revision()) refreshOutputs();
 
                 for (int i = 0; i < BS_BLOCK; i++) { blockL[i] = 0.0f; blockR[i] = 0.0f; }

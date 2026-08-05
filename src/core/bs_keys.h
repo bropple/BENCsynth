@@ -9,6 +9,14 @@
  * allocation serves a click on the on-screen keys, a computer keyboard, and -
  * when there is a plugin - a host's MIDI stream, without three copies of the
  * voice-stealing rules.
+ *
+ * KeyboardState belongs to the audio thread and nothing else touches it.
+ * Whoever is playing posts events into the queue below instead; the engine
+ * drains them at the top of each block. That is not ceremony - the alternative
+ * was the interface thread writing the voice array while the audio thread read
+ * and wrote the same fields, which is a data race however small the fields
+ * are, and it is also precisely the shape a plugin needs to receive a host's
+ * MIDI without a lock in the callback.
  */
 
 #ifndef BS_KEYS_H
@@ -16,12 +24,81 @@
 
 #include "bs_module.h"
 
+#include <atomic>
+#include <cstdint>
+
 namespace bs {
 
 enum KeyMode {
     KM_POLY = 0,
     KM_MONO,      /* one channel, last note wins, every note retriggers   */
     KM_LEGATO     /* one channel, last note wins, only the first triggers */
+};
+
+/* ------------------------------------------------------------------ *
+ * Events
+ * ------------------------------------------------------------------ */
+
+enum NoteEventKind {
+    NE_NOTE_ON = 0,
+    NE_NOTE_OFF,
+    NE_ALL_OFF,
+    NE_SUSTAIN,   /* value 0 or 1        */
+    NE_BEND,      /* value -1..1         */
+    NE_MOD        /* value  0..1         */
+};
+
+struct NoteEvent {
+    uint8_t kind;
+    uint8_t note;
+    float   value;
+};
+
+/* A wait-free ring for one producer and one consumer.
+ *
+ * Wait-free on the producer is the point: whoever is playing must not be able
+ * to block behind a block of audio, and the audio thread must not be able to
+ * block behind whoever is playing.
+ *
+ * There is no sample offset on an event yet, so everything posted between two
+ * blocks lands at the start of the next one - 32 samples of quantisation, well
+ * under a millisecond. A plugin wanting sample-accurate timing adds the offset
+ * here and splits the block on it; nothing else has to change.
+ */
+class NoteQueue {
+public:
+    NoteQueue() : head(0), tail(0) {}
+
+    /* False when the ring is full, which means an event was dropped. With 256
+     * slots, a sixty-hertz interface and a thousand-odd blocks a second, that
+     * cannot happen short of the audio thread having stopped entirely - in
+     * which case a lost note is not the problem. */
+    bool push(const NoteEvent &e)
+    {
+        const unsigned h = head.load(std::memory_order_relaxed);
+        const unsigned n = (h + 1u) & MASK;
+        if (n == tail.load(std::memory_order_acquire)) return false;
+        buf[h] = e;
+        head.store(n, std::memory_order_release);
+        return true;
+    }
+
+    bool pop(NoteEvent *e)
+    {
+        const unsigned t = tail.load(std::memory_order_relaxed);
+        if (t == head.load(std::memory_order_acquire)) return false;
+        *e = buf[t];
+        tail.store((t + 1u) & MASK, std::memory_order_release);
+        return true;
+    }
+
+private:
+    enum { SIZE = 256, MASK = SIZE - 1 };
+    NoteEvent buf[SIZE];
+    std::atomic<unsigned> head, tail;
+
+    NoteQueue(const NoteQueue &);
+    NoteQueue &operator=(const NoteQueue &);
 };
 
 struct KeyVoice {
@@ -49,7 +126,40 @@ public:
         bend      = 0.0f;
         mod       = 0.0f;
         sustain   = false;
+        sounding.store(0, std::memory_order_relaxed);
+        allocated.store(1, std::memory_order_relaxed);
     }
+
+    /* The one entry point the audio thread uses on an event drained from the
+     * queue. Everything else here is called from inside process(). */
+    void apply(const NoteEvent &e)
+    {
+        switch (e.kind) {
+        case NE_NOTE_ON:  noteOn(e.note, e.value); break;
+        case NE_NOTE_OFF: noteOff(e.note);         break;
+        case NE_ALL_OFF:  allNotesOff();           break;
+        case NE_SUSTAIN:  setSustain(e.value >= 0.5f); break;
+        case NE_BEND:     bend = clampf(e.value, -1.0f, 1.0f); break;
+        case NE_MOD:      mod  = clampf(e.value,  0.0f, 1.0f); break;
+        default: break;
+        }
+    }
+
+    /* Published once a block for the interface to read. Two atomics rather
+     * than letting the readout walk the voice array, which would put the
+     * interface back inside data the audio thread owns - the whole thing this
+     * arrangement exists to prevent. */
+    void publish()
+    {
+        int n = 0;
+        const int ch = channels();
+        for (int i = 0; i < ch; i++) if (v[i].gate) n++;
+        sounding.store(n, std::memory_order_relaxed);
+        allocated.store(ch, std::memory_order_relaxed);
+    }
+
+    std::atomic<int> sounding;
+    std::atomic<int> allocated;
 
     void setPolyphony(int n)
     {
@@ -151,16 +261,10 @@ public:
         for (int i = 0; i < BS_MAX_POLY; i++) { v[i].gate = false; v[i].retrig = false; }
     }
 
-    /* True while any key is physically down - the on-screen keyboard uses it
-     * to decide whether a key draws lit. */
-    bool isHeld(int note) const
-    {
-        for (int i = 0; i < heldCount; i++) if (held[i].note == note) return true;
-        return false;
-    }
-
-    /* Called by the keyboard module once per block, after it has consumed the
-     * retrigger flags. */
+    /* Called by the engine once per block, after every module has had a chance
+     * to see the flags. The keyboard module used to do this itself, which was
+     * wrong the moment a rack had two of them: the first to run cleared the
+     * triggers before the second could read them. */
     void clearRetriggers()
     {
         for (int i = 0; i < BS_MAX_POLY; i++) v[i].retrig = false;

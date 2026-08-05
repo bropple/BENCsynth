@@ -108,7 +108,9 @@ void ModuleKbd::process()
             if (trigTimer[c] > 0.0f) trigTimer[c] -= st;
         }
     }
-    keys->clearRetriggers();
+    /* The retrigger flags are cleared by the engine after every module has
+     * run, not here - two keyboard panels in one rack would otherwise have the
+     * first to run clear them before the second could see them. */
 }
 
 /* ================================================================== *

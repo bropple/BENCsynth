@@ -1,16 +1,30 @@
+<p align="center">
+  <img src="assets/brand/BENCO_Logo_README.png" alt="BENCO Holdings" width="420">
+</p>
+
 # BENCsynth
+
+[![build](https://github.com/bropple/BENCsynth/actions/workflows/ci.yml/badge.svg)](https://github.com/bropple/BENCsynth/actions/workflows/ci.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-78b946)](LICENSE)
 
 A polyphonic virtual modular synthesizer. Panels in a rack, jacks you drag
 patch cables between, and the cables hang.
 
 ![The default rack](docs/rack.png)
 
+**[Download a build](https://github.com/bropple/BENCsynth/releases/latest)** for
+Linux, macOS or Windows — or `make` it.
+
 Fourteen module types, eight-voice polyphony carried in the cables themselves,
 a Moog-style ladder filter, and a keyboard along the bottom you can play with
 the mouse or with the computer keyboard.
 
-The mascot is **S. Tarr**, who appears in the header and in the help panel and
+The mascot is **S. Tarr**, who is the program's icon, sits in the header, and
 otherwise stays out of the way.
+
+<p align="center">
+  <img src="docs/info.png" alt="The information window" width="760">
+</p>
 
 ---
 
@@ -20,6 +34,7 @@ otherwise stays out of the way.
 make            # the synthesizer
 make test       # the core tests - no raylib, no sound card needed
 make render     # a phrase through the default rack, written to a .wav
+make icons      # regenerate assets/icon from the star geometry in the code
 make info       # what the build decided about raylib
 ```
 
@@ -63,6 +78,7 @@ amplifier, then a delay and a reverb into the output stage.
 | `[` `]` | shift octave |
 | `SPACE` | sustain |
 | `ESC` | all notes off |
+| `F1`, or the `i` in the corner | what everything does |
 
 Clicking the on-screen keys works too, and dragging across them glides. How
 far down a key you click sets the velocity.
@@ -134,8 +150,14 @@ src/core/      the synthesizer. No raylib, no globals, no allocation in
                process(). This is what a plugin will link.
 src/gui/       the window: theme, widgets, rack, cable physics, keyboard.
 tests/         core tests
-tools/         the offline renderer
+tools/         the offline renderer, and the icon and packaging scripts
+assets/        the interface font, the BENCO wordmark, the S. Tarr icons
 ```
+
+`make icons` regenerates `assets/icon` from `bs_star_image()` — the same code
+that draws the mark in the window — so the icon in your taskbar cannot drift
+from the one in the `.ico`. It needs ImageMagick; the results are committed, so
+a build does not.
 
 `ARCHITECTURE.md` goes into why it is arranged that way, and what has to
 happen for the VST build.
@@ -148,5 +170,8 @@ happen for the VST build.
 - **Terminus TTF** — SIL Open Font License, in `assets/fonts/` with its
   `OFL.txt`. Looked for on disk at startup, with raylib's built-in font as the
   fallback, so a build with the font missing still comes up.
+
+Full attribution is in [NOTICE](NOTICE). BENCsynth itself is MIT — see
+[LICENSE](LICENSE).
 
 The `style/` folder holds the BENCO design guide and is gitignored.

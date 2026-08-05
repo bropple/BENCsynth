@@ -29,6 +29,7 @@ typedef struct bs_keyboard {
      * every instrument that has both. */
     float bend, mod;
     int   dragBend, dragMod;
+    float sentBend, sentMod;   /* what the engine was last told */
 
     int   sustain;
 } bs_keyboard;

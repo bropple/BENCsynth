@@ -52,12 +52,25 @@ public:
 
     /* ---- notes ---- */
 
+    /* Wait-free. These post to a queue the audio thread drains at the top of
+     * the next block; nothing here touches the voice array, which belongs to
+     * the audio thread. Safe to call from any single thread - the queue has
+     * one producer, and in this program that is whoever is playing. */
     void noteOn(int note, float velocity);
     void noteOff(int note);
     void setBend(float b);          /* -1..1 */
     void setMod(float m);           /*  0..1 */
     void setSustain(bool on);
+
+    /* Not wait-free: takes the lock, because it resets every module's state
+     * as well. It is a button someone presses when things have gone wrong,
+     * not something called per note. */
     void panic();
+
+    /* What the interface may read while audio is running: published once a
+     * block, and nothing else about the voice allocator is safe to look at. */
+    int voicesSounding() const { return keys.sounding.load(std::memory_order_relaxed); }
+    int voicesAllocated() const { return keys.allocated.load(std::memory_order_relaxed); }
 
     /* A complete subtractive voice, patched the way the front of a Moog
      * manual patches one. Something has to be making a sound when the window
@@ -65,7 +78,11 @@ public:
     void buildDefaultPatch();
 
     Patch         patch;
+
+    /* Audio-thread property. The interface reaches it only through the event
+     * queue above and the two published counters. */
     KeyboardState keys;
+    NoteQueue     events;
 
     /* Fraction of the available time the last block took. Read by the status
      * line; approximate, and deliberately not smoothed here. */

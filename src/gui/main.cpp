@@ -16,6 +16,7 @@
 #include "bs_patchfile.h"
 #include "bs_engine.h"
 #include "bs_modules.h"
+#include "bs_version.h"
 
 #include <cmath>
 #include <cstdio>
@@ -42,7 +43,7 @@ static void audio_cb(void *buffer, unsigned int frames)
  * Header
  * ------------------------------------------------------------------ */
 
-static void draw_header(bs_ui *ui, Rectangle r, const bs::Engine *eng)
+static int draw_header(bs_ui *ui, Rectangle r, const bs::Engine *eng, int infoOpen)
 {
     DrawRectangleRec(r, BS_RACK);
     DrawRectangle((int)r.x, (int)(r.y + r.height - 1), (int)r.width, 1, BS_BORDER);
@@ -67,65 +68,142 @@ static void draw_header(bs_ui *ui, Rectangle r, const bs::Engine *eng)
     bs_text_spaced(ui, BS_F_TINY, "BENCO HOLDINGS   MODULAR SERIES",
                    58.0f + nameW + 14.0f, r.y + 19.0f, BS_EDGE);
 
-    /* Right-hand readouts. Held voices rather than allocated ones, because
-     * the number that means anything while playing is how many are sounding. */
-    int held = 0;
-    for (int i = 0; i < bs::BS_MAX_POLY; i++) if (eng->keys.v[i].gate) held++;
+    /* The information button takes the corner, so the readouts stop short of
+     * it rather than running underneath. */
+    Rectangle info = { r.x + r.width - 34.0f, r.y + (r.height - 24.0f) * 0.5f,
+                       24.0f, 24.0f };
+    const int hit = bs_info_button(ui, info, infoOpen);
 
+    /* Sounding voices rather than allocated ones: the number that means
+     * anything while playing is how many are audible. Read through the
+     * published counters - the voice array belongs to the audio thread. */
     char buf[128];
     std::snprintf(buf, sizeof buf, "VOICES %d/%d    LOAD %2.0f%%    %d Hz",
-                  held, eng->keys.channels(), (double)(eng->load * 100.0f),
-                  SAMPLE_RATE);
+                  eng->voicesSounding(), eng->voicesAllocated(),
+                  (double)(eng->load * 100.0f), SAMPLE_RATE);
     const float w = bs_measure(ui, BS_F_SMALL, buf, 1.0f);
-    bs_text_spaced(ui, BS_F_SMALL, buf, r.x + r.width - w - 14.0f,
+    bs_text_spaced(ui, BS_F_SMALL, buf, info.x - w - 16.0f,
                    r.y + (r.height - BS_F_SMALL) * 0.5f, BS_DIM);
+
+    return hit;
 }
 
 /* ------------------------------------------------------------------ *
- * About
+ * Information
  * ------------------------------------------------------------------ */
 
-static void draw_about(bs_ui *ui, Rectangle screen)
-{
-    DrawRectangleRec(screen, (Color){ 0, 0, 0, 170 });
+/* The BENCO wordmark, white on transparent, tinted to phosphor when it is
+ * drawn. Zero id means it was not found, and the panel simply does without. */
+static Texture2D g_logo = { 0, 0, 0, 0, 0 };
 
-    Rectangle p = { screen.x + screen.width * 0.5f - 290.0f,
-                    screen.y + screen.height * 0.5f - 190.0f, 580.0f, 380.0f };
+static void load_logo(void)
+{
+    char probe[1024];
+    const char *path = bs_find_asset("assets/brand/BENCO_Logo_Terminal.png",
+                                     probe, sizeof probe);
+    if (!path) return;
+    Image img = LoadImage(path);
+    if (img.data == 0) return;
+    g_logo = LoadTextureFromImage(img);
+    UnloadImage(img);
+    if (g_logo.id != 0) SetTextureFilter(g_logo, TEXTURE_FILTER_BILINEAR);
+}
+
+static void draw_info(bs_ui *ui, Rectangle screen)
+{
+    DrawRectangleRec(screen, (Color){ 0, 0, 0, 190 });
+
+    /* Sized to what is in it. A panel that stretches to the window leaves a
+     * third of itself empty, which reads as something failing to load. */
+    float pw = screen.width - 120.0f;
+    float ph = screen.height - 90.0f;
+    if (pw > 660.0f) pw = 660.0f;
+    if (ph > 484.0f) ph = 484.0f;
+    Rectangle p = { screen.x + (screen.width - pw) * 0.5f,
+                    screen.y + (screen.height - ph) * 0.5f, pw, ph };
     bs_panel(p, BS_PANEL, BS_ACCENT);
 
-    bs_star((Vector2){ p.x + 84.0f, p.y + 96.0f }, 52.0f, 0.0f);
+    float y = p.y + 24.0f;
 
-    bs_text_spaced(ui, BS_F_TITLE, "BENCsynth", p.x + 160.0f, p.y + 36.0f, BS_TEXT);
-    bs_text_spaced(ui, BS_F_SMALL, "A VIRTUAL MODULAR SYNTHESIZER",
-                   p.x + 162.0f, p.y + 74.0f, BS_DIM);
-    bs_text_spaced(ui, BS_F_SMALL, "MASCOT: S. TARR", p.x + 162.0f, p.y + 96.0f, BS_EDGE);
-    bs_text_spaced(ui, BS_F_SMALL, "BENCO HOLDINGS", p.x + 162.0f, p.y + 118.0f, BS_EDGE);
+    /* The wordmark, then the star, then the name: house first, mascot second,
+     * program third, which is the order they belong in. */
+    if (g_logo.id != 0) {
+        float lw = pw * 0.42f;
+        if (lw > 260.0f) lw = 260.0f;
+        const float lh = lw * (float)g_logo.height / (float)g_logo.width;
+        DrawTexturePro(g_logo,
+                       (Rectangle){ 0, 0, (float)g_logo.width, (float)g_logo.height },
+                       (Rectangle){ p.x + (pw - lw) * 0.5f, y, lw, lh },
+                       (Vector2){ 0, 0 }, 0.0f, BS_TEXT);
+        y += lh + 16.0f;
+    } else {
+        bs_text_center(ui, BS_F_BODY, "BENCO HOLDINGS", p.x + pw * 0.5f, y, BS_TEXT);
+        y += 30.0f;
+    }
 
-    bs_divider(p.x + 20.0f, p.y + 168.0f, p.width - 40.0f);
+    bs_star((Vector2){ p.x + pw * 0.5f, y + 26.0f }, 26.0f, 0.0f);
+    y += 60.0f;
 
-    static const char *LINES[] = {
-        "DRAG a jack to another jack        patch a cable",
-        "DRAG a plug out of an input        move that cable",
-        "RIGHT-CLICK a jack                 unplug it",
-        "RIGHT-CLICK the rack               add a module",
-        "RIGHT-CLICK a module title         module menu",
-        "DRAG a module title                move the panel",
-        "DRAG or WHEEL on a knob            turn it",
-        "SHIFT-DRAG a knob                  turn it slowly",
-        "DOUBLE-CLICK a knob                back to default",
-        "",
-        "Z S X D C ... and Q 2 W 3 E ...    play",
-        "[ and ]                            octave",
-        "SPACE                              sustain",
-        "ESC                                all notes off"
+    char line[128];
+    std::snprintf(line, sizeof line, "BENCsynth %s", BS_VERSION_STRING);
+    bs_text_center(ui, BS_F_TITLE, line, p.x + pw * 0.5f, y, BS_TEXT);
+    y += 34.0f;
+    bs_text_center(ui, BS_F_SMALL, "a polyphonic virtual modular synthesizer",
+                   p.x + pw * 0.5f, y, BS_DIM);
+    y += 22.0f;
+    bs_text_center(ui, BS_F_SMALL, "Copyright (c) 2026 Ben Ropple",
+                   p.x + pw * 0.5f, y, BS_TEXT);
+    y += 20.0f;
+    bs_text_center(ui, BS_F_TINY, "mascot: S. Tarr", p.x + pw * 0.5f, y, BS_EDGE);
+    y += 22.0f;
+
+    bs_divider(p.x + 24.0f, y, pw - 48.0f);
+    y += 12.0f;
+
+    /* Two columns, because one column of fourteen lines is a wall and the
+     * gestures and the keys are two different things to learn. */
+    static const char *PATCHING[] = {
+        "DRAG jack to jack     patch a cable",
+        "DRAG a plug off an    move that cable",
+        "  input",
+        "RIGHT-CLICK a jack    unplug it",
+        "RIGHT-CLICK the rack  add a module",
+        "RIGHT-CLICK a title   module menu",
+        "DRAG a module title   move the panel",
+        "DRAG / WHEEL a knob   turn it",
+        "SHIFT-DRAG a knob     turn it slowly",
+        "DOUBLE-CLICK a knob   back to default",
+        "DRAG empty rack       pan"
     };
-    const int n = (int)(sizeof LINES / sizeof LINES[0]);
-    for (int i = 0; i < n; i++)
-        bs_text(ui, BS_F_TINY, LINES[i], p.x + 24.0f,
-                p.y + 182.0f + (float)i * 14.0f, i % 2 ? BS_DIM : BS_TEXT);
+    static const char *KEYS[] = {
+        "Z S X D C V G B ...   lower octave",
+        "Q 2 W 3 E R 5 T ...   upper octave",
+        "[  ]                  shift octave",
+        "SPACE                 sustain",
+        "ESC                   all notes off",
+        "F1                    this window",
+        "",
+        "raylib - zlib licence",
+        "Terminus TTF - SIL Open Font Licence",
+        "",
+        "github.com/bropple/BENCsynth"
+    };
+    const int np = (int)(sizeof PATCHING / sizeof PATCHING[0]);
+    const int nk = (int)(sizeof KEYS / sizeof KEYS[0]);
+    const float colW = (pw - 60.0f) * 0.5f;
 
-    bs_text_spaced(ui, BS_F_TINY, "F1 or click to close", p.x + p.width - 152.0f,
-                   p.y + p.height - 22.0f, BS_EDGE);
+    bs_text_spaced(ui, BS_F_TINY, "PATCHING", p.x + 24.0f, y, BS_ACCENT);
+    bs_text_spaced(ui, BS_F_TINY, "PLAYING", p.x + 36.0f + colW, y, BS_ACCENT);
+    y += 16.0f;
+
+    for (int i = 0; i < np; i++)
+        bs_text(ui, BS_F_TINY, PATCHING[i], p.x + 24.0f, y + (float)i * 14.0f, BS_DIM);
+    for (int i = 0; i < nk; i++)
+        bs_text(ui, BS_F_TINY, KEYS[i], p.x + 36.0f + colW, y + (float)i * 14.0f,
+                i >= nk - 4 ? BS_EDGE : BS_DIM);
+
+    bs_text_spaced(ui, BS_F_TINY, "F1 or click to close", p.x + pw - 156.0f,
+                   p.y + ph - 22.0f, BS_EDGE);
 }
 
 /* ------------------------------------------------------------------ *
@@ -228,9 +306,6 @@ static void draw_toolbar(bs_app *app, bs_ui *ui, bs_rack *rack, bs_keyboard *kb,
     }
     x += 68.0f;
 
-    b = (Rectangle){ x, y, 62.0f, h };
-    if (bs_button_lit(ui, 8009, b, "HELP", app->about)) app->about = !app->about;
-    x += 76.0f;
 
     /* The status line fades rather than disappearing, so a message that has
      * been read stops competing with the rack for attention but is still
@@ -258,11 +333,36 @@ int main(int argc, char **argv)
     const char *shot = 0;
     int shotFrames = 90;
     const char *loadPath = 0;
+    const char *iconDir = 0;
+    int openInfo = 0;
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shot = argv[++i];
         else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc)
             shotFrames = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--info") == 0) openInfo = 1;
+        else if (std::strcmp(argv[i], "--icons") == 0 && i + 1 < argc)
+            iconDir = argv[++i];
         else loadPath = argv[i];
+    }
+
+    /* Writing the icon files needs no window and no GL context, so it happens
+     * before either exists. `tools/make-icons.sh` calls this and then packs
+     * the results into a .ico; the .icns is assembled from the same PNGs by
+     * the macOS bundle script. */
+    if (iconDir) {
+        static const int SIZES[] = { 16, 24, 32, 48, 64, 128, 256, 512 };
+        int failed = 0;
+        for (int i = 0; i < (int)(sizeof SIZES / sizeof SIZES[0]); i++) {
+            Image img = bs_star_image(SIZES[i]);
+            char path[512];
+            std::snprintf(path, sizeof path, "%s/star-%d.png", iconDir, SIZES[i]);
+            if (!ExportImage(img, path)) {
+                std::fprintf(stderr, "cannot write %s\n", path);
+                failed = 1;
+            }
+            UnloadImage(img);
+        }
+        return failed;
     }
 
     SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT | FLAG_VSYNC_HINT);
@@ -274,8 +374,26 @@ int main(int argc, char **argv)
      * you learn not to trust. */
     SetExitKey(KEY_NULL);
 
+    /* The window icon, on the platforms where a program can set its own.
+     * Windows takes it from a named resource compiled into the executable
+     * instead - see src/gui/bencsynth.rc - and macOS takes it from the .app
+     * bundle, because GLFW's Cocoa backend ignores this call entirely: a bare
+     * Mach-O executable has no Dock identity to hang an icon on.
+     *
+     * Several sizes rather than one, so the titlebar and the taskbar each pick
+     * a rasterisation made for them rather than scaling a single image. */
+    {
+        static const int SIZES[] = { 16, 24, 32, 48, 64, 128 };
+        const int n = (int)(sizeof SIZES / sizeof SIZES[0]);
+        Image icons[6];
+        for (int i = 0; i < n; i++) icons[i] = bs_star_image(SIZES[i]);
+        SetWindowIcons(icons, n);
+        for (int i = 0; i < n; i++) UnloadImage(icons[i]);
+    }
+
     bs_ui ui;
     bs_ui_init(&ui);
+    load_logo();
 
     bs_rack rack;
     bs_rack_init(&rack);
@@ -286,6 +404,7 @@ int main(int argc, char **argv)
     bs_app app;
     std::memset(&app, 0, sizeof app);
     app.slot = 1;
+    app.about = openInfo;
 
     g_engine.init((float)SAMPLE_RATE);
     if (loadPath) {
@@ -344,7 +463,7 @@ int main(int argc, char **argv)
         BeginDrawing();
         ClearBackground(BS_BG);
 
-        draw_header(&ui, header, &g_engine);
+        if (draw_header(&ui, header, &g_engine, app.about)) app.about = !app.about;
 
         ui.suppress = app.about;
         draw_toolbar(&app, &ui, &rack, &kb, &g_engine, toolbar, rview);
@@ -354,8 +473,11 @@ int main(int argc, char **argv)
 
         if (app.about) {
             Rectangle screen = { 0, 0, W, H };
-            draw_about(&ui, screen);
-            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) app.about = 0;
+            draw_info(&ui, screen);
+            /* Released, not pressed: the click that opened it is still going
+             * on when this runs on the same frame, and reacting to the press
+             * would shut the window in the act of opening it. */
+            if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) app.about = 0;
         }
 
         bs_rack_menu(&rack, &ui, &g_engine);
@@ -370,6 +492,7 @@ int main(int argc, char **argv)
     }
 
     bs_keyboard_release_all(&kb, &g_engine);
+    if (g_logo.id != 0) UnloadTexture(g_logo);
     UnloadAudioStream(stream);
     CloseAudioDevice();
     bs_ui_free(&ui);

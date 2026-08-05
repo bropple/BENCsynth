@@ -66,6 +66,14 @@ public:
      * GUI's cable geometry - can notice without being told. */
     unsigned revision() const { return rev; }
 
+    /* The nth module in evaluation order, or -1 past the end. Exposed for the
+     * test that checks the sort actually sorts; nothing in the program needs
+     * to know what order it runs in. */
+    int evalOrderAt(int n) const
+    {
+        return (n >= 0 && n < (int)order.size()) ? order[(size_t)n] : -1;
+    }
+
 private:
     void rebuildOrder();
     void rebind(int dst, int dstPort);
@@ -73,6 +81,10 @@ private:
     std::vector<Module *> mods;      /* removed slots are null    */
     std::vector<Cable>    cables;    /* removed slots are !alive  */
     std::vector<int>      order;     /* module ids, evaluation order */
+
+    /* Compressed adjacency for the sort, kept between rebuilds only so the
+     * allocation is reused rather than made afresh on every edit. */
+    std::vector<int>      edgeStart, edgeTo;
     float    sr;
     unsigned rev;
     bool     orderDirty;

@@ -362,6 +362,103 @@ static void test_graph()
         peakOf(&buf[0], 2048 * 2), 1.0);
 }
 
+static void test_event_queue()
+{
+    std::printf("event queue\n");
+    NoteQueue q;
+    NoteEvent e;
+
+    ok(!q.pop(&e), "an empty queue pops nothing");
+
+    for (int i = 0; i < 10; i++) {
+        NoteEvent p;
+        p.kind = NE_NOTE_ON; p.note = (uint8_t)(60 + i); p.value = 1.0f;
+        ok(q.push(p), "pushed");
+    }
+    int seen = 0;
+    bool inOrder = true;
+    while (q.pop(&e)) {
+        if (e.note != (uint8_t)(60 + seen)) inOrder = false;
+        seen++;
+    }
+    okf(seen == 10, "popped %.0f events, expected %.0f", (double)seen, 10.0);
+    ok(inOrder, "events come back in the order they went in");
+
+    /* Full is a refusal, not a corruption: the events already in the ring have
+     * to survive an attempt to overfill it. */
+    int pushed = 0;
+    for (int i = 0; i < 4096; i++) {
+        NoteEvent p;
+        p.kind = NE_NOTE_ON; p.note = (uint8_t)(i & 127); p.value = 1.0f;
+        if (!q.push(p)) break;
+        pushed++;
+    }
+    ok(pushed > 0 && pushed < 4096, "the ring reports full rather than wrapping over itself");
+    int drained = 0;
+    while (q.pop(&e)) drained++;
+    okf(drained == pushed, "drained %.0f of the %.0f that were accepted",
+        (double)drained, (double)pushed);
+}
+
+/* The evaluation order has to be a real topological order, and the cheapest
+ * observable consequence of that is latency: a signal crossing a four-deep
+ * chain arrives in the very first block if the modules run in dependency
+ * order, and takes one block per link if they do not.
+ *
+ * The modules are created back to front so that module id order is the exact
+ * reverse of signal flow - which is what a rack looks like after ten minutes
+ * of patching, and what a sort that quietly does nothing would still pass
+ * without. */
+static void test_eval_order()
+{
+    std::printf("evaluation order\n");
+
+    Engine e;
+    e.init(48000.0f);
+
+    const int out  = e.addModule("OUT", 0, 0);
+    const int vca3 = e.addModule("VCA", 0, 0);
+    const int vca2 = e.addModule("VCA", 0, 0);
+    const int vca1 = e.addModule("VCA", 0, 0);
+    const int vco  = e.addModule("VCO", 0, 0);
+
+    e.connect(vco, 0, vca1, 0);
+    e.connect(vca1, 0, vca2, 0);
+    e.connect(vca2, 0, vca3, 0);
+    e.connect(vca3, 0, out, 0);
+
+    /* Wide open, linear, so the chain is a pure pass-through. */
+    const int chain[3] = { vca1, vca2, vca3 };
+    for (int i = 0; i < 3; i++) {
+        Module *m = e.patch.module(chain[i]);
+        m->params[0].value = 1.0f;   /* gain  */
+        m->params[1].value = 0.0f;   /* no CV */
+        m->params[2].value = 0.0f;   /* linear */
+    }
+
+    std::vector<float> buf(BS_BLOCK * 2, 0.0f);
+    e.render(&buf[0], BS_BLOCK);
+    okf(peakOf(&buf[0], BS_BLOCK * 2) > 0.01f,
+        "a four-deep chain reached the output in the first block (peak %.4f, "
+        "expected above %.2f)", peakOf(&buf[0], BS_BLOCK * 2), 0.01);
+
+    /* And the order itself has to place every producer before its consumer. */
+    const std::vector<Cable> &cs = e.patch.cableList();
+    int violations = 0;
+    for (size_t i = 0; i < cs.size(); i++) {
+        if (!cs[i].alive || cs[i].src == cs[i].dst) continue;
+        int si = -1, di = -1;
+        for (int k = 0; k < e.patch.slotCount(); k++) {
+            const int id = e.patch.evalOrderAt(k);
+            if (id == cs[i].src) si = k;
+            if (id == cs[i].dst) di = k;
+        }
+        if (si < 0 || di < 0 || si > di) violations++;
+    }
+    okf(violations == 0, "%.0f cables run backwards through the order, expected %.0f",
+        (double)violations, 0.0);
+}
+
 static void test_default_patch()
 {
     std::printf("default patch\n");
@@ -434,6 +531,8 @@ int main()
     test_keys();
     test_registry();
     test_graph();
+    test_event_queue();
+    test_eval_order();
     test_default_patch();
     test_sample_rates();
     test_patchfile();

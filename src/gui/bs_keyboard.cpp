@@ -34,6 +34,21 @@ static const int MAP_N = (int)(sizeof MAP / sizeof MAP[0]);
 
 static int baseNote(const bs_keyboard *k) { return 12 * (k->octave + 1); }
 
+/* Which keys draw lit.
+ *
+ * Answered from what this keyboard is holding rather than by asking the
+ * engine, because the voice allocator belongs to the audio thread and reading
+ * its array to light up a key would be exactly the cross-thread peek the event
+ * queue exists to remove. This is also the more accurate answer: it lights the
+ * keys that are down, not the voices that are sounding, so a note still
+ * ringing out its release does not leave a key stuck on. */
+static int holding(const bs_keyboard *k, int note)
+{
+    if (k->mouseNote == note) return 1;
+    for (int i = 0; i < MAP_N; i++) if (k->typed[i] == note) return 1;
+    return 0;
+}
+
 void bs_keyboard_init(bs_keyboard *k)
 {
     memset(k, 0, sizeof *k);
@@ -154,8 +169,12 @@ void bs_keyboard_frame(bs_keyboard *k, bs_ui *ui, bs::Engine *eng, Rectangle are
     Rectangle wMod  = { box.x + 52.0f, box.y + 28.0f, 44.0f, box.height - 28.0f };
     wheel(ui, wBend, "BEND", &k->bend, 1, &k->dragBend);
     wheel(ui, wMod,  "MOD",  &k->mod,  0, &k->dragMod);
-    eng->setBend(k->bend);
-    eng->setMod(k->mod);
+
+    /* Only when they move. These post events now, and a wheel sitting still
+     * has no business filling the queue sixty times a second with the value it
+     * already sent. */
+    if (k->bend != k->sentBend) { eng->setBend(k->bend); k->sentBend = k->bend; }
+    if (k->mod  != k->sentMod)  { eng->setMod(k->mod);   k->sentMod  = k->mod; }
 
     Rectangle sus = { box.x + 104.0f, box.y + 28.0f, 46.0f, 26.0f };
     if (bs_button_lit(ui, 9003, sus, "SUS", k->sustain)) {
@@ -224,7 +243,7 @@ void bs_keyboard_frame(bs_keyboard *k, bs_ui *ui, bs::Engine *eng, Rectangle are
     for (int i = 0; i < WHITE_KEYS; i++) {
         const int note = base + (i / 7) * 12 + WHITE_SEMI[i % 7];
         Rectangle r = { keys.x + (float)i * ww, keys.y, ww - 1.0f, keys.height };
-        const int held = eng->keys.isHeld(note);
+        const int held = holding(k, note);
         DrawRectangleRec(r, held ? BS_ACCENT : (note == over ? BS_TEXT : BS_DIM));
         DrawRectangleLinesEx(r, 1.0f, BS_EDGE);
 
@@ -244,7 +263,7 @@ void bs_keyboard_frame(bs_keyboard *k, bs_ui *ui, bs::Engine *eng, Rectangle are
         if (!HAS_SHARP[deg]) continue;
         const int note = base + (i / 7) * 12 + WHITE_SEMI[deg] + 1;
         Rectangle r = { keys.x + (float)(i + 1) * ww - bw * 0.5f, keys.y, bw, bh };
-        const int held = eng->keys.isHeld(note);
+        const int held = holding(k, note);
         DrawRectangleRec(r, held ? BS_ACCENT : (note == over ? BS_EDGE : BS_RACK));
         DrawRectangleLinesEx(r, 1.0f, BS_EDGE);
     }

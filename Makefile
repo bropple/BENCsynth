@@ -2,6 +2,8 @@
 #
 #   make            the standalone synthesizer
 #   make test       the core test, which needs no raylib and no sound card
+#   make render     a phrase through the default rack, written to a .wav
+#   make icons      regenerate assets/icon from the star geometry in the code
 #   make core       just the DSP library
 #   make info       what the build decided about raylib, when it decided wrong
 #
@@ -88,16 +90,27 @@ endif
 
 LDLIBS_GUI := $(RL_LIBS) $(RL_SYS)
 
+# Windows: compile the icon into the executable, and link as a GUI subsystem
+# binary so double-clicking it does not also open a console behind the window.
+# Both apply to the GUI only.
 ifeq ($(OS),Windows_NT)
-  # No console window behind the synthesizer when it is double-clicked.
+  GUI_RES  := src/gui/bencsynth.res.o
   GUI_LINK := -mwindows
 else
+  GUI_RES  :=
   GUI_LINK :=
 endif
 
+
 # ------------------------------------------------------------------
 
-.PHONY: all core test clean info run render
+.PHONY: all core test clean info run render icons
+
+# The icon files are generated from bs_star_image(), which is the same code
+# that draws the mark in the window - so they cannot drift from it. Committed
+# rather than built, because a release job should not need ImageMagick.
+icons: $(GUI)
+	./tools/make-icons.sh
 
 all: $(GUI)
 
@@ -106,8 +119,8 @@ core: $(CORE_LIB)
 $(CORE_LIB): $(CORE_OBJ)
 	$(AR) rcs $@ $^
 
-$(GUI): $(GUI_OBJ) $(CORE_LIB)
-	$(CXX) $(CXXFLAGS) $(GUI_LINK) -o $@ $(GUI_OBJ) $(CORE_LIB) $(LDLIBS_GUI)
+$(GUI): $(GUI_OBJ) $(GUI_RES) $(CORE_LIB)
+	$(CXX) $(CXXFLAGS) $(GUI_LINK) -o $@ $(GUI_OBJ) $(GUI_RES) $(CORE_LIB) $(LDLIBS_GUI)
 
 $(GUI_OBJ): CPPFLAGS += $(RL_CFLAGS) -Isrc/gui
 
@@ -132,6 +145,12 @@ run: $(GUI)
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $<
 
+# windres resolves the path inside the .rc against its own working directory,
+# so it is run from the project root and the .rc names the path from there.
+src/gui/bencsynth.res.o: src/gui/bencsynth.rc assets/icon/bencsynth.ico
+	windres $< -O coff -o $@
+
+
 info:
 	@echo "  raylib from = $(RL_FROM)"
 	@echo "  RL_CFLAGS   = $(RL_CFLAGS)"
@@ -148,6 +167,6 @@ info:
 clean:
 	rm -f $(CORE_OBJ) $(GUI_OBJ) $(TEST_OBJ) $(RENDER_OBJ) \
 	      $(CORE_OBJ:.o=.d) $(GUI_OBJ:.o=.d) $(TEST_OBJ:.o=.d) $(RENDER_OBJ:.o=.d) \
-	      $(CORE_LIB) $(GUI) $(TEST) $(RENDER)
+	      $(CORE_LIB) $(GUI) $(TEST) $(RENDER) src/gui/*.res.o
 
 -include $(CORE_OBJ:.o=.d) $(GUI_OBJ:.o=.d) $(TEST_OBJ:.o=.d) $(RENDER_OBJ:.o=.d)

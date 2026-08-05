@@ -1,0 +1,167 @@
+name: build
+
+# The README claims BENCsynth builds on Linux, macOS and Windows. This is what
+# turns that claim into something verified rather than asserted.
+#
+# Each job keeps what it built. The artifacts are the point of running on three
+# platforms - a job that proves the build works and then deletes the evidence
+# has only proved it to itself.
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # The DSP core links no raylib and needs no sound card, which is the property
+  # that makes a plugin possible later. It is checked first and on its own,
+  # because if it ever stops being true the three GUI jobs below would still
+  # pass and nothing would say so.
+  core:
+    name: core (no raylib)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the core and run the tests
+        run: |
+          make core
+          make test
+      - name: The core really does not link raylib
+        run: |
+          if nm -uC libbencsynth.a | grep -iE 'raylib|glfw|InitWindow|BeginDrawing'; then
+            echo "the core has picked up a dependency on the windowing library"
+            exit 1
+          fi
+          echo "clean"
+      - name: Render a phrase offline
+        run: |
+          make render
+          ls -l bencsynth-demo.wav
+      - uses: actions/upload-artifact@v4
+        with:
+          name: demo-audio
+          path: bencsynth-demo.wav
+          if-no-files-found: error
+
+  unix:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false      # a macOS-only failure should not hide a Linux one
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: X11 and ALSA headers
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libx11-dev libxrandr-dev \
+            libxi-dev libxcursor-dev libxinerama-dev libgl1-mesa-dev xvfb
+
+      # From source and static. A Homebrew raylib is a dylib under
+      # /opt/homebrew, and a binary linked against it aborts at launch on any
+      # machine that does not happen to have one - which is every machine that
+      # has just downloaded a build.
+      - name: raylib
+        run: |
+          git clone --depth 1 --branch 5.5 https://github.com/raysan5/raylib.git /tmp/raylib
+          cmake -S /tmp/raylib -B /tmp/raylib/build -DCMAKE_INSTALL_PREFIX=/tmp/rl \
+            -DBUILD_SHARED_LIBS=OFF -DBUILD_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/raylib/build -j3
+          cmake --install /tmp/raylib/build
+
+      - name: Build
+        run: RAYLIB=/tmp/rl make
+
+      - name: Tests
+        run: make test
+
+      # The committed icon files are what the packaged builds use, and a
+      # half-finished `make icons` is easy not to notice. Checked by shape
+      # rather than by diffing against a fresh render: the rasteriser goes
+      # through libm, and two platforms' sin and sqrt can disagree in the last
+      # bit, which would turn one antialiased pixel into a red build.
+      - name: The committed icons are the right shape
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          fail=0
+          for s in 16 24 32 48 64 128 256 512; do
+            f="assets/icon/star-$s.png"
+            [ -f "$f" ] || { echo "missing $f"; fail=1; continue; }
+            got=$(file "$f" | sed -n "s/.*, \([0-9]*\) x \([0-9]*\).*/\1x\2/p")
+            [ "$got" = "${s}x${s}" ] || { echo "$f is $got, expected ${s}x${s}"; fail=1; }
+          done
+          [ -f assets/icon/bencsynth.ico ] || { echo "missing bencsynth.ico"; fail=1; }
+          exit $fail
+
+      # A window nobody opens is a window nobody has tested. Under Xvfb on
+      # Linux this actually creates a GL context, loads the font, builds the
+      # default rack and renders a hundred and fifty frames.
+      - name: The window comes up
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          xvfb-run -a -s "-screen 0 1440x900x24" ./bencsynth --shot ci-rack.png --frames 150
+          xvfb-run -a -s "-screen 0 1440x900x24" ./bencsynth --shot ci-info.png --info --frames 60
+          ls -l ci-rack.png ci-info.png
+
+      - name: The binary is self-contained
+        if: matrix.os == 'macos-latest'
+        run: |
+          otool -L bencsynth
+          if otool -L bencsynth | tail -n +2 | \
+             grep -vE '^[[:space:]]+(/usr/lib/|/System/)'; then
+            echo "links a library that will not be present on a stock macOS"
+            exit 1
+          fi
+          echo "self-contained"
+
+      - uses: actions/upload-artifact@v4
+        if: matrix.os == 'ubuntu-latest'
+        with:
+          name: screenshots
+          path: ci-*.png
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            git
+            make
+            python
+
+      # raylib's own Makefile, not cmake. cmake's "MinGW Makefiles" generator
+      # wants mingw32-make, a separate package from the MSYS make that is
+      # already here, and picking the wrong generator fails at configure time
+      # for reasons unrelated to this project. raylib ships a plain Makefile
+      # that needs neither.
+      - name: raylib
+        run: |
+          git clone --depth 1 --branch 5.5 https://github.com/raysan5/raylib.git /tmp/raylib
+          make -C /tmp/raylib/src PLATFORM=PLATFORM_DESKTOP RAYLIB_LIBTYPE=STATIC -j2
+          mkdir -p /tmp/rl/include /tmp/rl/lib
+          cp /tmp/raylib/src/raylib.h /tmp/raylib/src/raymath.h /tmp/raylib/src/rlgl.h /tmp/rl/include/
+          cp /tmp/raylib/src/libraylib.a /tmp/rl/lib/
+
+      - name: Build
+        run: RAYLIB=/tmp/rl make
+
+      - name: Tests
+        run: make test
+
+      # Not "is there an icon in the binary" - that passes while the titlebar
+      # and taskbar stay generic. See the script.
+      - name: The icon is the one GLFW will use
+        run: python tools/check_win_icon.py bencsynth.exe

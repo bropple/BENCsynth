@@ -1,0 +1,201 @@
+name: release
+
+# Tag-triggered. CI artifacts expire after 90 days and live on a run page
+# nobody thinks to visit; a release is permanent and sits on the repository
+# front page, which is where someone looking for a binary actually looks.
+#
+#   git tag -a v0.1.0 -m "..." && git push origin v0.1.0
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (must already exist)'
+        required: true
+
+permissions:
+  contents: write        # needed to create the release
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libx11-dev libxrandr-dev \
+            libxi-dev libxcursor-dev libxinerama-dev libgl1-mesa-dev
+      - name: raylib
+        run: |
+          git clone --depth 1 --branch 5.5 https://github.com/raysan5/raylib.git /tmp/raylib
+          cmake -S /tmp/raylib -B /tmp/raylib/build -DCMAKE_INSTALL_PREFIX=/tmp/rl \
+            -DBUILD_SHARED_LIBS=OFF -DBUILD_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/raylib/build -j3
+          cmake --install /tmp/raylib/build
+      - name: Build
+        run: |
+          RAYLIB=/tmp/rl make
+          make test
+      - name: Package
+        run: |
+          V="${GITHUB_REF_NAME:-dev}"
+          D="bencsynth-$V-linux-x86_64"
+          mkdir -p "$D"
+          cp bencsynth README.md ARCHITECTURE.md LICENSE NOTICE "$D"/
+          # The font travels with it. Without one the program still runs, in
+          # raylib's built-in face, which is not the look this is for.
+          cp -r assets "$D"/
+          tar czf "$D.tar.gz" "$D"
+          ls -l ./*.tar.gz
+      - uses: actions/upload-artifact@v4
+        with: { name: pkg-linux, path: '*.tar.gz', if-no-files-found: error }
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      # From source and static. Homebrew's raylib is a dylib under
+      # /opt/homebrew, and a release binary linked against it aborts at launch
+      # on any machine that does not happen to have it - which is every machine
+      # that has just downloaded a release.
+      - name: raylib
+        run: |
+          git clone --depth 1 --branch 5.5 https://github.com/raysan5/raylib.git /tmp/raylib
+          cmake -S /tmp/raylib -B /tmp/raylib/build -DCMAKE_INSTALL_PREFIX=/tmp/rl \
+            -DBUILD_SHARED_LIBS=OFF -DBUILD_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/raylib/build -j3
+          cmake --install /tmp/raylib/build
+      - name: Build
+        run: |
+          RAYLIB=/tmp/rl make
+          make test
+
+      # Writes the disk image's .DS_Store directly. Driving Finder over
+      # AppleScript, which is the usual way, needs an interactive session and
+      # cannot work on a runner.
+      - name: dmgbuild
+        run: |
+          python3 -m venv /tmp/dmgvenv
+          /tmp/dmgvenv/bin/pip install --quiet dmgbuild
+          /tmp/dmgvenv/bin/dmgbuild --help >/dev/null
+
+      - name: The binary is self-contained
+        run: |
+          otool -L bencsynth
+          if otool -L bencsynth | tail -n +2 | \
+             grep -vE '^[[:space:]]+(/usr/lib/|/System/)'; then
+            echo "links a library that will not be present on a stock macOS"
+            exit 1
+          fi
+          echo "self-contained"
+
+      - name: Package
+        run: |
+          V="${GITHUB_REF_NAME:-dev}"
+          A="$(uname -m)"
+
+          # A .app is a directory Finder draws as one icon, and a tarball of
+          # one arrives looking like a folder called Contents to whoever opens
+          # it. The disk image is the real deliverable; the tarball is there
+          # for anyone who wants the bare binary.
+          BS_VERSION="${V#v}" ./tools/macos-app.sh bencsynth BENCsynth.app
+
+          # A release must not ship a bundle macOS will call damaged.
+          codesign --verify --deep --strict --verbose=2 BENCsynth.app
+
+          # No version in the volume name: it becomes the mounted disk's name,
+          # and "BENCsynth" is what belongs on a desktop.
+          DMGBUILD=/tmp/dmgvenv/bin/dmgbuild \
+            ./tools/macos-dmg.sh BENCsynth.app \
+              "bencsynth-$V-macos-$A.dmg" BENCsynth
+
+          # A release must not quietly ship the unstyled fallback either.
+          mkdir -p /tmp/dmg
+          hdiutil attach "bencsynth-$V-macos-$A.dmg" -nobrowse -mountpoint /tmp/dmg
+          ls -la /tmp/dmg
+          test -f /tmp/dmg/.DS_Store
+          test -L /tmp/dmg/Applications
+          test -d /tmp/dmg/BENCsynth.app
+          test -f /tmp/dmg/BENCsynth.app/Contents/Resources/BENCsynth.icns
+          test -f /tmp/dmg/BENCsynth.app/Contents/Resources/assets/fonts/TerminusTTF.ttf
+          hdiutil detach /tmp/dmg
+
+          D="bencsynth-$V-macos-$A"
+          mkdir -p "$D"
+          cp bencsynth README.md ARCHITECTURE.md LICENSE NOTICE "$D"/
+          cp -r assets "$D"/
+          tar czf "$D.tar.gz" "$D"
+
+          ls -l ./*.dmg ./*.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-macos
+          path: |
+            *.tar.gz
+            *.dmg
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            git
+            make zip python
+      - name: raylib
+        run: |
+          git clone --depth 1 --branch 5.5 https://github.com/raysan5/raylib.git /tmp/raylib
+          make -C /tmp/raylib/src PLATFORM=PLATFORM_DESKTOP RAYLIB_LIBTYPE=STATIC -j2
+          mkdir -p /tmp/rl/include /tmp/rl/lib
+          cp /tmp/raylib/src/raylib.h /tmp/raylib/src/raymath.h /tmp/raylib/src/rlgl.h /tmp/rl/include/
+          cp /tmp/raylib/src/libraylib.a /tmp/rl/lib/
+      - name: Build
+        run: |
+          RAYLIB=/tmp/rl make
+          make test
+
+      # Do not ship a release whose window shows the wrong icon.
+      - name: The icon is the one GLFW will use
+        run: python tools/check_win_icon.py bencsynth.exe
+
+      - name: Package
+        run: |
+          V="${GITHUB_REF_NAME:-dev}"
+          D="bencsynth-$V-windows-x86_64"
+          mkdir -p "$D"
+          cp bencsynth.exe README.md ARCHITECTURE.md LICENSE NOTICE "$D"/
+          cp -r assets "$D"/
+          zip -qr "$D.zip" "$D"
+          ls -l ./*.zip
+      - uses: actions/upload-artifact@v4
+        with: { name: pkg-windows, path: '*.zip', if-no-files-found: error }
+
+  publish:
+    needs: [linux, macos, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: dist, merge-multiple: true }
+      - run: ls -lR dist
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
+          gh release create "$V" dist/* \
+            --title "BENCsynth $V" \
+            --notes-file .github/release-notes.md \
+            --verify-tag || \
+          gh release upload "$V" dist/* --clobber

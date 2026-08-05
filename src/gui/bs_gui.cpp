@@ -58,6 +58,34 @@ static const Color BS_VISOR = { 0x9a, 0x9d, 0x94, 255 };
  * false for a shortcut, a terminal open somewhere else, or a Run box.
  * ------------------------------------------------------------------ */
 
+/* Where an asset might be relative to the program: beside the executable
+ * first, then the working directory. Resolving against the working directory
+ * alone only works when the program was started from its own folder - true
+ * when you double-click it, false for a shortcut, a terminal open somewhere
+ * else, or a Run box. macOS puts Resources one level up and across from
+ * Contents/MacOS, which is what the fourth entry is for. */
+static const char *ASSET_DIRS[] = {
+    "",
+    "../Resources/",
+    "../../",
+};
+
+const char *bs_find_asset(const char *relative, char *probe, size_t cap)
+{
+    const char *dir = GetApplicationDirectory();
+    size_t i;
+
+    for (i = 0; i < sizeof ASSET_DIRS / sizeof ASSET_DIRS[0]; i++) {
+        snprintf(probe, cap, "%s%s%s", dir, ASSET_DIRS[i], relative);
+        if (FileExists(probe)) return probe;
+    }
+    for (i = 0; i < sizeof ASSET_DIRS / sizeof ASSET_DIRS[0]; i++) {
+        snprintf(probe, cap, "%s%s", ASSET_DIRS[i], relative);
+        if (FileExists(probe)) return probe;
+    }
+    return 0;
+}
+
 static const char *FONT_RELATIVE[] = {
     "assets/fonts/TerminusTTF.ttf",
     "../assets/fonts/TerminusTTF.ttf",
@@ -74,14 +102,12 @@ static const char *FONT_SYSTEM[] = {
 
 static const char *find_font(char *probe, size_t cap)
 {
-    const char *dir = GetApplicationDirectory();
     size_t i;
     for (i = 0; i < sizeof FONT_RELATIVE / sizeof FONT_RELATIVE[0]; i++) {
-        snprintf(probe, cap, "%s%s", dir, FONT_RELATIVE[i]);
-        if (FileExists(probe)) return probe;
+        const char *hit = bs_find_asset(FONT_RELATIVE[i], probe, cap);
+        if (hit) return hit;
     }
-    for (i = 0; i < sizeof FONT_RELATIVE / sizeof FONT_RELATIVE[0]; i++)
-        if (FileExists(FONT_RELATIVE[i])) return FONT_RELATIVE[i];
+    /* A system package would have put it somewhere absolute. */
     for (i = 0; i < sizeof FONT_SYSTEM / sizeof FONT_SYSTEM[0]; i++)
         if (FileExists(FONT_SYSTEM[i])) return FONT_SYSTEM[i];
     return 0;
@@ -227,6 +253,23 @@ int bs_button_lit(bs_ui *ui, int id, Rectangle r, const char *label, int lit)
 {
     if (!lit) return button_common(ui, id, r, label, 1, BS_PANEL, BS_TEXT);
     return button_common(ui, id, r, label, 1, BS_ACCENT, BS_RACK);
+}
+
+int bs_info_button(bs_ui *ui, Rectangle r, int lit)
+{
+    const Vector2 m = GetMousePosition();
+    const Vector2 c = { r.x + r.width * 0.5f, r.y + r.height * 0.5f };
+    const float   rad = (r.width < r.height ? r.width : r.height) * 0.5f;
+    const int hot = !bs_ui_blocked(ui, m) && CheckCollisionPointCircle(m, c, rad);
+
+    const Color fill = lit ? BS_ACCENT : (hot ? BS_PANEL_HI : BS_PANEL);
+    DrawCircleV(c, rad, fill);
+    DrawCircleLinesV(c, rad, (hot || lit) ? BS_ACCENT : BS_EDGE);
+
+    const Color ink = lit ? BS_RACK : (hot ? BS_TEXT : BS_DIM);
+    bs_text_center(ui, BS_F_SMALL, "i", c.x + 0.5f, c.y - BS_F_SMALL * 0.5f, ink);
+
+    return hot && IsMouseButtonReleased(MOUSE_BUTTON_LEFT);
 }
 
 /* ------------------------------------------------------------------ *
@@ -490,25 +533,61 @@ void bs_scope(Rectangle r, const float *ring, int len, int head, Color c)
     }
 }
 
+/* The same ratios bs_star draws with, kept in one place so the icon and the
+ * on-screen mark cannot come apart. */
+static const float STAR_INNER = 0.421f;
+static const float STAR_VIS_W = 1.158f, STAR_VIS_H = 0.358f, STAR_VIS_Y = -0.053f;
+static const float STAR_STR_W = 0.737f, STAR_STR_H = 0.168f, STAR_STR_Y =  0.042f;
+
+static void star_points(Vector2 *pts, Vector2 c, float r, float rot)
+{
+    for (int i = 0; i < 10; i++) {
+        const float a = rot + (-90.0f + (float)i * 36.0f) * DEG2RAD;
+        const float rr = r * ((i % 2 == 0) ? 1.0f : STAR_INNER);
+        pts[i].x = c.x + std::cos(a) * rr;
+        pts[i].y = c.y + std::sin(a) * rr;
+    }
+}
+
+static bool inside_poly(const Vector2 *p, int n, float x, float y)
+{
+    bool in = false;
+    for (int i = 0, j = n - 1; i < n; j = i++) {
+        if (((p[i].y > y) != (p[j].y > y)) &&
+            (x < (p[j].x - p[i].x) * (y - p[i].y) / (p[j].y - p[i].y) + p[i].x))
+            in = !in;
+    }
+    return in;
+}
+
+static float dist_to_poly(const Vector2 *p, int n, float x, float y)
+{
+    float best = 1e30f;
+    for (int i = 0, j = n - 1; i < n; j = i++) {
+        const float dx = p[j].x - p[i].x, dy = p[j].y - p[i].y;
+        const float len2 = dx * dx + dy * dy;
+        float t = 0.0f;
+        if (len2 > 1e-9f) {
+            t = ((x - p[i].x) * dx + (y - p[i].y) * dy) / len2;
+            if (t < 0.0f) t = 0.0f;
+            if (t > 1.0f) t = 1.0f;
+        }
+        const float qx = p[i].x + dx * t - x, qy = p[i].y + dy * t - y;
+        const float d = std::sqrt(qx * qx + qy * qy);
+        if (d < best) best = d;
+    }
+    return best;
+}
+
+
 /* ------------------------------------------------------------------ *
  * S. Tarr
  * ------------------------------------------------------------------ */
 
 void bs_star(Vector2 center, float radius, float rotation)
 {
-    /* Ratios lifted from the roster SVG so the mark matches the one in the
-     * brand assets rather than being a star that looks about right. */
-    const float INNER  = 0.421f;
-    const float VIS_W  = 1.158f, VIS_H = 0.358f, VIS_Y = -0.053f;
-    const float STR_W  = 0.737f, STR_H = 0.168f, STR_Y =  0.042f;
-
     Vector2 pts[10];
-    for (int i = 0; i < 10; i++) {
-        const float a = rotation + (-90.0f + (float)i * 36.0f) * DEG2RAD;
-        const float rr = radius * ((i % 2 == 0) ? 1.0f : INNER);
-        pts[i].x = center.x + std::cos(a) * rr;
-        pts[i].y = center.y + std::sin(a) * rr;
-    }
+    star_points(pts, center, radius, rotation);
 
     /* Counter-clockwise on screen means walking the points backwards, since
      * y runs down; raylib culls the other winding. */
@@ -521,12 +600,97 @@ void bs_star(Vector2 center, float radius, float rotation)
     for (int i = 0; i < 10; i++)
         DrawLineEx(pts[i], pts[(i + 1) % 10], radius * 0.03f + 1.0f, BS_STAR_EDGE);
 
-    Rectangle visor = { center.x - radius * VIS_W * 0.5f, center.y + radius * VIS_Y,
-                        radius * VIS_W, radius * VIS_H };
-    Rectangle strip = { center.x - radius * STR_W * 0.5f, center.y + radius * STR_Y,
-                        radius * STR_W, radius * STR_H };
+    Rectangle visor = { center.x - radius * STAR_VIS_W * 0.5f,
+                        center.y + radius * STAR_VIS_Y,
+                        radius * STAR_VIS_W, radius * STAR_VIS_H };
+    Rectangle strip = { center.x - radius * STAR_STR_W * 0.5f,
+                        center.y + radius * STAR_STR_Y,
+                        radius * STAR_STR_W, radius * STAR_STR_H };
     DrawRectangleRec(visor, BS_VISOR);
     DrawRectangleRec(strip, BS_ALERT);
+}
+
+Image bs_star_image(int size)
+{
+    if (size < 4) size = 4;
+
+    Color *px = (Color *)MemAlloc((unsigned)(size * size) * (unsigned)sizeof(Color));
+
+    const Vector2 c = { size * 0.5f, size * 0.5f };
+    /* Inset, so the points do not touch the edge of the tile. A taskbar draws
+     * icons hard against their neighbours and a mark that fills its square
+     * looks bigger than everything beside it. */
+    const float r = size * 0.46f;
+    /* The SVG's hairline stroke is invisible above thumbnail sizes, so the
+     * edge is a proportion of the radius instead. Deliberately without a
+     * one-pixel floor: at 16 px a whole pixel of edge is an eighth of the
+     * radius, and the star ends up more outline than star. Below one pixel the
+     * supersampling turns it into a darkened rim, which is what it should be.
+     *
+     * The grey of the visor goes the same way. At small sizes a light band
+     * across the middle competes with the silhouette and the whole mark reads
+     * as a blob; the red stripe alone still says "S. Tarr" and leaves the star
+     * a star. Simplifying rather than shrinking is what icon sets do at 16 px,
+     * and this is the smallest possible version of it. */
+    const float stroke = r * 0.06f;
+    const bool  detail = (size >= 28);
+
+    Vector2 pts[10];
+    star_points(pts, c, r, 0.0f);
+
+    const float visX0 = c.x - r * STAR_VIS_W * 0.5f, visX1 = c.x + r * STAR_VIS_W * 0.5f;
+    const float visY0 = c.y + r * STAR_VIS_Y,        visY1 = visY0 + r * STAR_VIS_H;
+    const float strX0 = c.x - r * STAR_STR_W * 0.5f, strX1 = c.x + r * STAR_STR_W * 0.5f;
+    const float strY0 = c.y + r * STAR_STR_Y,        strY1 = strY0 + r * STAR_STR_H;
+
+    /* Three by three, which is enough for a shape with no near-horizontal
+     * edges and cheap enough that the largest icon is still instant. */
+    enum { SS = 3 };
+
+    for (int y = 0; y < size; y++) {
+        for (int x = 0; x < size; x++) {
+            int hits = 0, rSum = 0, gSum = 0, bSum = 0;
+
+            for (int sy = 0; sy < SS; sy++) {
+                for (int sx = 0; sx < SS; sx++) {
+                    const float fx = (float)x + ((float)sx + 0.5f) / (float)SS;
+                    const float fy = (float)y + ((float)sy + 0.5f) / (float)SS;
+                    if (!inside_poly(pts, 10, fx, fy)) continue;
+
+                    Color k;
+                    if (fx >= strX0 && fx < strX1 && fy >= strY0 && fy < strY1)
+                        k = BS_ALERT;
+                    else if (detail && fx >= visX0 && fx < visX1 &&
+                             fy >= visY0 && fy < visY1)
+                        k = BS_VISOR;
+                    else if (dist_to_poly(pts, 10, fx, fy) < stroke)
+                        k = BS_STAR_EDGE;
+                    else
+                        k = BS_STAR;
+
+                    hits++;
+                    rSum += k.r; gSum += k.g; bSum += k.b;
+                }
+            }
+
+            Color out = { 0, 0, 0, 0 };
+            if (hits) {
+                out.r = (unsigned char)(rSum / hits);
+                out.g = (unsigned char)(gSum / hits);
+                out.b = (unsigned char)(bSum / hits);
+                out.a = (unsigned char)((hits * 255) / (SS * SS));
+            }
+            px[y * size + x] = out;
+        }
+    }
+
+    Image img;
+    img.data    = px;
+    img.width   = size;
+    img.height  = size;
+    img.mipmaps = 1;
+    img.format  = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
+    return img;
 }
 
 /* ------------------------------------------------------------------ *

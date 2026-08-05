@@ -1,0 +1,68 @@
+BENCsynth
+Copyright (c) 2026 Ben Ropple
+Licensed under the MIT License. See LICENSE.
+
+This file records what BENCsynth uses that it did not write, and what that
+obliges anyone redistributing a build to carry along.
+
+--------------------------------------------------------------------------
+raylib
+--------------------------------------------------------------------------
+
+Used by the standalone program for its window, input and audio device. Not
+used by the DSP core, which is why `make core` and `make test` build without
+it.
+
+    Copyright (c) 2013-2025 Ramon Santamaria (@raysan5)
+    zlib/libpng licence
+
+    This software is provided "as-is", without any express or implied
+    warranty. In no event will the authors be held liable for any damages
+    arising from the use of this software.
+
+    Permission is granted to anyone to use this software for any purpose,
+    including commercial applications, and to alter it and redistribute it
+    freely, subject to the following restrictions:
+
+      1. The origin of this software must not be misrepresented; you must not
+         claim that you wrote the original software. If you use this software
+         in a product, an acknowledgment in the product documentation would be
+         appreciated but is not required.
+
+      2. Altered source versions must be plainly marked as such, and must not
+         be misrepresented as being the original software.
+
+      3. This notice may not be removed or altered from any source
+         distribution.
+
+raylib is not vendored in this repository. Release builds link it statically
+from a copy built during the release job; see .github/workflows/release.yml.
+
+--------------------------------------------------------------------------
+Terminus TTF
+--------------------------------------------------------------------------
+
+The interface font, in assets/fonts/, shipped with its licence alongside it as
+that licence requires. Loaded from disk at startup, with raylib's built-in font
+as a fallback, so a build that has lost track of it still comes up.
+
+    Copyright (c) 2010-2020 Dimitar Toshkov Zhekov
+    Copyright (c) 2011-2020 Tilman Blumenbach
+    SIL Open Font License, Version 1.1 - see assets/fonts/OFL.txt
+
+    "Terminus Font" and "Terminus TTF" are Reserved Font Names under that
+    licence.
+
+--------------------------------------------------------------------------
+Everything else
+--------------------------------------------------------------------------
+
+The synthesis, the module set, the rack, the cable physics and the interface
+are original work. The ladder filter is built from the published literature on
+topology-preserving transform filter design rather than from anyone's source;
+the polyBLEP and polyBLAMP corrections likewise come from the published
+band-limited-waveform literature. Neither is a port of an existing
+implementation.
+
+The BENCO wordmark and the character S. Tarr are brand assets of BENCO
+Holdings, included here for use by this program.

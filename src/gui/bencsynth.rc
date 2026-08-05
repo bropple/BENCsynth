@@ -1,0 +1,19 @@
+/*
+ * BENCsynth - Windows resources
+ *
+ * The name matters, and it is the whole reason this file exists rather than
+ * the usual `1 ICON "..."`.
+ *
+ * GLFW looks for an icon resource called exactly GLFW_ICON when it registers
+ * the window class, and falls back to IDI_APPLICATION - the generic Windows
+ * icon - when it does not find one. The lookup is by name, so an icon declared
+ * with a numeric id is invisible to it. Explorer, meanwhile, is happy with
+ * either: with one icon group in the binary that is the one it shows.
+ *
+ * The result of getting this wrong is a build that looks correct in Explorer
+ * and generic in the titlebar and the taskbar, with nothing warning you.
+ * tools/check_win_icon.py asserts against the built .exe rather than the
+ * source, because a grep cannot tell you whether windres ran.
+ */
+
+GLFW_ICON ICON "assets/icon/bencsynth.ico"
