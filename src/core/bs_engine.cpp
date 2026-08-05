@@ -637,6 +637,351 @@ void presetWind(Builder &b)
     b.set(out,   OUT_LEVEL, 0.55f);
 }
 
+/* ---- dance-floor racks -------------------------------------------- *
+ *
+ * The six below are recognisable sounds rather than categories, which is the
+ * point: "supersaw" and "acid" are things you can hum, and a rack you can hum
+ * is a rack you can then take apart to find out why it does that.
+ * ------------------------------------------------------------------- */
+
+/* Three saws pulled apart by a few cents each. The beating between them is the
+ * entire sound - detune them to zero and it collapses into one thin oscillator,
+ * which is the fastest way to hear what the FINE knobs are for. */
+void presetSupersaw(Builder &b)
+{
+    b.row(R1);
+    const int kbd  = b.put("KBD");
+    const int vco1 = b.put("VCO");
+    const int vco2 = b.put("VCO");
+    const int vco3 = b.put("VCO");
+    const int mix  = b.put("MIX");
+    const int vcf  = b.put("VCF");
+    const int envF = b.put("ADSR");
+    const int envA = b.put("ADSR");
+    const int vca  = b.put("VCA");
+
+    b.row(R2);
+    b.x = 640.0f;
+    const int dly = b.put("DLY");
+    const int rvb = b.put("RVB");
+    const int out = b.put("OUT");
+
+    b.wire(kbd, KBD_PITCH, vco1, VCO_IN_PITCH);
+    b.wire(kbd, KBD_PITCH, vco2, VCO_IN_PITCH);
+    b.wire(kbd, KBD_PITCH, vco3, VCO_IN_PITCH);
+    b.wire(kbd, KBD_GATE,  envF, ADSR_IN_GATE);
+    b.wire(kbd, KBD_GATE,  envA, ADSR_IN_GATE);
+    b.wire(kbd, KBD_TRIG,  envF, ADSR_IN_TRIG);
+    b.wire(kbd, KBD_TRIG,  envA, ADSR_IN_TRIG);
+
+    b.wire(vco1, VCO_SAW, mix, MIX_1);
+    b.wire(vco2, VCO_SAW, mix, MIX_2);
+    b.wire(vco3, VCO_SAW, mix, MIX_3);
+    b.wire(mix, 0, vcf, VCF_IN);
+    b.wire(envF, ADSR_ENV, vcf, VCF_IN_CV1);
+    b.wire(kbd, KBD_PITCH, vcf, VCF_IN_PITCH);
+    b.wire(vcf, VCF_LP24, vca, VCA_IN);
+    b.wire(envA, ADSR_ENV, vca, VCA_IN_CV);
+    b.wire(vca, 0, dly, 0);
+    b.wire(dly, 0, rvb, 0);
+    b.wire(rvb, 0, out, 0);
+    b.wire(rvb, 1, out, 1);
+
+    b.set(kbd,  KBD_VOICES, 8.0f);
+    b.set(vco1, VCO_FINE, -16.0f);
+    b.set(vco3, VCO_FINE,  17.0f);
+    b.set(mix,  MIX_1, 0.45f); b.set(mix, MIX_2, 0.45f); b.set(mix, MIX_3, 0.45f);
+    b.set(vcf,  VCF_CUTOFF, 1400.0f); b.set(vcf, VCF_RES, 0.18f);
+    b.set(vcf,  VCF_CV1, 0.22f);      b.set(vcf, VCF_KTRK, 0.50f);
+    b.set(envF, ADSR_A, 0.010f); b.set(envF, ADSR_D, 0.80f);
+    b.set(envF, ADSR_S, 0.50f);  b.set(envF, ADSR_R, 0.50f);
+    b.set(envA, ADSR_A, 0.008f); b.set(envA, ADSR_D, 1.00f);
+    b.set(envA, ADSR_S, 0.85f);  b.set(envA, ADSR_R, 0.60f);
+    b.set(vca,  VCA_RESP, 1.0f);
+    /* Three sixteenths at 128 bpm, which is where a trance delay lives. */
+    b.set(dly,  DLY_TIME, 0.352f); b.set(dly, DLY_FBK, 0.40f);
+    b.set(dly,  DLY_MIX, 0.28f);
+    b.set(rvb,  RVB_SIZE, 0.70f);  b.set(rvb, RVB_MIX, 0.28f);
+    b.set(out,  OUT_LEVEL, 0.45f);
+}
+
+/* A 303 in the parts that matter: one oscillator, glide between overlapping
+ * notes, and a filter with the resonance high enough that its envelope is the
+ * melody. Play it legato and it slides; play it detached and it does not. */
+void presetAcid(Builder &b)
+{
+    b.row(R1);
+    const int kbd  = b.put("KBD");
+    const int vco  = b.put("VCO");
+    const int vcf  = b.put("VCF");
+    const int envF = b.put("ADSR");
+    const int envA = b.put("ADSR");
+    const int vca  = b.put("VCA");
+
+    b.row(R2);
+    b.x = 640.0f;
+    const int scope = b.put("SCOPE");
+    const int dly   = b.put("DLY");
+    const int out   = b.put("OUT");
+
+    b.wire(kbd, KBD_PITCH, vco, VCO_IN_PITCH);
+    b.wire(kbd, KBD_GATE,  envF, ADSR_IN_GATE);
+    b.wire(kbd, KBD_GATE,  envA, ADSR_IN_GATE);
+    b.wire(kbd, KBD_TRIG,  envF, ADSR_IN_TRIG);
+    b.wire(vco, VCO_SAW,   vcf, VCF_IN);
+    b.wire(envF, ADSR_ENV, vcf, VCF_IN_CV1);
+    b.wire(kbd, KBD_PITCH, vcf, VCF_IN_PITCH);
+    b.wire(vcf, VCF_LP24,  vca, VCA_IN);
+    b.wire(envA, ADSR_ENV, vca, VCA_IN_CV);
+    b.wire(vca, 0, dly, 0);
+    b.wire(dly, 0, out, 0);
+    b.wire(vcf, VCF_LP24, scope, 0);
+    b.wire(envF, ADSR_ENV, scope, 1);
+
+    b.set(kbd,  KBD_MODE, (float)KM_LEGATO);
+    b.set(kbd,  KBD_VOICES, 1.0f);
+    b.set(kbd,  KBD_GLIDE, 0.045f);
+    b.set(vcf,  VCF_CUTOFF, 190.0f); b.set(vcf, VCF_RES, 0.84f);
+    b.set(vcf,  VCF_DRIVE, 3.0f);    b.set(vcf, VCF_CV1, 0.46f);
+    b.set(vcf,  VCF_KTRK, 0.30f);
+    b.set(envF, ADSR_A, 0.001f); b.set(envF, ADSR_D, 0.24f);
+    b.set(envF, ADSR_S, 0.00f);  b.set(envF, ADSR_R, 0.20f);
+    /* The amplifier is nearly a gate on a 303 - the filter does the shaping. */
+    b.set(envA, ADSR_A, 0.001f); b.set(envA, ADSR_D, 0.50f);
+    b.set(envA, ADSR_S, 0.90f);  b.set(envA, ADSR_R, 0.08f);
+    b.set(vca,  VCA_RESP, 1.0f);
+    b.set(dly,  DLY_TIME, 0.26f); b.set(dly, DLY_FBK, 0.34f);
+    b.set(dly,  DLY_MIX, 0.22f);
+    b.set(out,  OUT_LEVEL, 0.55f);
+}
+
+/* The rave stab: a saw and a pulse detuned much further apart than is
+ * comfortable, the pulse width swept underneath, and enough resonance to make
+ * it snarl. The detune is the joke - a third of a semitone, where a tuner
+ * would tell you both oscillators are wrong. */
+void presetHoover(Builder &b)
+{
+    b.row(R1);
+    const int kbd  = b.put("KBD");
+    const int vco1 = b.put("VCO");
+    const int vco2 = b.put("VCO");
+    const int mix  = b.put("MIX");
+    const int vcf  = b.put("VCF");
+    const int envF = b.put("ADSR");
+    const int envA = b.put("ADSR");
+    const int vca  = b.put("VCA");
+
+    b.row(R2);
+    const int lfo = b.put("LFO");
+    b.x = 640.0f;
+    const int dly = b.put("DLY");
+    const int rvb = b.put("RVB");
+    const int out = b.put("OUT");
+
+    b.wire(kbd, KBD_PITCH, vco1, VCO_IN_PITCH);
+    b.wire(kbd, KBD_PITCH, vco2, VCO_IN_PITCH);
+    b.wire(kbd, KBD_GATE,  envF, ADSR_IN_GATE);
+    b.wire(kbd, KBD_GATE,  envA, ADSR_IN_GATE);
+    b.wire(kbd, KBD_TRIG,  envF, ADSR_IN_TRIG);
+    b.wire(kbd, KBD_TRIG,  envA, ADSR_IN_TRIG);
+    b.wire(lfo, LFO_TRI,   vco2, VCO_IN_PWM);
+
+    b.wire(vco1, VCO_SAW, mix, MIX_1);
+    b.wire(vco2, VCO_PLS, mix, MIX_2);
+    b.wire(mix, 0, vcf, VCF_IN);
+    b.wire(envF, ADSR_ENV, vcf, VCF_IN_CV1);
+    b.wire(kbd, KBD_PITCH, vcf, VCF_IN_PITCH);
+    b.wire(vcf, VCF_LP24, vca, VCA_IN);
+    b.wire(envA, ADSR_ENV, vca, VCA_IN_CV);
+    b.wire(vca, 0, dly, 0);
+    b.wire(dly, 0, rvb, 0);
+    b.wire(rvb, 0, out, 0);
+    b.wire(rvb, 1, out, 1);
+
+    b.set(kbd,  KBD_VOICES, 4.0f);
+    b.set(vco1, VCO_FINE, -32.0f);
+    b.set(vco2, VCO_FINE,  30.0f);
+    b.set(vco2, VCO_PWM, 0.55f);
+    b.set(mix,  MIX_1, 0.55f); b.set(mix, MIX_2, 0.55f);
+    b.set(lfo,  LFO_RATE, 3.2f);
+    b.set(vcf,  VCF_CUTOFF, 520.0f); b.set(vcf, VCF_RES, 0.55f);
+    b.set(vcf,  VCF_DRIVE, 1.8f);    b.set(vcf, VCF_CV1, 0.34f);
+    b.set(vcf,  VCF_KTRK, 0.40f);
+    b.set(envF, ADSR_A, 0.004f); b.set(envF, ADSR_D, 0.55f);
+    b.set(envF, ADSR_S, 0.30f);  b.set(envF, ADSR_R, 0.35f);
+    b.set(envA, ADSR_A, 0.004f); b.set(envA, ADSR_D, 0.70f);
+    b.set(envA, ADSR_S, 0.80f);  b.set(envA, ADSR_R, 0.30f);
+    b.set(vca,  VCA_RESP, 1.0f);
+    b.set(dly,  DLY_TIME, 0.30f); b.set(dly, DLY_FBK, 0.32f);
+    b.set(dly,  DLY_MIX, 0.22f);
+    b.set(rvb,  RVB_SIZE, 0.65f); b.set(rvb, RVB_MIX, 0.25f);
+    b.set(out,  OUT_LEVEL, 0.45f);
+}
+
+/* Two saws a hair apart and nothing else. The interference between them moves
+ * slowly enough to hear as a sweep rather than as a chord, which is the whole
+ * trick - and it only works in mono, because eight voices of it is mud. */
+void presetReese(Builder &b)
+{
+    b.row(R1);
+    const int kbd  = b.put("KBD");
+    const int vco1 = b.put("VCO");
+    const int vco2 = b.put("VCO");
+    const int mix  = b.put("MIX");
+    const int vcf  = b.put("VCF");
+    const int envA = b.put("ADSR");
+    const int vca  = b.put("VCA");
+
+    b.row(R2);
+    b.x = 640.0f;
+    const int scope = b.put("SCOPE");
+    const int out   = b.put("OUT");
+
+    b.wire(kbd, KBD_PITCH, vco1, VCO_IN_PITCH);
+    b.wire(kbd, KBD_PITCH, vco2, VCO_IN_PITCH);
+    b.wire(kbd, KBD_GATE,  envA, ADSR_IN_GATE);
+    b.wire(kbd, KBD_TRIG,  envA, ADSR_IN_TRIG);
+    b.wire(vco1, VCO_SAW, mix, MIX_1);
+    b.wire(vco2, VCO_SAW, mix, MIX_2);
+    b.wire(mix, 0, vcf, VCF_IN);
+    b.wire(kbd, KBD_PITCH, vcf, VCF_IN_PITCH);
+    b.wire(vcf, VCF_LP24, vca, VCA_IN);
+    b.wire(envA, ADSR_ENV, vca, VCA_IN_CV);
+    b.wire(vca, 0, out, 0);
+    b.wire(vca, 0, scope, 0);
+
+    b.set(kbd,  KBD_MODE, (float)KM_LEGATO);
+    b.set(kbd,  KBD_VOICES, 1.0f);
+    b.set(vco1, VCO_FINE, -19.0f);
+    b.set(vco2, VCO_FINE,  20.0f);
+    b.set(mix,  MIX_1, 0.60f); b.set(mix, MIX_2, 0.60f);
+    b.set(vcf,  VCF_CUTOFF, 320.0f); b.set(vcf, VCF_RES, 0.28f);
+    b.set(vcf,  VCF_DRIVE, 2.0f);    b.set(vcf, VCF_KTRK, 0.30f);
+    b.set(envA, ADSR_A, 0.006f); b.set(envA, ADSR_D, 0.50f);
+    b.set(envA, ADSR_S, 0.90f);  b.set(envA, ADSR_R, 0.18f);
+    b.set(vca,  VCA_RESP, 1.0f);
+    b.set(out,  OUT_LEVEL, 0.60f);
+}
+
+/* A pad behind a second amplifier that a square LFO opens and shuts sixteen
+ * times a bar. Two VCAs in series, and the second one is the whole idea: hold
+ * a chord and the rhythm is the LFO's, not yours. Turn its RATE knob and the
+ * tempo changes. */
+void presetTranceGate(Builder &b)
+{
+    b.row(R1);
+    const int kbd  = b.put("KBD");
+    const int vco1 = b.put("VCO");
+    const int vco2 = b.put("VCO");
+    const int mix  = b.put("MIX");
+    const int vcf  = b.put("VCF");
+    const int envA = b.put("ADSR");
+    const int vca  = b.put("VCA");
+
+    b.row(R2);
+    const int lfo  = b.put("LFO");
+    const int gate = b.put("VCA");
+    b.x = 640.0f;
+    const int rvb = b.put("RVB");
+    const int out = b.put("OUT");
+
+    b.wire(kbd, KBD_PITCH, vco1, VCO_IN_PITCH);
+    b.wire(kbd, KBD_PITCH, vco2, VCO_IN_PITCH);
+    b.wire(kbd, KBD_GATE,  envA, ADSR_IN_GATE);
+    b.wire(vco1, VCO_SAW, mix, MIX_1);
+    b.wire(vco2, VCO_SAW, mix, MIX_2);
+    b.wire(mix, 0, vcf, VCF_IN);
+    b.wire(kbd, KBD_PITCH, vcf, VCF_IN_PITCH);
+    b.wire(vcf, VCF_LP24, vca, VCA_IN);
+    b.wire(envA, ADSR_ENV, vca, VCA_IN_CV);
+
+    /* The gate. Square wave into a linear VCA with its own gain at zero, so
+     * the LFO is the only thing that opens it. */
+    b.wire(vca, 0, gate, VCA_IN);
+    b.wire(lfo, LFO_SQR, gate, VCA_IN_CV);
+    b.wire(gate, 0, rvb, 0);
+    b.wire(rvb, 0, out, 0);
+    b.wire(rvb, 1, out, 1);
+
+    b.set(kbd,  KBD_VOICES, 8.0f);
+    b.set(vco1, VCO_FINE, -8.0f);
+    b.set(vco2, VCO_FINE,  9.0f);
+    b.set(mix,  MIX_1, 0.55f); b.set(mix, MIX_2, 0.55f);
+    b.set(vcf,  VCF_CUTOFF, 1100.0f); b.set(vcf, VCF_RES, 0.22f);
+    b.set(vcf,  VCF_KTRK, 0.45f);
+    b.set(envA, ADSR_A, 0.30f); b.set(envA, ADSR_D, 1.00f);
+    b.set(envA, ADSR_S, 0.85f); b.set(envA, ADSR_R, 0.70f);
+    b.set(vca,  VCA_RESP, 1.0f);
+    /* Sixteenths at 120 bpm. */
+    b.set(lfo,  LFO_RATE, 8.0f);
+    b.set(lfo,  LFO_UNI, 1.0f);
+    b.set(gate, VCA_GAIN, 0.0f);
+    b.set(gate, VCA_CV, 1.0f);
+    b.set(gate, VCA_RESP, 0.0f);      /* linear, so the edges stay hard */
+    b.set(rvb,  RVB_SIZE, 0.75f); b.set(rvb, RVB_DAMP, 0.35f);
+    b.set(rvb,  RVB_MIX, 0.35f);
+    /* Louder than the rest: a unipolar LFO only ever half-opens the gate, and
+     * the gate is shut half the time on top of that. */
+    b.set(out,  OUT_LEVEL, 1.10f);
+}
+
+/* The house chord stab: a pulse with a saw an octave above it, and envelopes
+ * short enough that a held chord still sounds like it was hit rather than
+ * pressed. */
+void presetOrganStab(Builder &b)
+{
+    b.row(R1);
+    const int kbd  = b.put("KBD");
+    const int vco1 = b.put("VCO");
+    const int vco2 = b.put("VCO");
+    const int mix  = b.put("MIX");
+    const int vcf  = b.put("VCF");
+    const int envF = b.put("ADSR");
+    const int envA = b.put("ADSR");
+    const int vca  = b.put("VCA");
+
+    b.row(R2);
+    b.x = 640.0f;
+    const int dly = b.put("DLY");
+    const int rvb = b.put("RVB");
+    const int out = b.put("OUT");
+
+    b.wire(kbd, KBD_PITCH, vco1, VCO_IN_PITCH);
+    b.wire(kbd, KBD_PITCH, vco2, VCO_IN_PITCH);
+    b.wire(kbd, KBD_GATE,  envF, ADSR_IN_GATE);
+    b.wire(kbd, KBD_GATE,  envA, ADSR_IN_GATE);
+    b.wire(kbd, KBD_TRIG,  envF, ADSR_IN_TRIG);
+    b.wire(kbd, KBD_TRIG,  envA, ADSR_IN_TRIG);
+    b.wire(kbd, KBD_VEL,   envA, ADSR_IN_VEL);
+    b.wire(vco1, VCO_PLS, mix, MIX_1);
+    b.wire(vco2, VCO_SAW, mix, MIX_2);
+    b.wire(mix, 0, vcf, VCF_IN);
+    b.wire(envF, ADSR_ENV, vcf, VCF_IN_CV1);
+    b.wire(kbd, KBD_PITCH, vcf, VCF_IN_PITCH);
+    b.wire(vcf, VCF_LP24, vca, VCA_IN);
+    b.wire(envA, ADSR_ENV, vca, VCA_IN_CV);
+    b.wire(vca, 0, dly, 0);
+    b.wire(dly, 0, rvb, 0);
+    b.wire(rvb, 0, out, 0);
+    b.wire(rvb, 1, out, 1);
+
+    b.set(kbd,  KBD_VOICES, 8.0f);
+    b.set(vco2, VCO_OCT, 1.0f);
+    b.set(mix,  MIX_1, 0.70f); b.set(mix, MIX_2, 0.30f);
+    b.set(vcf,  VCF_CUTOFF, 900.0f); b.set(vcf, VCF_RES, 0.30f);
+    b.set(vcf,  VCF_CV1, 0.30f);     b.set(vcf, VCF_KTRK, 0.40f);
+    b.set(envF, ADSR_A, 0.001f); b.set(envF, ADSR_D, 0.25f);
+    b.set(envF, ADSR_S, 0.10f);  b.set(envF, ADSR_R, 0.20f);
+    b.set(envA, ADSR_A, 0.002f); b.set(envA, ADSR_D, 0.35f);
+    b.set(envA, ADSR_S, 0.25f);  b.set(envA, ADSR_R, 0.25f);
+    b.set(envA, ADSR_VEL, 0.5f);
+    b.set(vca,  VCA_RESP, 1.0f);
+    b.set(dly,  DLY_TIME, 0.375f); b.set(dly, DLY_FBK, 0.30f);
+    b.set(dly,  DLY_MIX, 0.24f);
+    b.set(rvb,  RVB_SIZE, 0.60f);  b.set(rvb, RVB_MIX, 0.28f);
+    b.set(out,  OUT_LEVEL, 0.60f);
+}
+
 typedef void (*PresetFn)(Builder &);
 
 struct PresetEntry { RackPreset info; PresetFn build; };
@@ -649,7 +994,13 @@ const PresetEntry PRESETS[] = {
     { { "SAW PAD",      "eight voices, two detuned saws, long reverb" }, presetPad },
     { { "PLUCK",        "no sustain, resonant filter chirp" },          presetPluck },
     { { "DRONE",        "the filter is the oscillator - no keys needed" }, presetDrone },
-    { { "WIND",         "noise through a resonant filter, no oscillator" }, presetWind }
+    { { "WIND",         "noise through a resonant filter, no oscillator" }, presetWind },
+    { { "SUPERSAW",     "three detuned saws - the trance lead" },       presetSupersaw },
+    { { "ACID",         "303: one saw, glide, and a screaming filter" }, presetAcid },
+    { { "HOOVER",       "the rave stab - detuned way past comfortable" }, presetHoover },
+    { { "REESE",        "two saws a hair apart, mono, low and moving" }, presetReese },
+    { { "TRANCE GATE",  "a pad chopped into sixteenths by a square LFO" }, presetTranceGate },
+    { { "ORGAN STAB",   "house chord stab, pulse with a saw on top" },   presetOrganStab }
 };
 
 } /* anonymous namespace */

@@ -117,7 +117,8 @@ a source — works as well.
 
 ## The factory racks
 
-`RACKS` in the toolbar replaces everything with one of eight worked examples.
+`RACKS` in the toolbar replaces everything with one of fourteen worked
+examples.
 A modular's problem is not that it cannot make a sound, it is that it makes no
 sound until you already know what you are doing — and the fastest way to learn
 what resonance does is to be handed a rack where it is already doing something
@@ -133,6 +134,18 @@ and turn the knob.
 | **PLUCK** | no sustain on either envelope, resonant filter chirp |
 | **DRONE** | the filter is past self-oscillation, so it *is* the oscillator. Makes sound with nothing held down; turn RES down and it stops |
 | **WIND** | noise through a resonant filter and no oscillator anywhere, played from the keyboard |
+
+And six off the dance floor, which are recognisable sounds rather than
+categories — a rack you can hum is a rack you can take apart to find out why:
+
+| | |
+|---|---|
+| **SUPERSAW** | three saws a few cents apart. The beating between them *is* the sound — zero the FINE knobs and it collapses to one thin oscillator |
+| **ACID** | a 303 in the parts that matter: one saw, glide between overlapping notes, and resonance high enough that the filter envelope is the melody |
+| **HOOVER** | the rave stab. A saw and a pulse detuned a third of a semitone apart, pulse width swept underneath |
+| **REESE** | two saws a hair apart, mono and low. Only works in mono — eight voices of it is mud |
+| **TRANCE GATE** | a pad behind a second VCA that a square LFO opens sixteen times a bar. Hold a chord and the rhythm is the LFO's; turn its RATE and the tempo changes |
+| **ORGAN STAB** | house chord stab, a pulse with a saw an octave above |
 
 `./bencsynth --rack PLUCK` opens straight into one, and
 `./bencsynth-render out.wav PLUCK` renders a phrase through it without a window

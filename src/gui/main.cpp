@@ -483,7 +483,17 @@ int main(int argc, char **argv)
         BeginDrawing();
         ClearBackground(BS_BG);
 
-        if (draw_header(&ui, header, &g_engine, app.about)) app.about = !app.about;
+        /* A mouse release is true for the whole frame it happens on, and the
+         * information window is opened by one - so without this the same
+         * release that opens it reaches the dismiss test further down, finds
+         * the pointer outside the panel (it is on the button in the header),
+         * and shuts it again before anything is drawn. The window appeared for
+         * a single frame and looked like it was refusing to open. */
+        int justOpened = 0;
+        if (draw_header(&ui, header, &g_engine, app.about)) {
+            app.about = !app.about;
+            justOpened = app.about;
+        }
 
         ui.suppress = app.about;
         draw_toolbar(&app, &ui, &rack, &kb, &g_engine, toolbar, rview);
@@ -493,7 +503,7 @@ int main(int argc, char **argv)
 
         if (app.about) {
             Rectangle screen = { 0, 0, W, H };
-            if (draw_info(&ui, screen)) app.about = 0;
+            if (draw_info(&ui, screen) && !justOpened) app.about = 0;
         }
 
         if (bs_rack_menu(&rack, &ui, &g_engine) && rack.presetLoaded >= 0) {
