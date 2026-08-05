@@ -194,6 +194,7 @@ static void draw_toolbar(bs_app *app, bs_ui *ui, bs_rack *rack, bs_keyboard *kb,
         bs_keyboard_release_all(kb, eng);
         bs_patch_load(eng, bs_patch_slot_path(app->slot), app->status,
                       (int)sizeof app->status);
+        bs_rack_patch_replaced(rack);
         app->statusAge = 0.0f;
     }
     x += 76.0f;
@@ -205,7 +206,7 @@ static void draw_toolbar(bs_app *app, bs_ui *ui, bs_rack *rack, bs_keyboard *kb,
     if (bs_button(ui, 8006, b, "DEFAULT", 1)) {
         bs_keyboard_release_all(kb, eng);
         eng->buildDefaultPatch();
-        bs_rack_home(rack);
+        bs_rack_patch_replaced(rack);
         say(app, "default rack restored");
     }
     x += 90.0f;
@@ -214,6 +215,7 @@ static void draw_toolbar(bs_app *app, bs_ui *ui, bs_rack *rack, bs_keyboard *kb,
     if (bs_button(ui, 8007, b, "CLEAR", 1)) {
         bs_keyboard_release_all(kb, eng);
         eng->clear();
+        bs_rack_patch_replaced(rack);
         say(app, "rack emptied - right-click to add a module");
     }
     x += 68.0f;
@@ -289,6 +291,7 @@ int main(int argc, char **argv)
     if (loadPath) {
         if (!bs_patch_load(&g_engine, loadPath, app.status, (int)sizeof app.status))
             g_engine.buildDefaultPatch();
+        bs_rack_patch_replaced(&rack);
     } else {
         g_engine.buildDefaultPatch();
         say(&app, "default rack - press Z, or click the keys");

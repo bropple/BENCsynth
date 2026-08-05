@@ -169,6 +169,17 @@ void bs_rack_init(bs_rack *r)
 
 void bs_rack_home(bs_rack *r) { r->scrollX = 0.0f; r->scrollY = 0.0f; }
 
+void bs_rack_patch_replaced(bs_rack *r)
+{
+    r->ropes.clear();
+    r->ropeKey.clear();
+    r->patching = 0;
+    r->dragModule = -1;
+    r->hoverCable = -1;
+    r->menuModule = -1;
+    bs_rack_home(r);
+}
+
 void bs_rack_add_menu(bs_rack *r, bs_ui *ui, Vector2 screenAt, Rectangle view)
 {
     buildAddMenu();

@@ -40,7 +40,7 @@ int Patch::add(Module *m, float x, float y)
     m->y  = y;
     m->setSampleRate(sr);
 
-    orderDirty = true;
+    rebuildOrder();
     rev++;
     return slot;
 }
@@ -66,7 +66,7 @@ void Patch::removeModule(int moduleId)
     mods[(size_t)moduleId] = 0;
     delete m;
 
-    orderDirty = true;
+    rebuildOrder();
     rev++;
 }
 
@@ -106,7 +106,7 @@ int Patch::connect(int src, int srcPort, int dst, int dstPort)
     c.color   = slot;
 
     rebind(dst, dstPort);
-    orderDirty = true;
+    rebuildOrder();
     rev++;
     return slot;
 }
@@ -118,7 +118,7 @@ void Patch::disconnect(int cableId)
     const int dst = c->dst, dstPort = c->dstPort;
     c->alive = false;
     rebind(dst, dstPort);
-    orderDirty = true;
+    rebuildOrder();
     rev++;
 }
 
@@ -192,6 +192,10 @@ void Patch::rebuildOrder()
 
 void Patch::process()
 {
+    /* Every mutator rebuilds the order as it goes, so this never fires. It is
+     * kept because the alternative - rebuilding lazily, here - puts three
+     * vector allocations on the audio thread on the first block after any
+     * edit, which is exactly the block that must not be late. */
     if (orderDirty) rebuildOrder();
     for (size_t i = 0; i < order.size(); i++) {
         Module *m = mods[(size_t)order[i]];

@@ -64,6 +64,14 @@ void bs_rack_frame(bs_rack *r, bs_ui *ui, bs::Engine *eng, Rectangle view, float
 /* Puts the scroll back where a fresh rack starts. */
 void bs_rack_home(bs_rack *r);
 
+/* Call when the whole rack has been swapped out - loaded, cleared, reset to
+ * the default. The cable ropes are keyed on which jacks they join, and after a
+ * wholesale replacement an identical-looking connection between different
+ * modules can hash to the same key; the rope would then keep the geometry, and
+ * the length, of a cable that no longer exists. Homes the scroll too, since
+ * the rack under it is not the one that was being looked at. */
+void bs_rack_patch_replaced(bs_rack *r);
+
 /* Menu results, handled after the frame so a module can be deleted without
  * the draw loop noticing it has gone. Returns nonzero if it did something. */
 int  bs_rack_menu(bs_rack *r, bs_ui *ui, bs::Engine *eng);
