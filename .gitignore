@@ -1,0 +1,31 @@
+# Build artifacts
+*.o
+*.d
+*.a
+build/
+bencsynth
+bencsynth-test
+bencsynth-render
+*.exe
+
+# Rendered audio. Reproducible from the source that made it, so it does not
+# belong in history - regenerate with `make render`.
+*.wav
+
+# Saved racks are a person's work, not the project's.
+patches/
+
+# Third-party libraries built or copied in locally. raylib is a build
+# dependency, not part of this project's source - see the Makefile for how it
+# is found, and README.md for how to put one here.
+vendor/
+
+# Brand/style assets, kept out of the public repo.
+style/
+
+# Screenshots the program writes for itself.
+shots/
+
+# OS cruft
+.DS_Store
+._*

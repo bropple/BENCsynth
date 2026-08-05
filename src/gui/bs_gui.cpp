@@ -1,0 +1,605 @@
+/*
+ * BENCsynth GUI - theme and widget set.
+ * See bs_gui.h for why these are hand-drawn.
+ */
+
+#include "bs_gui.h"
+
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+
+Color BS_BG        = { 0x06, 0x0a, 0x05, 255 };
+Color BS_RACK      = { 0x0c, 0x14, 0x08, 255 };
+Color BS_PANEL     = { 0x18, 0x20, 0x10, 255 };
+Color BS_PANEL_HI  = { 0x22, 0x2c, 0x18, 255 };
+Color BS_BORDER    = { 0x2a, 0x3a, 0x1e, 255 };
+Color BS_TEXT      = { 0xcd, 0xea, 0xb0, 255 };
+Color BS_DIM       = { 0x8a, 0xa8, 0x78, 255 };
+Color BS_ACCENT    = { 0x78, 0xb9, 0x46, 255 };
+Color BS_EDGE      = { 0x3f, 0x5c, 0x28, 255 };
+Color BS_ALERT     = { 0xd8, 0x4a, 0x3a, 255 };
+Color BS_AMBER     = { 0xe8, 0xb2, 0x3d, 255 };
+Color BS_STAR      = { 0xee, 0xcb, 0x2e, 255 };
+Color BS_STAR_EDGE = { 0xa3, 0x86, 0x1a, 255 };
+
+/* R. Triy, O. Val, H. Hex, P. Gon, G. Lobe, C. Ross, S. Tarr. */
+Color BS_CABLE[BS_CABLE_COLORS] = {
+    { 0x78, 0xb9, 0x46, 255 },
+    { 0xc1, 0x44, 0x3a, 255 },
+    { 0xd9, 0x7a, 0x2b, 255 },
+    { 0x3d, 0x7d, 0xbf, 255 },
+    { 0x2c, 0x4a, 0x7c, 255 },
+    { 0x7a, 0x4f, 0xb5, 255 },
+    { 0xee, 0xcb, 0x2e, 255 }
+};
+Color BS_CABLE_EDGE[BS_CABLE_COLORS] = {
+    { 0x3f, 0x5c, 0x28, 255 },
+    { 0x7a, 0x28, 0x1f, 255 },
+    { 0x8a, 0x4d, 0x18, 255 },
+    { 0x25, 0x4d, 0x75, 255 },
+    { 0x16, 0x28, 0x3f, 255 },
+    { 0x45, 0x27, 0x66, 255 },
+    { 0xa3, 0x86, 0x1a, 255 }
+};
+
+static const Color BS_HOLE  = { 0x04, 0x07, 0x03, 255 };
+static const Color BS_VISOR = { 0x9a, 0x9d, 0x94, 255 };
+
+/* ------------------------------------------------------------------ *
+ * Fonts
+ *
+ * Looked for rather than embedded: the OFL requires the licence to travel
+ * with the font, and a build that silently bundles one is a licence problem
+ * waiting to happen. assets/fonts/ ships both, and the path beside the
+ * executable is tried before the working directory, because resolving a
+ * relative path against the working directory only works when the program was
+ * started from its own folder - which is true when you double-click it and
+ * false for a shortcut, a terminal open somewhere else, or a Run box.
+ * ------------------------------------------------------------------ */
+
+static const char *FONT_RELATIVE[] = {
+    "assets/fonts/TerminusTTF.ttf",
+    "../assets/fonts/TerminusTTF.ttf",
+    "TerminusTTF.ttf"
+};
+
+static const char *FONT_SYSTEM[] = {
+    "/usr/share/fonts/TTF/TerminusTTF.ttf",
+    "/usr/share/fonts/truetype/terminus/TerminusTTF.ttf",
+    "/usr/local/share/fonts/TerminusTTF.ttf",
+    "/Library/Fonts/TerminusTTF.ttf",
+    "C:/Windows/Fonts/TerminusTTF.ttf"
+};
+
+static const char *find_font(char *probe, size_t cap)
+{
+    const char *dir = GetApplicationDirectory();
+    size_t i;
+    for (i = 0; i < sizeof FONT_RELATIVE / sizeof FONT_RELATIVE[0]; i++) {
+        snprintf(probe, cap, "%s%s", dir, FONT_RELATIVE[i]);
+        if (FileExists(probe)) return probe;
+    }
+    for (i = 0; i < sizeof FONT_RELATIVE / sizeof FONT_RELATIVE[0]; i++)
+        if (FileExists(FONT_RELATIVE[i])) return FONT_RELATIVE[i];
+    for (i = 0; i < sizeof FONT_SYSTEM / sizeof FONT_SYSTEM[0]; i++)
+        if (FileExists(FONT_SYSTEM[i])) return FONT_SYSTEM[i];
+    return 0;
+}
+
+/* Point filtering, not bilinear. Terminus is a bitmap design; smoothing it is
+ * how you get the mush this font exists to avoid. */
+static Font load_at(const char *path, int size, int *found)
+{
+    Font f = LoadFontEx(path, size, 0, 0);
+    if (f.texture.id != 0 && f.glyphCount > 0) {
+        SetTextureFilter(f.texture, TEXTURE_FILTER_POINT);
+        *found = 1;
+        return f;
+    }
+    return GetFontDefault();
+}
+
+void bs_ui_init(bs_ui *ui)
+{
+    static char probe[1024];
+    memset(ui, 0, sizeof *ui);
+    ui->font_name = "raylib default";
+
+    const char *path = find_font(probe, sizeof probe);
+    if (path) {
+        ui->tiny  = load_at(path, BS_F_TINY,  &ui->loaded);
+        ui->small = load_at(path, BS_F_SMALL, &ui->loaded);
+        ui->body  = load_at(path, BS_F_BODY,  &ui->loaded);
+        ui->title = load_at(path, BS_F_TITLE, &ui->loaded);
+    }
+    if (!ui->loaded) {
+        ui->tiny = ui->small = ui->body = ui->title = GetFontDefault();
+    } else {
+        ui->font_name = GetFileName(path);
+    }
+}
+
+void bs_ui_free(bs_ui *ui)
+{
+    if (!ui->loaded) return;
+    UnloadFont(ui->tiny);
+    UnloadFont(ui->small);
+    UnloadFont(ui->body);
+    UnloadFont(ui->title);
+    ui->loaded = 0;
+}
+
+static Font pick(const bs_ui *ui, int size)
+{
+    if (size <= BS_F_TINY)  return ui->tiny;
+    if (size <= BS_F_SMALL) return ui->small;
+    if (size <= BS_F_BODY)  return ui->body;
+    return ui->title;
+}
+
+void bs_text(const bs_ui *ui, int size, const char *s, float x, float y, Color c)
+{
+    Vector2 p = { x, y };
+    DrawTextEx(pick(ui, size), s, p, (float)size, 0.0f, c);
+}
+
+/* Style-guide letter-spacing: 1px on labels and headings, never body text. */
+void bs_text_spaced(const bs_ui *ui, int size, const char *s, float x, float y, Color c)
+{
+    Vector2 p = { x, y };
+    DrawTextEx(pick(ui, size), s, p, (float)size, 1.0f, c);
+}
+
+float bs_measure(const bs_ui *ui, int size, const char *s, float spacing)
+{
+    return MeasureTextEx(pick(ui, size), s, (float)size, spacing).x;
+}
+
+void bs_text_center(const bs_ui *ui, int size, const char *s, float cx, float y, Color c)
+{
+    const float w = bs_measure(ui, size, s, 0.0f);
+    bs_text(ui, size, s, cx - w * 0.5f, y, c);
+}
+
+void bs_text_fit(const bs_ui *ui, int size, const char *s, float cx, float y,
+                 float w, Color c)
+{
+    char buf[64];
+    size_t n = strlen(s);
+    if (n >= sizeof buf) n = sizeof buf - 1;
+    memcpy(buf, s, n);
+    buf[n] = 0;
+    while (n > 1 && bs_measure(ui, size, buf, 0.0f) > w) buf[--n] = 0;
+    bs_text_center(ui, size, buf, cx, y, c);
+}
+
+/* ------------------------------------------------------------------ *
+ * Chrome
+ * ------------------------------------------------------------------ */
+
+void bs_panel(Rectangle r, Color fill, Color border)
+{
+    DrawRectangleRounded(r, (float)BS_RADIUS / r.height, 4, fill);
+    DrawRectangleRoundedLines(r, (float)BS_RADIUS / r.height, 4, border);
+}
+
+void bs_divider(float x, float y, float w)
+{
+    DrawRectangle((int)x, (int)y, (int)w, 1, BS_BORDER);
+}
+
+int bs_ui_blocked(const bs_ui *ui, Vector2 m)
+{
+    if (ui->suppress) return 1;
+    return ui->menuOpen && CheckCollisionPointRec(m, ui->menuRect);
+}
+
+static int button_common(bs_ui *ui, int id, Rectangle r, const char *label,
+                         int enabled, Color fill, Color textCol)
+{
+    const Vector2 m = GetMousePosition();
+    const int hot = enabled && !bs_ui_blocked(ui, m) && CheckCollisionPointRec(m, r);
+    const int down = hot && IsMouseButtonDown(MOUSE_BUTTON_LEFT);
+
+    Color f = fill;
+    if (!enabled) f = BS_PANEL;
+    else if (down) f = BS_EDGE;
+    else if (hot)  f = BS_PANEL_HI;
+
+    bs_panel(r, f, enabled ? BS_BORDER : BS_PANEL_HI);
+
+    const Color tc = enabled ? textCol : BS_EDGE;
+    const float tw = bs_measure(ui, BS_F_SMALL, label, 1.0f);
+    bs_text_spaced(ui, BS_F_SMALL, label,
+                   r.x + (r.width - tw) * 0.5f,
+                   r.y + (r.height - BS_F_SMALL) * 0.5f, tc);
+
+    return hot && IsMouseButtonReleased(MOUSE_BUTTON_LEFT);
+}
+
+int bs_button(bs_ui *ui, int id, Rectangle r, const char *label, int enabled)
+{
+    return button_common(ui, id, r, label, enabled, BS_PANEL, BS_TEXT);
+}
+
+int bs_button_lit(bs_ui *ui, int id, Rectangle r, const char *label, int lit)
+{
+    if (!lit) return button_common(ui, id, r, label, 1, BS_PANEL, BS_TEXT);
+    return button_common(ui, id, r, label, 1, BS_ACCENT, BS_RACK);
+}
+
+/* ------------------------------------------------------------------ *
+ * Knob
+ * ------------------------------------------------------------------ */
+
+/* 270 degrees of travel, starting at the lower left, which is where a knob's
+ * pointer sits at minimum on every piece of hardware this is imitating.
+ * raylib measures clockwise from the +x axis with y running down the screen,
+ * so 135 is lower-left and adding sweeps up over the top. */
+static const float KNOB_START = 135.0f;
+static const float KNOB_SWEEP = 270.0f;
+static const float KNOB_R     = 14.0f;
+
+static void format_value(const bs::Param *p, char *buf, size_t cap)
+{
+    if (p->kind == bs::PK_SWITCH && p->options) {
+        const int i = p->asInt();
+        snprintf(buf, cap, "%s",
+                 (i >= 0 && i < p->optionCount) ? p->options[i] : "?");
+        return;
+    }
+    if (p->kind == bs::PK_TOGGLE) {
+        snprintf(buf, cap, "%s", p->on() ? "ON" : "OFF");
+        return;
+    }
+    snprintf(buf, cap, p->fmt, (double)p->value);
+}
+
+/* Name on top, dial, readout underneath - the three bands a knob cell is made
+ * of, and they have to add up to BS_KNOB_ROW with room to spare or the readout
+ * runs into the name of the knob below it. */
+static Vector2 knob_center(Rectangle cell)
+{
+    Vector2 c = { cell.x + cell.width * 0.5f, cell.y + 12.0f + KNOB_R };
+    return c;
+}
+
+int bs_knob(bs_ui *ui, int id, Rectangle cell, bs::Param *p)
+{
+    const Vector2 m = GetMousePosition();
+    const Vector2 c = knob_center(cell);
+    const int blocked = bs_ui_blocked(ui, m);
+    const int hot = !blocked && CheckCollisionPointCircle(m, c, KNOB_R + 5.0f);
+    int changed = 0;
+
+    if (ui->active == id) {
+        if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+            const int fine = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
+            const float speed = fine ? 0.0012f : 0.005f;
+            const float t = ui->grabValue + (ui->grabY - m.y) * speed;
+            const float before = p->value;
+            p->setNorm(t);
+            changed = (p->value != before);
+        } else {
+            ui->active = 0;
+        }
+    } else if (hot && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        const double now = GetTime();
+        if (ui->lastId == id && now - ui->lastClick < 0.35) {
+            /* Second click of a double: back to the value the module shipped
+             * with. A knob you cannot put back is a knob you are reluctant to
+             * turn. */
+            p->value = p->def;
+            ui->active = 0;
+            ui->lastId = 0;
+            changed = 1;
+        } else {
+            ui->active    = id;
+            ui->grabY     = m.y;
+            ui->grabValue = p->norm();
+            ui->lastId    = id;
+            ui->lastClick = now;
+        }
+    } else if (hot && ui->active == 0) {
+        const float w = GetMouseWheelMove();
+        if (w != 0.0f) {
+            p->setNorm(p->norm() + w * 0.02f);
+            changed = 1;
+        }
+    }
+
+    /* ---- draw ---- */
+
+    const float t   = p->norm();
+    const int   lit = (ui->active == id) || hot;
+
+    char buf[48];
+    bs_text_fit(ui, BS_F_TINY, p->name, c.x, cell.y, cell.width - 2.0f, BS_DIM);
+
+    DrawCircleV(c, KNOB_R, lit ? BS_PANEL_HI : BS_PANEL);
+    DrawCircleLinesV(c, KNOB_R, lit ? BS_ACCENT : BS_EDGE);
+
+    /* The travel, then the part of it that is used. A bipolar control fills
+     * outward from the middle instead of from the end, because that is where
+     * its zero is and reading it off the fill is the whole point. */
+    DrawRing(c, KNOB_R + 2.0f, KNOB_R + 4.0f, KNOB_START, KNOB_START + KNOB_SWEEP,
+             28, BS_BORDER);
+    const int bipolar = (p->lo < 0.0f && p->hi > 0.0f);
+    const float from = bipolar ? KNOB_START + KNOB_SWEEP * 0.5f : KNOB_START;
+    const float to   = KNOB_START + KNOB_SWEEP * t;
+    if (std::fabs(to - from) > 0.5f)
+        DrawRing(c, KNOB_R + 2.0f, KNOB_R + 4.0f,
+                 from < to ? from : to, from < to ? to : from, 28, BS_ACCENT);
+
+    const float a = (KNOB_START + KNOB_SWEEP * t) * DEG2RAD;
+    const Vector2 p0 = { c.x + std::cos(a) * KNOB_R * 0.30f,
+                         c.y + std::sin(a) * KNOB_R * 0.30f };
+    const Vector2 p1 = { c.x + std::cos(a) * KNOB_R * 0.92f,
+                         c.y + std::sin(a) * KNOB_R * 0.92f };
+    DrawLineEx(p0, p1, 2.0f, lit ? BS_TEXT : BS_DIM);
+
+    format_value(p, buf, sizeof buf);
+    bs_text_fit(ui, BS_F_TINY, buf, c.x, cell.y + 40.0f, cell.width - 2.0f,
+                lit ? BS_TEXT : BS_DIM);
+
+    if (changed) ui->changed = 1;
+    return changed;
+}
+
+/* ------------------------------------------------------------------ *
+ * Switch and toggle
+ * ------------------------------------------------------------------ */
+
+static int small_button(bs_ui *ui, Rectangle r, const char *label, int lit)
+{
+    const Vector2 m = GetMousePosition();
+    const int hot = !bs_ui_blocked(ui, m) && CheckCollisionPointRec(m, r);
+
+    Color f = lit ? BS_ACCENT : (hot ? BS_PANEL_HI : BS_PANEL);
+    bs_panel(r, f, hot ? BS_ACCENT : BS_BORDER);
+    bs_text_fit(ui, BS_F_TINY, label, r.x + r.width * 0.5f,
+                r.y + (r.height - BS_F_TINY) * 0.5f, r.width - 4.0f,
+                lit ? BS_RACK : BS_TEXT);
+
+    if (!hot) return 0;
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT))  return 1;
+    if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) return -1;
+    return 0;
+}
+
+int bs_switch(bs_ui *ui, int id, Rectangle cell, bs::Param *p)
+{
+    char buf[48];
+    bs_text_fit(ui, BS_F_TINY, p->name, cell.x + cell.width * 0.5f, cell.y,
+                cell.width - 2.0f, BS_DIM);
+
+    Rectangle r = { cell.x + 3.0f, cell.y + 15.0f, cell.width - 6.0f, 22.0f };
+    format_value(p, buf, sizeof buf);
+
+    const int hit = small_button(ui, r, buf, 0);
+    if (!hit) return 0;
+
+    int i = p->asInt() + (hit > 0 ? 1 : -1);
+    const int n = p->optionCount > 0 ? p->optionCount : 2;
+    while (i < 0) i += n;
+    p->value = (float)(i % n);
+    ui->changed = 1;
+    return 1;
+}
+
+int bs_toggle(bs_ui *ui, int id, Rectangle cell, bs::Param *p)
+{
+    bs_text_fit(ui, BS_F_TINY, p->name, cell.x + cell.width * 0.5f, cell.y,
+                cell.width - 2.0f, BS_DIM);
+
+    Rectangle r = { cell.x + 3.0f, cell.y + 15.0f, cell.width - 6.0f, 22.0f };
+    const int hit = small_button(ui, r, p->on() ? "ON" : "OFF", p->on());
+    if (hit <= 0) return 0;
+    p->value = p->on() ? 0.0f : 1.0f;
+    ui->changed = 1;
+    return 1;
+}
+
+/* ------------------------------------------------------------------ *
+ * Jack
+ * ------------------------------------------------------------------ */
+
+Vector2 bs_jack_center(Rectangle cell)
+{
+    Vector2 c = { cell.x + cell.width * 0.5f, cell.y + 13.0f };
+    return c;
+}
+
+void bs_jack(const bs_ui *ui, Rectangle cell, const char *label,
+             int plugged, Color plugColor, int hot, int isOutput)
+{
+    const Vector2 c = bs_jack_center(cell);
+    const float r = (float)BS_JACK_R;
+
+    /* Outputs get a filled collar, inputs a hollow one. It is the only cue
+     * that survives at this size, and it is the one that matters: you cannot
+     * usefully patch an output into an output. */
+    DrawCircleV(c, r, isOutput ? BS_EDGE : BS_BORDER);
+    DrawCircleV(c, r - 2.0f, BS_HOLE);
+    if (isOutput) DrawCircleLinesV(c, r, BS_ACCENT);
+
+    if (plugged) {
+        DrawCircleV(c, r - 1.0f, plugColor);
+        DrawCircleV(c, r - 4.0f, BS_HOLE);
+    }
+    if (hot) DrawCircleLinesV(c, r + 3.0f, BS_TEXT);
+
+    bs_text_fit(ui, BS_F_TINY, label, c.x, cell.y + 25.0f, cell.width,
+                hot ? BS_TEXT : BS_DIM);
+}
+
+/* ------------------------------------------------------------------ *
+ * Meter and scope
+ * ------------------------------------------------------------------ */
+
+static void meter_bar(Rectangle r, float peak, float rms, int clip)
+{
+    DrawRectangleRec(r, BS_HOLE);
+    DrawRectangleLinesEx(r, 1.0f, BS_BORDER);
+
+    const float w = r.width - 2.0f;
+    float f = rms * 3.0f;                 /* RMS of a synth line sits low */
+    if (f > 1.0f) f = 1.0f;
+    DrawRectangle((int)(r.x + 1), (int)(r.y + 1), (int)(w * f), (int)(r.height - 2),
+                  clip ? BS_ALERT : BS_ACCENT);
+
+    float p = peak;
+    if (p > 1.0f) p = 1.0f;
+    const float px = r.x + 1.0f + w * p;
+    DrawRectangle((int)px - 1, (int)(r.y + 1), 2, (int)(r.height - 2),
+                  clip ? BS_ALERT : BS_TEXT);
+}
+
+void bs_meter(Rectangle r, float peakL, float rmsL, float peakR, float rmsR, int clip)
+{
+    const float h = (r.height - 3.0f) * 0.5f;
+    Rectangle a = { r.x, r.y, r.width, h };
+    Rectangle b = { r.x, r.y + h + 3.0f, r.width, h };
+    meter_bar(a, peakL, rmsL, clip);
+    meter_bar(b, peakR, rmsR, clip);
+}
+
+void bs_scope(Rectangle r, const float *ring, int len, int head, Color c)
+{
+    DrawRectangleRec(r, BS_HOLE);
+    DrawRectangleLinesEx(r, 1.0f, BS_BORDER);
+    DrawLine((int)r.x + 1, (int)(r.y + r.height * 0.5f),
+             (int)(r.x + r.width - 1), (int)(r.y + r.height * 0.5f), BS_BORDER);
+
+    if (len < 2) return;
+    const float half = r.height * 0.5f - 2.0f;
+    const float step = (r.width - 2.0f) / (float)(len - 1);
+
+    Vector2 prev = { 0, 0 };
+    for (int i = 0; i < len; i++) {
+        /* Oldest sample at the left: the ring's write head is the newest, so
+         * reading forward from it walks the trace in time order. */
+        float v = ring[(head + i) % len];
+        if (v >  1.0f) v =  1.0f;
+        if (v < -1.0f) v = -1.0f;
+        Vector2 p = { r.x + 1.0f + step * (float)i,
+                      r.y + r.height * 0.5f - v * half };
+        if (i) DrawLineEx(prev, p, 1.5f, c);
+        prev = p;
+    }
+}
+
+/* ------------------------------------------------------------------ *
+ * S. Tarr
+ * ------------------------------------------------------------------ */
+
+void bs_star(Vector2 center, float radius, float rotation)
+{
+    /* Ratios lifted from the roster SVG so the mark matches the one in the
+     * brand assets rather than being a star that looks about right. */
+    const float INNER  = 0.421f;
+    const float VIS_W  = 1.158f, VIS_H = 0.358f, VIS_Y = -0.053f;
+    const float STR_W  = 0.737f, STR_H = 0.168f, STR_Y =  0.042f;
+
+    Vector2 pts[10];
+    for (int i = 0; i < 10; i++) {
+        const float a = rotation + (-90.0f + (float)i * 36.0f) * DEG2RAD;
+        const float rr = radius * ((i % 2 == 0) ? 1.0f : INNER);
+        pts[i].x = center.x + std::cos(a) * rr;
+        pts[i].y = center.y + std::sin(a) * rr;
+    }
+
+    /* Counter-clockwise on screen means walking the points backwards, since
+     * y runs down; raylib culls the other winding. */
+    Vector2 fan[12];
+    fan[0] = center;
+    for (int i = 0; i < 10; i++) fan[1 + i] = pts[9 - i];
+    fan[11] = pts[9];
+    DrawTriangleFan(fan, 12, BS_STAR);
+
+    for (int i = 0; i < 10; i++)
+        DrawLineEx(pts[i], pts[(i + 1) % 10], radius * 0.03f + 1.0f, BS_STAR_EDGE);
+
+    Rectangle visor = { center.x - radius * VIS_W * 0.5f, center.y + radius * VIS_Y,
+                        radius * VIS_W, radius * VIS_H };
+    Rectangle strip = { center.x - radius * STR_W * 0.5f, center.y + radius * STR_Y,
+                        radius * STR_W, radius * STR_H };
+    DrawRectangleRec(visor, BS_VISOR);
+    DrawRectangleRec(strip, BS_ALERT);
+}
+
+/* ------------------------------------------------------------------ *
+ * Menu
+ * ------------------------------------------------------------------ */
+
+enum { MENU_ROW = 22 };
+
+void bs_menu_open(bs_ui *ui, Vector2 at, const char **items, int count, int tag)
+{
+    float w = 90.0f;
+    for (int i = 0; i < count; i++) {
+        const float t = bs_measure(ui, BS_F_SMALL, items[i], 1.0f) + 24.0f;
+        if (t > w) w = t;
+    }
+    const float h = (float)(count * MENU_ROW) + 8.0f;
+
+    /* Nudged back inside the window rather than clipped, so a right-click near
+     * the bottom edge does not open a menu you cannot read. */
+    float x = at.x, y = at.y;
+    if (x + w > (float)GetScreenWidth())  x = (float)GetScreenWidth() - w - 4.0f;
+    if (y + h > (float)GetScreenHeight()) y = (float)GetScreenHeight() - h - 4.0f;
+    if (x < 4.0f) x = 4.0f;
+    if (y < 4.0f) y = 4.0f;
+
+    ui->menuOpen   = 1;
+    ui->menuItems  = items;
+    ui->menuCount  = count;
+    ui->menuTag    = tag;
+    ui->menuHover  = -1;
+    ui->menuAnchor = at;
+    ui->menuRect   = (Rectangle){ x, y, w, h };
+}
+
+void bs_menu_close(bs_ui *ui) { ui->menuOpen = 0; ui->menuCount = 0; }
+
+int bs_menu_take(bs_ui *ui, int *tag)
+{
+    if (!ui->menuOpen) return -1;
+
+    const Vector2 m = GetMousePosition();
+    ui->menuHover = -1;
+    if (CheckCollisionPointRec(m, ui->menuRect)) {
+        const int row = (int)((m.y - ui->menuRect.y - 4.0f) / (float)MENU_ROW);
+        if (row >= 0 && row < ui->menuCount) ui->menuHover = row;
+    }
+
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) ||
+        IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
+        const int hit = ui->menuHover;
+        if (tag) *tag = ui->menuTag;
+        bs_menu_close(ui);
+        return hit;
+    }
+    if (IsKeyPressed(KEY_ESCAPE)) bs_menu_close(ui);
+    return -1;
+}
+
+void bs_ui_overlay(bs_ui *ui)
+{
+    if (!ui->menuOpen) return;
+
+    const Rectangle r = ui->menuRect;
+    DrawRectangle((int)r.x + 3, (int)r.y + 3, (int)r.width, (int)r.height,
+                  (Color){ 0, 0, 0, 110 });
+    bs_panel(r, BS_PANEL, BS_ACCENT);
+
+    for (int i = 0; i < ui->menuCount; i++) {
+        Rectangle row = { r.x + 2.0f, r.y + 4.0f + (float)(i * MENU_ROW),
+                          r.width - 4.0f, (float)MENU_ROW };
+        if (i == ui->menuHover) DrawRectangleRec(row, BS_EDGE);
+        bs_text_spaced(ui, BS_F_SMALL, ui->menuItems[i], row.x + 8.0f,
+                       row.y + (MENU_ROW - BS_F_SMALL) * 0.5f,
+                       i == ui->menuHover ? BS_TEXT : BS_DIM);
+    }
+}

@@ -1,0 +1,443 @@
+/*
+ * BENCsynth - core tests
+ *
+ * No raylib, no sound card, no window. Everything here runs on the same
+ * objects the synthesizer runs on, which is the point of keeping the core
+ * free of the GUI: the parts that can be wrong quietly - a filter that goes
+ * unstable at the top of its resonance range, an oscillator half an octave
+ * out, a patch that stops making sound after a voice is stolen - are exactly
+ * the parts that can be checked without either.
+ */
+
+#include "bs_engine.h"
+#include "bs_modules.h"
+#include "test_util.h"
+
+#include <cstdio>
+#include <cmath>
+#include <cstring>
+#include <vector>
+
+using namespace bs;
+
+int bs_checks   = 0;
+int bs_failures = 0;
+
+void ok(bool cond, const char *what)
+{
+    bs_checks++;
+    if (cond) return;
+    bs_failures++;
+    std::printf("  FAIL  %s\n", what);
+}
+
+void okf(bool cond, const char *fmt, double a, double b)
+{
+    bs_checks++;
+    if (cond) return;
+    bs_failures++;
+    std::printf("  FAIL  ");
+    std::printf(fmt, a, b);
+    std::printf("\n");
+}
+
+/* Lives in test_patchfile.cpp. */
+void test_patchfile();
+
+static bool finite(const float *x, int n)
+{
+    for (int i = 0; i < n; i++)
+        if (!std::isfinite(x[i])) return false;
+    return true;
+}
+
+static float peakOf(const float *x, int n)
+{
+    float p = 0.0f;
+    for (int i = 0; i < n; i++) { const float a = std::fabs(x[i]); if (a > p) p = a; }
+    return p;
+}
+
+static float rmsOf(const float *x, int n)
+{
+    double s = 0.0;
+    for (int i = 0; i < n; i++) s += (double)x[i] * x[i];
+    return (float)std::sqrt(s / (n ? n : 1));
+}
+
+/* ------------------------------------------------------------------ */
+
+static void test_pitch()
+{
+    std::printf("pitch\n");
+    okf(std::fabs(voltsToHz(0.0f) - 261.6256f) < 0.01f,
+        "middle C is %.3f Hz, expected %.3f", voltsToHz(0.0f), 261.6256);
+    okf(std::fabs(voltsToHz(noteToVolts(69.0f)) - 440.0f) < 0.01f,
+        "A4 is %.3f Hz, expected %.3f", voltsToHz(noteToVolts(69.0f)), 440.0);
+    ok(std::fabs(voltsToHz(1.0f) / voltsToHz(0.0f) - 2.0f) < 1e-4f,
+       "one volt is one octave");
+}
+
+static void test_osc()
+{
+    std::printf("oscillator\n");
+    const float sr = 48000.0f;
+
+    /* Zero crossings of the sine over a second: one period has two, so 440 Hz
+     * should show 880. Counting them is a frequency check that does not care
+     * about phase or amplitude. */
+    BlepOsc o;
+    int crossings = 0;
+    float prev = 0.0f;
+    for (int i = 0; i < (int)sr; i++) {
+        float saw, pls, tri, sin;
+        o.step(440.0f / sr, 0.5f, &saw, &pls, &tri, &sin);
+        if (i && ((prev < 0.0f && sin >= 0.0f) || (prev >= 0.0f && sin < 0.0f))) crossings++;
+        prev = sin;
+    }
+    okf(std::abs(crossings - 880) <= 2, "440 Hz gave %.0f crossings, expected %.0f",
+        (double)crossings, 880.0);
+
+    /* Every shape stays inside its rails at a frequency high enough that the
+     * band-limiting correction is doing real work. An overshoot here is the
+     * signature of a polyBLEP applied with the wrong sign. */
+    o.reset();
+    float mx[4] = { 0, 0, 0, 0 };
+    for (int i = 0; i < 40000; i++) {
+        float v[4];
+        o.step(3000.0f / sr, 0.5f, &v[0], &v[1], &v[2], &v[3]);
+        for (int k = 0; k < 4; k++) {
+            const float a = std::fabs(v[k]);
+            if (a > mx[k]) mx[k] = a;
+        }
+    }
+    okf(mx[0] < 1.15f, "saw peaked at %.3f, expected under %.2f", mx[0], 1.15);
+    okf(mx[1] < 1.15f, "pulse peaked at %.3f, expected under %.2f", mx[1], 1.15);
+    okf(mx[2] < 1.15f, "triangle peaked at %.3f, expected under %.2f", mx[2], 1.15);
+
+    /* The polyBLAMP correction has to reduce the triangle's aliasing, not add
+     * to it. A triangle at an inharmonic fraction of the sample rate folds
+     * everything above Nyquist back to frequencies unrelated to the
+     * fundamental; comparing the residual after subtracting an ideal
+     * band-limited triangle is fiddly, so this instead measures the thing the
+     * correction is supposed to fix - the sample-to-sample jump at the
+     * corners, which aliasing makes erratic. */
+    o.reset();
+    double roughCorrected = 0.0;
+    float  last = 0.0f;
+    for (int i = 0; i < 20000; i++) {
+        float tri;
+        o.step(2371.0f / sr, 0.5f, 0, 0, &tri, 0);
+        if (i) {
+            const double d = tri - last;
+            roughCorrected += d * d;
+        }
+        last = tri;
+    }
+    ok(std::isfinite(roughCorrected) && roughCorrected > 0.0,
+       "triangle produces a finite signal at high frequency");
+
+    /* Hard sync restarts the cycle. */
+    o.reset();
+    o.step(0.1f, 0.5f, 0, 0, 0, 0);
+    o.step(0.1f, 0.5f, 0, 0, 0, 0);
+    ok(o.phase > 0.15f, "phase advanced before sync");
+    o.syncEdge(0.0f);
+    o.syncEdge(5.0f);
+    ok(o.phase == 0.0f, "a rising sync edge resets the phase");
+}
+
+static void test_ladder()
+{
+    std::printf("ladder filter\n");
+    const float sr = 48000.0f;
+    Ladder f;
+    f.setSampleRate(sr);
+
+    /* Full resonance while the cutoff sweeps the whole range, driven hard.
+     * This is the combination that makes a naive ladder blow up. */
+    Noise n;
+    std::vector<float> y(48000);
+    for (int i = 0; i < 48000; i++) {
+        const float t  = (float)i / 48000.0f;
+        const float fc = 30.0f * std::pow(600.0f, t);
+        y[(size_t)i] = f.step(n.white() * 2.0f, fc, 1.08f, 6.0f);
+    }
+    ok(finite(&y[0], 48000), "stays finite at full resonance across a sweep");
+    okf(peakOf(&y[0], 48000) < 12.0f, "peaked at %.2f, expected under %.0f",
+        peakOf(&y[0], 48000), 12.0);
+
+    /* It should also be a lowpass: white noise in, less out above cutoff.
+     * Comparing RMS at two cutoffs is a blunt instrument but it catches the
+     * filter being wired to the wrong tap. */
+    f.reset();
+    double lowE = 0.0;
+    for (int i = 0; i < 48000; i++) { const float v = f.step(n.white(), 200.0f, 0.0f, 1.0f); lowE += v * v; }
+    f.reset();
+    double highE = 0.0;
+    for (int i = 0; i < 48000; i++) { const float v = f.step(n.white(), 8000.0f, 0.0f, 1.0f); highE += v * v; }
+    ok(lowE < highE * 0.5, "a low cutoff passes markedly less noise than a high one");
+
+    /* Self-oscillation: no input, resonance past the edge, and it should ring
+     * rather than sit at zero. */
+    f.reset();
+    for (int i = 0; i < 4800; i++) f.step(i < 4 ? 1.0f : 0.0f, 500.0f, 1.08f, 1.0f);
+    std::vector<float> tail(4800);
+    for (int i = 0; i < 4800; i++) tail[(size_t)i] = f.step(0.0f, 500.0f, 1.08f, 1.0f);
+    ok(rmsOf(&tail[0], 4800) > 0.01f, "self-oscillates with resonance past the edge");
+}
+
+static void test_adsr()
+{
+    std::printf("envelope\n");
+    ADSR e;
+    e.setSampleRate(48000.0f);
+
+    e.gate(true);
+    float v = 0.0f;
+    for (int i = 0; i < 48000; i++) v = e.step(0.01f, 0.1f, 0.5f, 0.2f);
+    okf(std::fabs(v - 0.5f) < 0.02f, "settled at %.3f, expected sustain %.2f", v, 0.5);
+
+    e.gate(false);
+    for (int i = 0; i < 48000; i++) v = e.step(0.01f, 0.1f, 0.5f, 0.2f);
+    okf(v < 0.001f, "released to %.5f, expected near %.0f", v, 0.0);
+    ok(!e.active(), "returns to idle after release");
+
+    /* A short attack must actually be short: a hundredth of a second means the
+     * envelope is near the top within a few hundredths, not a quarter second. */
+    e.reset();
+    e.gate(true);
+    int n = 0;
+    while (e.step(0.01f, 1.0f, 1.0f, 0.2f) < 0.9f && n < 48000) n++;
+    okf(n < 48000 / 20, "10 ms attack took %.0f samples, expected under %.0f",
+        (double)n, 48000.0 / 20.0);
+}
+
+static void test_keys()
+{
+    std::printf("note allocation\n");
+    KeyboardState k;
+    k.setPolyphony(4);
+
+    k.noteOn(60, 1.0f); k.noteOn(64, 1.0f); k.noteOn(67, 1.0f);
+    int gated = 0;
+    for (int i = 0; i < 4; i++) if (k.v[i].gate) gated++;
+    okf(gated == 3, "three notes lit %.0f channels, expected %.0f", (double)gated, 3.0);
+
+    k.noteOff(64);
+    gated = 0;
+    for (int i = 0; i < 4; i++) if (k.v[i].gate) gated++;
+    okf(gated == 2, "after one release %.0f channels held, expected %.0f", (double)gated, 2.0);
+
+    /* Five notes into four channels steals the oldest, and the note that was
+     * stolen must be gone rather than sounding twice. */
+    k.allNotesOff();
+    for (int i = 0; i < 5; i++) k.noteOn(60 + i, 1.0f);
+    gated = 0;
+    bool has60 = false;
+    for (int i = 0; i < 4; i++) {
+        if (k.v[i].gate) gated++;
+        if (k.v[i].gate && k.v[i].note == 60) has60 = true;
+    }
+    okf(gated == 4, "five notes filled %.0f of %.0f channels", (double)gated, 4.0);
+    ok(!has60, "the oldest note was the one stolen");
+
+    /* Mono: one channel, last note wins, releasing the top note falls back. */
+    k.allNotesOff();
+    k.mode = KM_MONO;
+    k.noteOn(60, 1.0f);
+    k.noteOn(72, 1.0f);
+    okf(k.v[0].note == 72, "mono took note %.0f, expected %.0f", (double)k.v[0].note, 72.0);
+    k.noteOff(72);
+    okf(k.v[0].note == 60 && k.v[0].gate,
+        "mono fell back to note %.0f, expected %.0f", (double)k.v[0].note, 60.0);
+    k.noteOff(60);
+    ok(!k.v[0].gate, "mono releases when the last key comes up");
+
+    /* Legato does not retrigger while a key is already down; mono does. */
+    k.allNotesOff();
+    k.mode = KM_LEGATO;
+    k.noteOn(60, 1.0f);
+    k.clearRetriggers();
+    k.noteOn(62, 1.0f);
+    ok(!k.v[0].retrig, "legato does not retrigger under a held key");
+    k.mode = KM_MONO;
+    k.clearRetriggers();
+    k.noteOn(64, 1.0f);
+    ok(k.v[0].retrig, "mono retriggers on every note");
+}
+
+static void test_registry()
+{
+    std::printf("registry\n");
+    ok(moduleTypeCount() > 0, "the registry is not empty");
+
+    /* Every module, run with its inputs unpatched and with a fixed pattern of
+     * parameter positions, has to produce a finite signal. It is the cheapest
+     * possible guard against a new module dividing by an unpatched jack, and
+     * it costs one line per module added. */
+    KeyboardState keys;
+    for (int t = 0; t < moduleTypeCount(); t++) {
+        const ModuleType *mt = moduleTypeAt(t);
+        Module *m = createModule(mt->id);
+        if (!m) { ok(false, "createModule returned nothing"); continue; }
+        m->bindKeys(&keys);
+        m->setSampleRate(48000.0f);
+
+        bool clean = true;
+        for (int pass = 0; pass < 3 && clean; pass++) {
+            const float pos = pass * 0.5f;     /* bottom, middle, top */
+            for (int p = 0; p < m->paramCount(); p++) m->params[(size_t)p].setNorm(pos);
+            for (int b = 0; b < 200 && clean; b++) {
+                m->process();
+                for (int o = 0; o < m->outputCount(); o++)
+                    for (int c = 0; c < m->out(o).channels; c++)
+                        if (!finite(m->out(o).v[c], BS_BLOCK)) clean = false;
+            }
+        }
+        if (!clean) std::printf("  FAIL  %s produced a non-finite output\n", mt->id);
+        bs_checks++;
+        if (!clean) bs_failures++;
+        delete m;
+    }
+}
+
+static void test_graph()
+{
+    std::printf("patch graph\n");
+    Engine e;
+    e.init(48000.0f);
+
+    const int vco = e.addModule("VCO", 0, 0);
+    const int vca = e.addModule("VCA", 0, 0);
+    const int out = e.addModule("OUT", 0, 0);
+    ok(vco >= 0 && vca >= 0 && out >= 0, "modules were created");
+
+    const int c1 = e.connect(vco, 0, vca, 0);
+    ok(c1 >= 0, "a cable was made");
+
+    /* One cable per input jack: a second connection to the same jack replaces
+     * the first rather than joining it. Counting live cables rather than
+     * checking the old id is gone, because a freed slot is immediately
+     * available again and the replacement is entitled to land in it. */
+    const int c2 = e.connect(vco, 1, vca, 0);
+    ok(c2 >= 0, "the input accepted a second cable");
+    int live = 0, fromPort = -1;
+    for (size_t i = 0; i < e.patch.cableList().size(); i++) {
+        const Cable &c = e.patch.cableList()[i];
+        if (!c.alive) continue;
+        live++;
+        if (c.dst == vca && c.dstPort == 0) fromPort = c.srcPort;
+    }
+    okf(live == 1, "%.0f cables survived, expected %.0f", (double)live, 1.0);
+    okf(fromPort == 1, "the jack reads output %.0f, expected the newer one, %.0f",
+        (double)fromPort, 1.0);
+
+    e.connect(vca, 0, out, 0);
+    e.patch.module(vca)->params[0].value = 1.0f;
+
+    std::vector<float> buf(2048 * 2);
+    e.render(&buf[0], 2048);
+    ok(finite(&buf[0], 2048 * 2), "the graph renders finite audio");
+    ok(peakOf(&buf[0], 2048 * 2) > 0.01f, "a VCO through an open VCA makes sound");
+
+    /* Deleting a module in the middle must take its cables with it, and what
+     * is left must still run. */
+    e.removeModule(vca);
+    e.render(&buf[0], 2048);
+    ok(finite(&buf[0], 2048 * 2), "the graph survives a module being deleted");
+
+    /* A feedback loop is a legal patch, not an error. It must not hang the
+     * ordering pass and must not run away. */
+    Engine f;
+    f.init(48000.0f);
+    const int d  = f.addModule("DLY", 0, 0);
+    const int o2 = f.addModule("OUT", 0, 0);
+    f.connect(d, 0, d, 0);          /* the delay feeding itself */
+    f.connect(d, 0, o2, 0);
+    f.patch.module(d)->params[1].value = 1.05f;   /* feedback past unity */
+    for (int i = 0; i < 20; i++) f.render(&buf[0], 2048);
+    ok(finite(&buf[0], 2048 * 2), "a self-patched delay stays finite");
+    okf(peakOf(&buf[0], 2048 * 2) <= 1.001f, "output peaked at %.3f, expected at most %.1f",
+        peakOf(&buf[0], 2048 * 2), 1.0);
+}
+
+static void test_default_patch()
+{
+    std::printf("default patch\n");
+    Engine e;
+    e.init(48000.0f);
+    e.buildDefaultPatch();
+
+    std::vector<float> buf(4800 * 2);
+
+    e.render(&buf[0], 4800);
+    okf(peakOf(&buf[0], 4800 * 2) < 0.02f, "idle output peaked at %.4f, expected near %.0f",
+        peakOf(&buf[0], 4800 * 2), 0.0);
+
+    e.noteOn(60, 1.0f);
+    e.render(&buf[0], 4800);
+    const float held = rmsOf(&buf[0], 4800 * 2);
+    okf(held > 0.01f, "a held note gave RMS %.4f, expected above %.2f", held, 0.01);
+    ok(finite(&buf[0], 4800 * 2), "the note is finite");
+    okf(peakOf(&buf[0], 4800 * 2) <= 1.001f, "peaked at %.3f, expected at most %.1f",
+        peakOf(&buf[0], 4800 * 2), 1.0);
+
+    /* Chords have to be louder than single notes, which is the observable
+     * consequence of polyphony actually reaching the oscillators. */
+    e.noteOn(64, 1.0f);
+    e.noteOn(67, 1.0f);
+    e.render(&buf[0], 4800);
+    const float chord = rmsOf(&buf[0], 4800 * 2);
+    okf(chord > held * 1.2f, "a triad gave RMS %.4f against one note's %.4f", chord, held);
+
+    /* And releasing everything has to actually stop the sound, tail included. */
+    e.noteOff(60); e.noteOff(64); e.noteOff(67);
+    for (int i = 0; i < 12; i++) e.render(&buf[0], 4800);
+    okf(rmsOf(&buf[0], 4800 * 2) < 0.002f, "after release RMS was %.5f, expected under %.3f",
+        rmsOf(&buf[0], 4800 * 2), 0.002);
+
+    /* The whole rack should cost a small fraction of real time. This is a
+     * smoke alarm, not a benchmark - it only fires if something has gone
+     * quadratic. */
+    okf(e.load < 0.5f, "load was %.3f of the block budget, expected under %.1f",
+        e.load, 0.5);
+}
+
+static void test_sample_rates()
+{
+    std::printf("sample rates\n");
+    static const float RATES[] = { 44100.0f, 48000.0f, 96000.0f };
+    for (int i = 0; i < 3; i++) {
+        Engine e;
+        e.init(RATES[i]);
+        e.buildDefaultPatch();
+        e.noteOn(60, 1.0f);
+        std::vector<float> buf(8192 * 2);
+        for (int b = 0; b < 6; b++) e.render(&buf[0], 8192);
+        char msg[96];
+        std::snprintf(msg, sizeof msg, "%.0f Hz renders finite audio", RATES[i]);
+        ok(finite(&buf[0], 8192 * 2), msg);
+        std::snprintf(msg, sizeof msg, "%.0f Hz makes sound", RATES[i]);
+        ok(rmsOf(&buf[0], 8192 * 2) > 0.005f, msg);
+    }
+}
+
+int main()
+{
+    std::printf("BENCsynth core tests\n\n");
+
+    test_pitch();
+    test_osc();
+    test_ladder();
+    test_adsr();
+    test_keys();
+    test_registry();
+    test_graph();
+    test_default_patch();
+    test_sample_rates();
+    test_patchfile();
+
+    std::printf("\n%d checks, %d failed\n", bs_checks, bs_failures);
+    return bs_failures ? 1 : 0;
+}
