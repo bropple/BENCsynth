@@ -13,7 +13,14 @@ patch cables between, and the cables hang.
 ![The default rack](docs/rack.png)
 
 **[Download a build](https://github.com/bropple/BENCsynth/releases/latest)** for
-Linux, macOS or Windows — or `make` it.
+Linux, macOS or Windows — or `make` it. Every push also builds all three and
+keeps them: the
+[latest run](https://github.com/bropple/BENCsynth/actions/workflows/ci.yml)
+has a `.tar.gz`, a `.dmg` and a `.zip` attached.
+
+**[Hear it](docs/bencsynth-demo.wav)** — a phrase through the default rack,
+rendered offline by `make render`, which needs neither a window nor a sound
+card.
 
 Fourteen module types, eight-voice polyphony carried in the cables themselves,
 a Moog-style ladder filter, and a keyboard along the bottom you can play with

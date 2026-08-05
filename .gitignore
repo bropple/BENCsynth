@@ -8,9 +8,13 @@ bencsynth-test
 bencsynth-render
 *.exe
 
-# Rendered audio. Reproducible from the source that made it, so it does not
-# belong in history - regenerate with `make render`.
+# Rendered audio. Reproducible from the source that made it, so a build's
+# output does not belong in history - regenerate with `make render`. The one
+# exception is the demo under docs/, which is committed on purpose: it is how
+# someone decides whether to download anything at all, and a link to a CI
+# artifact expires after ninety days.
 *.wav
+!docs/bencsynth-demo.wav
 
 # Saved racks are a person's work, not the project's.
 patches/

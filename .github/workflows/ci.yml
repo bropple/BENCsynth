@@ -3,9 +3,15 @@ name: build
 # The README claims BENCsynth builds on Linux, macOS and Windows. This is what
 # turns that claim into something verified rather than asserted.
 #
-# Each job keeps what it built. The artifacts are the point of running on three
-# platforms - a job that proves the build works and then deletes the evidence
-# has only proved it to itself.
+# Every job that builds something keeps it. An earlier version of this file
+# built all three platforms and uploaded a screenshot and a .wav - so CI proved
+# the binaries linked and then deleted them, which is most of the reason to run
+# it on three platforms in the first place.
+#
+# How each platform's build is packaged is not cosmetic. See the comments on
+# the upload steps: the artifact zip GitHub writes does not carry the
+# executable bit, and on macOS that alone is enough to turn a working
+# application into one the system calls damaged.
 
 on:
   push:
@@ -15,9 +21,9 @@ on:
 
 jobs:
   # The DSP core links no raylib and needs no sound card, which is the property
-  # that makes a plugin possible later. It is checked first and on its own,
-  # because if it ever stops being true the three GUI jobs below would still
-  # pass and nothing would say so.
+  # that makes a plugin possible later. Checked first and on its own, because if
+  # it ever stops being true the three GUI jobs below would still pass and
+  # nothing would say so.
   core:
     name: core (no raylib)
     runs-on: ubuntu-latest
@@ -44,27 +50,22 @@ jobs:
           path: bencsynth-demo.wav
           if-no-files-found: error
 
-  unix:
-    name: ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false      # a macOS-only failure should not hide a Linux one
-      matrix:
-        os: [ubuntu-latest, macos-latest]
+  linux:
+    name: linux
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: X11 and ALSA headers
-        if: matrix.os == 'ubuntu-latest'
+      - name: X11, GL and ALSA headers
         run: |
           sudo apt-get update
           sudo apt-get install -y libasound2-dev libx11-dev libxrandr-dev \
             libxi-dev libxcursor-dev libxinerama-dev libgl1-mesa-dev xvfb
 
-      # From source and static. A Homebrew raylib is a dylib under
-      # /opt/homebrew, and a binary linked against it aborts at launch on any
-      # machine that does not happen to have one - which is every machine that
-      # has just downloaded a build.
+      # From source rather than from apt: the packaged version varies by runner
+      # image, and a build that only compiles against one of them is not much
+      # of a guarantee. Static, so the artifact runs on a machine that has
+      # never heard of raylib.
       - name: raylib
         run: |
           git clone --depth 1 --branch 5.5 https://github.com/raysan5/raylib.git /tmp/raylib
@@ -72,6 +73,9 @@ jobs:
             -DBUILD_SHARED_LIBS=OFF -DBUILD_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Release
           cmake --build /tmp/raylib/build -j3
           cmake --install /tmp/raylib/build
+
+      - name: What the build decided
+        run: RAYLIB=/tmp/rl make info
 
       - name: Build
         run: RAYLIB=/tmp/rl make
@@ -85,7 +89,6 @@ jobs:
       # through libm, and two platforms' sin and sqrt can disagree in the last
       # bit, which would turn one antialiased pixel into a red build.
       - name: The committed icons are the right shape
-        if: matrix.os == 'ubuntu-latest'
         run: |
           fail=0
           for s in 16 24 32 48 64 128 256 512; do
@@ -97,18 +100,72 @@ jobs:
           [ -f assets/icon/bencsynth.ico ] || { echo "missing bencsynth.ico"; fail=1; }
           exit $fail
 
-      # A window nobody opens is a window nobody has tested. Under Xvfb on
-      # Linux this actually creates a GL context, loads the font, builds the
-      # default rack and renders a hundred and fifty frames.
+      # A window nobody opens is a window nobody has tested. Under Xvfb this
+      # creates a real GL context, loads the font, builds the default rack and
+      # renders a hundred and fifty frames.
       - name: The window comes up
-        if: matrix.os == 'ubuntu-latest'
         run: |
           xvfb-run -a -s "-screen 0 1440x900x24" ./bencsynth --shot ci-rack.png --frames 150
           xvfb-run -a -s "-screen 0 1440x900x24" ./bencsynth --shot ci-info.png --info --frames 60
           ls -l ci-rack.png ci-info.png
 
-      - name: The binary is self-contained
-        if: matrix.os == 'macos-latest'
+      # Tarred rather than uploaded bare. upload-artifact zips whatever it is
+      # given, and the zip format as GitHub writes it does not carry the
+      # executable bit - so a downloaded binary needs a chmod before it will
+      # run, which nobody expects and nothing tells them. A tar carries the
+      # mode. The assets go with it because the font is loaded from disk.
+      - name: Package
+        run: |
+          D="bencsynth-$(git rev-parse --short HEAD)-linux-x86_64"
+          mkdir -p "$D"
+          cp bencsynth README.md ARCHITECTURE.md LICENSE NOTICE "$D"/
+          cp -r assets "$D"/
+          tar czf "$D.tar.gz" "$D"
+          echo "PKG=$D.tar.gz" >> "$GITHUB_ENV"
+          ls -l "$D.tar.gz"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bencsynth-linux
+          path: ${{ env.PKG }}
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: ci-*.png
+          if-no-files-found: error
+
+  macos:
+    name: macos
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # From source and static, not `brew install raylib`. Homebrew's is a
+      # dylib under /opt/homebrew, and a binary linked against it aborts at
+      # launch on any machine without that exact library - which is every
+      # machine that has just downloaded a build.
+      - name: raylib
+        run: |
+          git clone --depth 1 --branch 5.5 https://github.com/raysan5/raylib.git /tmp/raylib
+          cmake -S /tmp/raylib -B /tmp/raylib/build -DCMAKE_INSTALL_PREFIX=/tmp/rl \
+            -DBUILD_SHARED_LIBS=OFF -DBUILD_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/raylib/build -j3
+          cmake --install /tmp/raylib/build
+
+      - name: What the build decided
+        run: RAYLIB=/tmp/rl make info
+
+      - name: Build
+        run: RAYLIB=/tmp/rl make
+
+      - name: Tests
+        run: make test
+
+      # The check that would have caught shipping a Homebrew-linked binary.
+      # Anything outside /usr/lib and /System is not on a stock Mac.
+      - name: No non-system dynamic libraries
         run: |
           otool -L bencsynth
           if otool -L bencsynth | tail -n +2 | \
@@ -118,14 +175,111 @@ jobs:
           fi
           echo "self-contained"
 
+      # The bundle and the image are built here as well as at release time, so
+      # a broken one shows up on a push rather than on a tag. Split into
+      # separate steps so a failure names itself - "the bundle and the image and
+      # the checks" as one step says nothing about which of them broke.
+      - name: The .app bundle builds
+        run: |
+          BS_VERSION=0.0.0 ./tools/macos-app.sh bencsynth BENCsynth.app
+          test -f BENCsynth.app/Contents/MacOS/BENCsynth
+          test -f BENCsynth.app/Contents/Resources/BENCsynth.icns
+          test -f BENCsynth.app/Contents/Resources/assets/fonts/TerminusTTF.ttf
+          test -f BENCsynth.app/Contents/Resources/assets/brand/BENCO_Logo_Terminal.png
+          plutil -lint BENCsynth.app/Contents/Info.plist
+          # Finder decides an app is an app from these two facts alone.
+          test "$(plutil -extract CFBundleExecutable raw \
+                    BENCsynth.app/Contents/Info.plist)" = BENCsynth
+          test "$(plutil -extract CFBundlePackageType raw \
+                    BENCsynth.app/Contents/Info.plist)" = APPL
+
+      # The check that would have caught shipping a bundle macOS calls
+      # "damaged": a signature that does not validate against the bundle it is
+      # in. Ad-hoc identifies nobody, but it has to verify.
+      - name: The bundle's signature validates
+        run: |
+          codesign --verify --deep --strict --verbose=2 BENCsynth.app
+          codesign -dvv BENCsynth.app 2>&1 | head -20
+          # Informational: unnotarised software is rejected here by design, and
+          # that rejection is the "unidentified developer" prompt, not
+          # "damaged".
+          spctl -a -t exec -vv BENCsynth.app || true
+
+      # In a venv rather than `pip install --user`: a runner's system Python is
+      # externally managed and refuses the latter outright.
+      - name: dmgbuild
+        run: |
+          python3 -m venv /tmp/dmgvenv
+          /tmp/dmgvenv/bin/pip install --quiet dmgbuild
+          /tmp/dmgvenv/bin/dmgbuild --help >/dev/null
+
+      # Named for the commit, because this one gets uploaded and somebody has to
+      # be able to tell which build they double-clicked. The volume name stays
+      # plain "BENCsynth": it becomes the mounted disk's name, and that is what
+      # belongs on a desktop.
+      - name: The disk image builds
+        run: |
+          DMG="bencsynth-$(git rev-parse --short HEAD)-macos-$(uname -m).dmg"
+          echo "DMG=$DMG" >> "$GITHUB_ENV"
+          DMGBUILD=/tmp/dmgvenv/bin/dmgbuild ./tools/macos-dmg.sh \
+            BENCsynth.app "$DMG" BENCsynth
+
+      # hdiutil will not create the mount point for you.
+      - name: Mount the disk image
+        run: |
+          mkdir -p /tmp/dmg
+          hdiutil attach "$DMG" -nobrowse -mountpoint /tmp/dmg
+          ls -la /tmp/dmg
+
+      - name: It is draggable
+        run: |
+          test -d /tmp/dmg/BENCsynth.app
+          test -L /tmp/dmg/Applications
+
+      # The layout lives in this file. Without it the image opens as a plain
+      # list and the background nobody sees might as well not be there.
+      - name: It carries the window layout
+        run: test -f /tmp/dmg/.DS_Store
+
+      # Reported, not asserted. Where dmgbuild puts the volume icon and the
+      # background is dmgbuild's business, and a build that fails because a tool
+      # renamed an internal file is a build that fails for no reason.
+      - name: What else it carries
+        run: |
+          ls -la /tmp/dmg/.background/ 2>/dev/null || echo "no .background/"
+          test -f /tmp/dmg/.VolumeIcon.icns \
+            && echo "volume icon present" || echo "no .VolumeIcon.icns"
+
+      - name: Unmount
+        if: always()
+        run: hdiutil detach /tmp/dmg || true
+
+      # The disk image, not the .app.
+      #
+      # upload-artifact zips whatever path it is given, and three things do not
+      # survive that round trip:
+      #
+      #   - the wrapper. A .app is a directory, so it arrives on the other end
+      #     as a folder called Contents, and whoever opens it has no idea which
+      #     part is the program.
+      #   - the executable bit, which the zip format as GitHub writes it does
+      #     not carry, so Contents/MacOS/BENCsynth would not run even once
+      #     found.
+      #   - the code signature, which seals file modes. Losing them invalidates
+      #     it, and an invalid signature is precisely the state macOS reports as
+      #     "damaged" - the failure the signing step above exists to prevent.
+      #
+      # A disk image survives all three, because it is one file with a
+      # filesystem inside it. The zip carries the image; the image carries the
+      # permissions.
       - uses: actions/upload-artifact@v4
-        if: matrix.os == 'ubuntu-latest'
         with:
-          name: screenshots
-          path: ci-*.png
+          name: bencsynth-macos
+          path: ${{ env.DMG }}
           if-no-files-found: error
 
   windows:
+    name: windows
     runs-on: windows-latest
     defaults:
       run:
@@ -140,6 +294,7 @@ jobs:
             mingw-w64-ucrt-x86_64-gcc
             git
             make
+            zip
             python
 
       # raylib's own Makefile, not cmake. cmake's "MinGW Makefiles" generator
@@ -155,6 +310,12 @@ jobs:
           cp /tmp/raylib/src/raylib.h /tmp/raylib/src/raymath.h /tmp/raylib/src/rlgl.h /tmp/rl/include/
           cp /tmp/raylib/src/libraylib.a /tmp/rl/lib/
 
+      # raylib is built from source above, so RAYLIB= is set and pkg-config is
+      # never consulted. Printed anyway: this is the output to read first when a
+      # Windows link fails, and it should not take a code change to get.
+      - name: What the build decided
+        run: RAYLIB=/tmp/rl make info
+
       - name: Build
         run: RAYLIB=/tmp/rl make
 
@@ -162,6 +323,43 @@ jobs:
         run: make test
 
       # Not "is there an icon in the binary" - that passes while the titlebar
-      # and taskbar stay generic. See the script.
+      # and taskbar stay generic, because GLFW loads the window-class icon by
+      # the name GLFW_ICON and silently falls back otherwise. This walks the
+      # resource directory of the built executable, which is the only place the
+      # answer lives; grepping the .rc cannot tell you whether windres ran.
       - name: The icon is the one GLFW will use
-        run: python tools/check_win_icon.py bencsynth.exe
+        run: |
+          ls -l bencsynth.exe
+          python tools/check_win_icon.py bencsynth.exe
+
+      # Static, so a downloaded binary does not need MSYS2's DLLs on PATH -
+      # which the person who downloaded it does not have and would have no
+      # reason to install.
+      - name: No MSYS2 DLL dependencies
+        run: |
+          if objdump -p bencsynth.exe | grep -iE 'DLL Name:.*(raylib|libgcc|libwinpthread|libstdc|msys)'; then
+            echo "links a DLL that will not be present on a user's machine"
+            exit 1
+          fi
+          echo "self-contained"
+
+      # Zipped here rather than left to upload-artifact so the archive has one
+      # named folder at its root instead of loose files, and so the name says
+      # which commit it came from. Windows has no executable bit to lose, so
+      # the zip is not the hazard it is on the other two platforms - but the
+      # font still has to travel beside the binary.
+      - name: Package
+        run: |
+          D="bencsynth-$(git rev-parse --short HEAD)-windows-x86_64"
+          mkdir -p "$D"
+          cp bencsynth.exe README.md ARCHITECTURE.md LICENSE NOTICE "$D"/
+          cp -r assets "$D"/
+          zip -qr "$D.zip" "$D"
+          echo "PKG=$D.zip" >> "$GITHUB_ENV"
+          ls -l "$D.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bencsynth-windows
+          path: ${{ env.PKG }}
+          if-no-files-found: error
