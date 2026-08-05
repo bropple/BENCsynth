@@ -66,6 +66,22 @@ int bs_patch_save(bs::Engine *eng, const char *path, char *status, int cap)
         for (int p = 0; p < m->paramCount(); p++)
             std::fprintf(f, " %.6g", (double)m->params[(size_t)p].value);
         std::fputc('\n', f);
+
+        /* A scratchpad's contents, escaped onto one line. The format is
+         * line-based, so a newline in the text would otherwise end the record
+         * and the rest of the note would be read back as garbage. */
+        const std::string *note = const_cast<Module *>(m)->textBuffer();
+        if (note && !note->empty()) {
+            std::fprintf(f, "X %d ", id);
+            for (size_t k = 0; k < note->size(); k++) {
+                const char c = (*note)[k];
+                if (c == '\\')      std::fputs("\\\\", f);
+                else if (c == '\n') std::fputs("\\n", f);
+                else if (c == '\r') { }
+                else                std::fputc(c, f);
+            }
+            std::fputc('\n', f);
+        }
         modules++;
     }
 
@@ -144,6 +160,26 @@ int bs_patch_load(bs::Engine *eng, const char *path, char *status, int cap)
                  * defaults. A file written after one was removed has values
                  * with nowhere to go, and they are dropped. */
                 if (i < m->paramCount()) m->params[(size_t)i].value = (float)v;
+            }
+        } else if (line[0] == 'X') {
+            int savedId = 0, consumed = 0;
+            if (std::sscanf(line, "X %d%n", &savedId, &consumed) != 1) continue;
+            if (savedId < 0 || savedId >= (int)remap.size()) continue;
+            if (remap[(size_t)savedId] < 0) continue;
+            Module *m = eng->patch.module(remap[(size_t)savedId]);
+            std::string *note = m ? m->textBuffer() : 0;
+            if (!note) continue;
+
+            note->clear();
+            const char *p2 = line + consumed;
+            if (*p2 == ' ') p2++;
+            for (; *p2 && *p2 != '\n'; p2++) {
+                if (*p2 != '\\') { note->push_back(*p2); continue; }
+                p2++;
+                if (*p2 == 'n')       note->push_back('\n');
+                else if (*p2 == '\\') note->push_back('\\');
+                else if (*p2 == 0)    break;
+                else                  note->push_back(*p2);
             }
         } else if (line[0] == 'C') {
             int s = 0, sp = 0, d = 0, dp = 0, col = 0;

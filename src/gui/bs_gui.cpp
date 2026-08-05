@@ -8,6 +8,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <string>
+#include <vector>
 
 Color BS_BG        = { 0x06, 0x0a, 0x05, 255 };
 Color BS_RACK      = { 0x0c, 0x14, 0x08, 255 };
@@ -781,4 +783,300 @@ void bs_ui_overlay(bs_ui *ui)
                        row.y + (MENU_ROW - BS_F_SMALL) * 0.5f,
                        i == ui->menuHover ? BS_TEXT : BS_DIM);
     }
+}
+
+/* ------------------------------------------------------------------ *
+ * Text area
+ * ------------------------------------------------------------------ */
+
+enum { TA_PAD = 6, TA_BAR = 10 };
+
+/* Where each visual line starts, in bytes.
+ *
+ * Soft wrapping breaks at the last space that fits rather than mid-word when
+ * there is one, and mid-word when there is not - a scratchpad in a 240 px
+ * panel is nearly all short lines, and breaking those in the middle of a word
+ * is the difference between notes you can read and notes you squint at. */
+static void ta_lines(const std::string &s, int cols, std::vector<int> &starts)
+{
+    starts.clear();
+    starts.push_back(0);
+
+    int lineStart = 0, lastSpace = -1;
+    for (int i = 0; i < (int)s.size(); i++) {
+        if (s[(size_t)i] == '\n') {
+            starts.push_back(i + 1);
+            lineStart = i + 1;
+            lastSpace = -1;
+            continue;
+        }
+        if (s[(size_t)i] == ' ') lastSpace = i;
+        if (i - lineStart + 1 > cols) {
+            const int brk = (lastSpace > lineStart) ? lastSpace + 1 : i;
+            starts.push_back(brk);
+            lineStart = brk;
+            lastSpace = -1;
+        }
+    }
+}
+
+static int ta_line_of(const std::vector<int> &starts, int caret)
+{
+    int lo = 0, hi = (int)starts.size() - 1;
+    while (lo < hi) {
+        const int mid = (lo + hi + 1) / 2;
+        if (starts[(size_t)mid] <= caret) lo = mid; else hi = mid - 1;
+    }
+    return lo;
+}
+
+static int ta_line_end(const std::string &s, const std::vector<int> &starts, int line)
+{
+    if (line + 1 < (int)starts.size()) {
+        int e = starts[(size_t)line + 1];
+        /* A hard break belongs to the line before it; a soft one does not. */
+        if (e > 0 && e <= (int)s.size() && s[(size_t)e - 1] == '\n') e--;
+        return e;
+    }
+    return (int)s.size();
+}
+
+static void ta_erase_selection(std::string &s, bs_edit *st)
+{
+    if (st->caret == st->sel) return;
+    const int a = st->caret < st->sel ? st->caret : st->sel;
+    const int b = st->caret < st->sel ? st->sel : st->caret;
+    s.erase((size_t)a, (size_t)(b - a));
+    st->caret = st->sel = a;
+}
+
+static void ta_insert(std::string &s, bs_edit *st, const char *text)
+{
+    ta_erase_selection(s, st);
+    const std::string ins(text);
+    s.insert((size_t)st->caret, ins);
+    st->caret += (int)ins.size();
+    st->sel = st->caret;
+}
+
+int bs_textarea(bs_ui *ui, int id, Rectangle r, std::string &text, bs_edit *st,
+                int editable)
+{
+    const Vector2 m = bs_mouse();
+    const int blocked = bs_ui_blocked(ui);
+    const int over = !blocked && CheckCollisionPointRec(m, r);
+    int changed = 0;
+
+    const float charW = bs_measure(ui, BS_F_TINY, "M", 0.0f);
+    const float lineH = (float)BS_F_TINY + 2.0f;
+    const float innerW = r.width - TA_PAD * 2.0f - TA_BAR;
+    int cols = (int)(innerW / (charW > 0.5f ? charW : 8.0f));
+    if (cols < 4) cols = 4;
+
+    static std::vector<int> starts;
+    ta_lines(text, cols, starts);
+    const int nLines = (int)starts.size();
+    const float contentH = (float)nLines * lineH;
+    const float viewH = r.height - TA_PAD * 2.0f;
+    const float maxScroll = contentH - viewH > 0.0f ? contentH - viewH : 0.0f;
+
+    /* ---- taking and losing focus ---- */
+    if (over && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) ui->focus = id;
+    else if (!over && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && ui->focus == id)
+        ui->focus = 0;
+    const int hot = (ui->focus == id);
+
+    /* ---- pointer ---- */
+    if (over || st->dragText || st->dragBar) {
+        const float wheel = GetMouseWheelMove();
+        if (wheel != 0.0f && over) st->scroll -= wheel * lineH * 3.0f;
+    }
+
+    Rectangle bar = { r.x + r.width - TA_BAR - 2.0f, r.y + 2.0f,
+                      (float)TA_BAR, r.height - 4.0f };
+    if (maxScroll > 0.0f) {
+        const float thumbH = bar.height * (viewH / contentH);
+        const float thumbY = bar.y + (bar.height - thumbH) * (st->scroll / maxScroll);
+        Rectangle thumb = { bar.x, thumbY, bar.width, thumbH };
+        if (!blocked && CheckCollisionPointRec(m, thumb) &&
+            IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            st->dragBar = 1;
+            st->dragGrab = m.y - thumbY;
+        }
+        if (st->dragBar) {
+            if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+                const float t = (m.y - st->dragGrab - bar.y) / (bar.height - thumbH);
+                st->scroll = maxScroll * bs::clampf(t, 0.0f, 1.0f);
+            } else {
+                st->dragBar = 0;
+            }
+        }
+    } else {
+        st->dragBar = 0;
+    }
+
+    /* Caret from a pixel. Monospace, so it is a division rather than a search. */
+    if (over && !st->dragBar && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        const int line = (int)((m.y - r.y - TA_PAD + st->scroll) / lineH);
+        const int li = line < 0 ? 0 : (line >= nLines ? nLines - 1 : line);
+        const int col = (int)((m.x - r.x - TA_PAD) / charW + 0.5f);
+        const int ls = starts[(size_t)li];
+        const int le = ta_line_end(text, starts, li);
+        int at = ls + (col < 0 ? 0 : col);
+        if (at > le) at = le;
+        st->caret = st->sel = at;
+        st->dragText = 1;
+        st->blink = 0.0f;
+    }
+    if (st->dragText) {
+        if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+            const int line = (int)((m.y - r.y - TA_PAD + st->scroll) / lineH);
+            const int li = line < 0 ? 0 : (line >= nLines ? nLines - 1 : line);
+            const int col = (int)((m.x - r.x - TA_PAD) / charW + 0.5f);
+            const int ls = starts[(size_t)li];
+            const int le = ta_line_end(text, starts, li);
+            int at = ls + (col < 0 ? 0 : col);
+            if (at > le) at = le;
+            st->caret = at;
+        } else {
+            st->dragText = 0;
+        }
+    }
+
+    /* ---- keys ---- */
+    if (hot) {
+        const int ctrl  = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL) ||
+                          IsKeyDown(KEY_LEFT_SUPER)   || IsKeyDown(KEY_RIGHT_SUPER);
+        const int shift = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
+
+        if (ctrl && IsKeyPressed(KEY_A)) { st->sel = 0; st->caret = (int)text.size(); }
+        if (ctrl && (IsKeyPressed(KEY_C) || IsKeyPressed(KEY_X)) && st->caret != st->sel) {
+            const int a = st->caret < st->sel ? st->caret : st->sel;
+            const int b = st->caret < st->sel ? st->sel : st->caret;
+            SetClipboardText(text.substr((size_t)a, (size_t)(b - a)).c_str());
+            if (editable && IsKeyPressed(KEY_X)) { ta_erase_selection(text, st); changed = 1; }
+        }
+        if (editable && ctrl && IsKeyPressed(KEY_V)) {
+            const char *clip = GetClipboardText();
+            if (clip && *clip) { ta_insert(text, st, clip); changed = 1; }
+        }
+
+        if (!ctrl) {
+            int c;
+            while (editable && (c = GetCharPressed()) != 0) {
+                if (c < 32 || c > 126) continue;   /* ASCII, like every other surface */
+                const char one[2] = { (char)c, 0 };
+                ta_insert(text, st, one);
+                changed = 1;
+            }
+            if (editable && (IsKeyPressed(KEY_ENTER) || IsKeyPressedRepeat(KEY_ENTER))) {
+                ta_insert(text, st, "\n");
+                changed = 1;
+            }
+            if (editable && (IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE))) {
+                if (st->caret != st->sel) ta_erase_selection(text, st);
+                else if (st->caret > 0) { text.erase((size_t)--st->caret, 1); st->sel = st->caret; }
+                changed = 1;
+            }
+            if (editable && (IsKeyPressed(KEY_DELETE) || IsKeyPressedRepeat(KEY_DELETE))) {
+                if (st->caret != st->sel) ta_erase_selection(text, st);
+                else if (st->caret < (int)text.size()) text.erase((size_t)st->caret, 1);
+                changed = 1;
+            }
+        }
+
+        int moved = 0;
+        if (IsKeyPressed(KEY_LEFT)  || IsKeyPressedRepeat(KEY_LEFT))  { if (st->caret > 0) st->caret--; moved = 1; }
+        if (IsKeyPressed(KEY_RIGHT) || IsKeyPressedRepeat(KEY_RIGHT)) { if (st->caret < (int)text.size()) st->caret++; moved = 1; }
+        if (IsKeyPressed(KEY_HOME)) { st->caret = starts[(size_t)ta_line_of(starts, st->caret)]; moved = 1; }
+        if (IsKeyPressed(KEY_END))  { st->caret = ta_line_end(text, starts, ta_line_of(starts, st->caret)); moved = 1; }
+        if (IsKeyPressed(KEY_UP)   || IsKeyPressedRepeat(KEY_UP) ||
+            IsKeyPressed(KEY_DOWN) || IsKeyPressedRepeat(KEY_DOWN)) {
+            const int li = ta_line_of(starts, st->caret);
+            const int col = st->caret - starts[(size_t)li];
+            const int up = IsKeyPressed(KEY_UP) || IsKeyPressedRepeat(KEY_UP);
+            const int tgt = up ? li - 1 : li + 1;
+            if (tgt >= 0 && tgt < nLines) {
+                const int ls = starts[(size_t)tgt];
+                const int le = ta_line_end(text, starts, tgt);
+                st->caret = ls + col > le ? le : ls + col;
+            }
+            moved = 1;
+        }
+        if (moved) {
+            if (!shift) st->sel = st->caret;
+            st->blink = 0.0f;
+        }
+        if (changed) st->sel = st->caret;
+
+        /* Keep the caret in view after anything that moved it. */
+        if (moved || changed) {
+            ta_lines(text, cols, starts);
+            const float cy = (float)ta_line_of(starts, st->caret) * lineH;
+            if (cy < st->scroll) st->scroll = cy;
+            if (cy + lineH > st->scroll + viewH) st->scroll = cy + lineH - viewH;
+        }
+    }
+
+    const float limit = (float)starts.size() * lineH - viewH;
+    if (st->scroll > (limit > 0.0f ? limit : 0.0f)) st->scroll = limit > 0.0f ? limit : 0.0f;
+    if (st->scroll < 0.0f) st->scroll = 0.0f;
+
+    /* ---- draw ---- */
+    DrawRectangleRec(r, BS_HOLE);
+    DrawRectangleLinesEx(r, 1.0f, hot ? BS_ACCENT : BS_BORDER);
+
+    /* Clipped by choosing what to draw rather than with a scissor: the rack
+     * draws under a camera transform, and a scissor rectangle is in screen
+     * pixels whatever transform is active, so one computed from these
+     * coordinates would land somewhere else entirely. */
+    const float clipTop = r.y + 1.0f;
+    const float clipBot = r.y + r.height - 1.0f;
+
+    const int selA = st->caret < st->sel ? st->caret : st->sel;
+    const int selB = st->caret < st->sel ? st->sel : st->caret;
+    const int first = (int)(st->scroll / lineH);
+    const int last  = first + (int)(viewH / lineH) + 2;
+
+    for (int li = first; li < last && li < (int)starts.size(); li++) {
+        if (li < 0) continue;
+        const int ls = starts[(size_t)li];
+        const int le = ta_line_end(text, starts, li);
+        const float ly = r.y + TA_PAD + (float)li * lineH - st->scroll;
+        if (ly < clipTop - lineH || ly + lineH > clipBot) continue;
+
+        if (selB > selA && selB > ls && selA < le) {
+            const int a = selA > ls ? selA : ls;
+            const int b = selB < le ? selB : le;
+            Rectangle sr = { r.x + TA_PAD + (float)(a - ls) * charW, ly,
+                             (float)(b - a) * charW, lineH };
+            if (sr.width < 2.0f) sr.width = 2.0f;
+            DrawRectangleRec(sr, BS_EDGE);
+        }
+
+        if (le > ls)
+            bs_text(ui, BS_F_TINY, text.substr((size_t)ls, (size_t)(le - ls)).c_str(),
+                    r.x + TA_PAD, ly, BS_TEXT);
+    }
+
+    if (hot && editable) {
+        st->blink += GetFrameTime();
+        if (std::fmod(st->blink, 1.0f) < 0.55f) {
+            const int li = ta_line_of(starts, st->caret);
+            const float cx = r.x + TA_PAD + (float)(st->caret - starts[(size_t)li]) * charW;
+            const float cy = r.y + TA_PAD + (float)li * lineH - st->scroll;
+            if (cy >= clipTop && cy + lineH <= clipBot)
+                DrawRectangleRec((Rectangle){ cx, cy, 1.5f, lineH - 1.0f }, BS_TEXT);
+        }
+    }
+
+    if (maxScroll > 0.0f) {
+        DrawRectangleRec(bar, BS_PANEL);
+        const float thumbH = bar.height * (viewH / contentH);
+        const float thumbY = bar.y + (bar.height - thumbH) * (st->scroll / maxScroll);
+        DrawRectangleRec((Rectangle){ bar.x, thumbY, bar.width, thumbH },
+                         st->dragBar ? BS_ACCENT : BS_EDGE);
+    }
+
+    return changed;
 }

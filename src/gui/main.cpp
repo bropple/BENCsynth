@@ -175,7 +175,8 @@ static int draw_info(bs_ui *ui, Rectangle screen)
         "SHIFT-DRAG a knob     turn it slowly",
         "DOUBLE-CLICK a knob   back to default",
         "DRAG empty rack       pan",
-        "WHEEL on the rack     zoom"
+        "WHEEL on the rack     zoom",
+        "CLICK a NOTES panel   type in it; ESC leaves"
     };
     static const char *KEYS[] = {
         "Z S X D C V G B ...   lower octave",
@@ -471,14 +472,22 @@ int main(int argc, char **argv)
 
         if (IsKeyPressed(KEY_F1)) app.about = !app.about;
         if (IsKeyPressed(KEY_ESCAPE)) {
-            bs_keyboard_release_all(&kb, &g_engine);
-            g_engine.panic();
-            say(&app, "all notes off");
+            /* While a scratchpad has the keyboard, Escape is how you get out
+             * of it. Silencing the rack from inside a text field would be a
+             * surprise, and there would be no other way to stop typing. */
+            if (ui.focus) {
+                ui.focus = 0;
+            } else {
+                bs_keyboard_release_all(&kb, &g_engine);
+                g_engine.panic();
+                say(&app, "all notes off");
+            }
         }
 
         /* Typing is off while the help is up, so reading it does not play a
-         * chord at whoever is reading. */
-        bs_keyboard_typing(&kb, &g_engine, !app.about);
+         * chord at whoever is reading - and off while a scratchpad has the
+         * keyboard, or writing a note into one would play it as well. */
+        bs_keyboard_typing(&kb, &g_engine, !app.about && ui.focus == 0);
 
         BeginDrawing();
         ClearBackground(BS_BG);

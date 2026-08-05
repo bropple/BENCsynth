@@ -61,6 +61,19 @@ private:
     int   decim;
 };
 
+/* A panel that does nothing to the audio at all: somewhere to write down what
+ * a rack is for, which is the thing a modular patch cannot otherwise tell you.
+ * Every factory rack ships with one explaining itself. */
+class ModuleText : public Module {
+public:
+    ModuleText();
+    void process() {}
+    int  extraPanelHeight() const { return 300; }
+    std::string *textBuffer() { return &text; }
+
+    std::string text;
+};
+
 /* The keyboard interface: the one module that is not a pure function of its
  * inputs, and the only place polyphony enters the patch. */
 class ModuleKbd : public Module {

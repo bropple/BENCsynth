@@ -290,6 +290,11 @@ public:
      * a meter. Zero for everything that is only controls. */
     virtual int extraPanelHeight() const { return 0; }
 
+    /* A module that holds free text - a scratchpad - returns it here, so that
+     * saving a patch carries it and the rack knows to draw an editor. Null for
+     * everything else, which is everything else. */
+    virtual std::string *textBuffer() { return 0; }
+
     int inputCount() const  { return (int)inInfo.size(); }
     int outputCount() const { return (int)outInfo.size(); }
     int paramCount() const  { return (int)params.size(); }

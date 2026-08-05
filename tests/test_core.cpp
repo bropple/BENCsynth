@@ -574,6 +574,117 @@ static void test_presets()
     }
 }
 
+/* GRAND TOUR exists to be the answer to "what can this do", and the answer is
+ * only true while it actually uses everything. A module added to the registry
+ * and left out of it makes the claim quietly false, which is exactly the kind
+ * of thing nobody notices. */
+/* The arpeggiator turns a chord into a sequence, and the observable difference
+ * between working and not is whether its pitch output has more than one value
+ * in it over time. */
+static void test_arp()
+{
+    std::printf("arpeggiator\n");
+
+    Engine e;
+    e.init(48000.0f);
+    const int kbd = e.addModule("KBD", 0, 0);
+    const int arp = e.addModule("ARP", 0, 0);
+    const int out = e.addModule("OUT", 0, 0);
+    e.connect(kbd, 0, arp, 0);
+    e.connect(kbd, 1, arp, 1);
+    e.connect(arp, 0, out, 0);
+
+    Module *a = e.patch.module(arp);
+    a->params[0].value = 20.0f;      /* fast, so a short render covers steps */
+    a->params[1].value = 0.0f;       /* UP    */
+    a->params[2].value = 1.0f;       /* one octave */
+
+    std::vector<float> buf(2048 * 2);
+
+    /* Nothing held: the gate stays shut. */
+    for (int i = 0; i < 8; i++) e.render(&buf[0], 2048);
+    int gateHigh = 0;
+    for (int i = 0; i < BS_BLOCK; i++)
+        if (a->out(1).v[0][i] > 1.0f) gateHigh++;
+    okf(gateHigh == 0, "%.0f gated frames with nothing held, expected %.0f",
+        (double)gateHigh, 0.0);
+
+    e.noteOn(60, 1.0f);
+    e.noteOn(64, 1.0f);
+    e.noteOn(67, 1.0f);
+
+    /* Collect the distinct pitches it visits. Three notes, one octave, so it
+     * should be exactly three. */
+    float seen[16];
+    int   nSeen = 0;
+    for (int b = 0; b < 60; b++) {
+        e.render(&buf[0], 2048);
+        const float p = a->out(0).v[0][0];
+        int known = 0;
+        for (int i = 0; i < nSeen; i++) if (std::fabs(seen[i] - p) < 0.001f) known = 1;
+        if (!known && nSeen < 16) seen[nSeen++] = p;
+    }
+    okf(nSeen == 3, "the arpeggio visited %.0f distinct pitches, expected %.0f",
+        (double)nSeen, 3.0);
+
+    /* And they should be the notes that were held, in volts. */
+    int matched = 0;
+    static const int NOTES[3] = { 60, 64, 67 };
+    for (int i = 0; i < nSeen; i++)
+        for (int k = 0; k < 3; k++)
+            if (std::fabs(seen[i] - noteToVolts((float)NOTES[k])) < 0.001f) matched++;
+    okf(matched == 3, "%.0f of the pitches were notes that were held, expected %.0f",
+        (double)matched, 3.0);
+
+    /* Two octaves doubles the sequence rather than the tempo. */
+    a->params[2].value = 2.0f;
+    nSeen = 0;
+    for (int b = 0; b < 90; b++) {
+        e.render(&buf[0], 2048);
+        const float p = a->out(0).v[0][0];
+        int known = 0;
+        for (int i = 0; i < nSeen; i++) if (std::fabs(seen[i] - p) < 0.001f) known = 1;
+        if (!known && nSeen < 16) seen[nSeen++] = p;
+    }
+    okf(nSeen == 6, "two octaves gave %.0f distinct pitches, expected %.0f",
+        (double)nSeen, 6.0);
+}
+
+static void test_grand_tour()
+{
+    std::printf("grand tour\n");
+
+    int which = -1;
+    for (int i = 0; i < rackPresetCount(); i++)
+        if (std::strcmp(rackPresetAt(i)->name, "GRAND TOUR") == 0) which = i;
+    ok(which >= 0, "there is a GRAND TOUR rack");
+    if (which < 0) return;
+
+    Engine e;
+    e.init(48000.0f);
+    e.buildPreset(which);
+
+    for (int t = 0; t < moduleTypeCount(); t++) {
+        const char *id = moduleTypeAt(t)->id;
+        int found = 0;
+        for (int i = 0; i < e.patch.slotCount(); i++) {
+            const Module *m = e.patch.module(i);
+            if (m && m->typeId == id) { found = 1; break; }
+        }
+        char msg[96];
+        std::snprintf(msg, sizeof msg, "GRAND TOUR uses a %s", id);
+        ok(found != 0, msg);
+    }
+
+    /* And every rack should be able to say what it is. */
+    for (int i = 0; i < rackPresetCount(); i++) {
+        const RackPreset *rp = rackPresetAt(i);
+        char msg[96];
+        std::snprintf(msg, sizeof msg, "%s has notes", rp->name);
+        ok(rp->notes != 0 && rp->notes[0] != 0, msg);
+    }
+}
+
 static void test_sample_rates()
 {
     std::printf("sample rates\n");
@@ -608,6 +719,8 @@ int main()
     test_eval_order();
     test_default_patch();
     test_presets();
+    test_arp();
+    test_grand_tour();
     test_sample_rates();
     test_patchfile();
 

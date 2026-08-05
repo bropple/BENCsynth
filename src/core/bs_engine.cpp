@@ -1560,38 +1560,177 @@ void presetHowl(Builder &b)
     b.set(out,   OUT_LEVEL, 0.55f);
 }
 
+/* ---- the whole set, at once --------------------------------------- *
+ *
+ * Every module type in the rack, patched into one instrument. It is here as an
+ * answer to "what can this thing do", and as the one rack where the modules
+ * that are easy to overlook - the multiple, the attenuverter, the
+ * sample-and-hold sitting inside the noise module - are doing visible work.
+ *
+ * The signal path is ordinary enough: three oscillators through a mixer into
+ * the ladder, two envelopes, a delay and a reverb. What is not ordinary is
+ * everything driving it. The keyboard does not reach the oscillators at all;
+ * it reaches an arpeggiator, and the arpeggiator's clock is what plays the
+ * rack. That same clock samples a random voltage for the filter, and a second
+ * LFO bends the delay's time so the echoes wow like tape.
+ * ------------------------------------------------------------------- */
+void presetGrandTour(Builder &b)
+{
+    b.row(R1);
+    const int kbd   = b.put("KBD");
+    const int arp   = b.put("ARP");
+    const int mult  = b.put("MULT");
+    const int vco1  = b.put("VCO");
+    const int vco2  = b.put("VCO");
+    const int vco3  = b.put("VCO");
+    const int noise = b.put("NOISE");
+    const int mix   = b.put("MIX");
+    const int vcf   = b.put("VCF");
+
+    b.row(R2);
+    const int lfo1 = b.put("LFO");
+    const int lfo2 = b.put("LFO");
+    const int att  = b.put("ATT");
+    const int envF = b.put("ADSR");
+    const int envA = b.put("ADSR");
+    const int vca  = b.put("VCA");
+    const int dly  = b.put("DLY");
+    const int rvb  = b.put("RVB");
+    const int out  = b.put("OUT");
+
+    /* The keyboard plays the arpeggiator, and the arpeggiator plays the rack. */
+    b.wire(kbd, KBD_PITCH, arp, 0);
+    b.wire(kbd, KBD_GATE,  arp, 1);
+
+    b.wire(arp, 0, vco1, VCO_IN_PITCH);
+    b.wire(arp, 0, vco2, VCO_IN_PITCH);
+    b.wire(arp, 0, vco3, VCO_IN_PITCH);
+    b.wire(arp, 0, vcf,  VCF_IN_PITCH);
+
+    /* One gate has to reach two envelopes, and one trigger has to reach two
+     * envelopes and the sample-and-hold's clock. An output fans out on its own,
+     * but sending it through a multiple is what makes that visible on the
+     * panel instead of implied by five cables leaving one jack. */
+    b.wire(arp, 1, mult, 0);
+    b.wire(arp, 2, mult, 1);
+    b.wire(mult, 0, envF, ADSR_IN_GATE);
+    b.wire(mult, 1, envA, ADSR_IN_GATE);
+    b.wire(mult, 3, envF, ADSR_IN_TRIG);
+    b.wire(mult, 4, envA, ADSR_IN_TRIG);
+    b.wire(mult, 5, noise, 1);           /* every arp step samples a new voltage */
+
+    b.wire(lfo1, LFO_TRI, vco2, VCO_IN_PWM);
+    b.wire(noise, NOISE_SH, att, 0);
+    b.wire(att, 0, vcf, VCF_IN_CV2);
+
+    b.wire(vco1, VCO_SAW, mix, MIX_1);
+    b.wire(vco2, VCO_PLS, mix, MIX_2);
+    b.wire(vco3, VCO_SIN, mix, MIX_3);
+    b.wire(noise, NOISE_WHT, mix, MIX_4);
+
+    b.wire(mix, 0, vcf, VCF_IN);
+    b.wire(envF, ADSR_ENV, vcf, VCF_IN_CV1);
+    b.wire(vcf, VCF_LP24, vca, VCA_IN);
+    b.wire(envA, ADSR_ENV, vca, VCA_IN_CV);
+
+    b.wire(vca, 0, dly, 0);
+    b.wire(lfo2, LFO_SIN, dly, 1);       /* tape wow on the echoes */
+    b.wire(dly, 0, rvb, 0);
+    b.wire(rvb, 0, out, 0);
+    b.wire(rvb, 1, out, 1);
+
+    b.set(kbd,  KBD_VOICES, 6.0f);
+    b.set(arp,  0, 9.0f);                /* rate  */
+    b.set(arp,  1, 2.0f);                /* up and down */
+    b.set(arp,  2, 2.0f);                /* two octaves */
+    b.set(arp,  3, 0.45f);               /* gate length */
+    b.set(vco2, VCO_FINE, 8.0f);
+    b.set(vco2, VCO_PWM, 0.40f);
+    b.set(vco3, VCO_OCT, -1.0f);
+    b.set(noise, NOISE_LEVEL, 1.0f);
+    b.set(mix,  MIX_1, 0.50f); b.set(mix, MIX_2, 0.40f);
+    b.set(mix,  MIX_3, 0.45f); b.set(mix, MIX_4, 0.04f);
+    b.set(lfo1, LFO_RATE, 0.7f);
+    b.set(lfo2, LFO_RATE, 0.13f);
+    b.set(att,  ATT_AMT1, 0.35f);
+    b.set(att,  ATT_OFF1, 0.0f);
+    b.set(vcf,  VCF_CUTOFF, 340.0f); b.set(vcf, VCF_RES, 0.52f);
+    b.set(vcf,  VCF_DRIVE, 1.7f);
+    b.set(vcf,  VCF_CV1, 0.30f);     b.set(vcf, VCF_CV2, 0.55f);
+    b.set(vcf,  VCF_KTRK, 0.35f);
+    b.set(envF, ADSR_A, 0.002f); b.set(envF, ADSR_D, 0.22f);
+    b.set(envF, ADSR_S, 0.10f);  b.set(envF, ADSR_R, 0.18f);
+    b.set(envA, ADSR_A, 0.003f); b.set(envA, ADSR_D, 0.30f);
+    b.set(envA, ADSR_S, 0.30f);  b.set(envA, ADSR_R, 0.25f);
+    b.set(vca,  VCA_RESP, 1.0f);
+    b.set(dly,  DLY_TIME, 0.28f); b.set(dly, DLY_FBK, 0.42f);
+    b.set(dly,  DLY_CV, 0.06f);   b.set(dly, DLY_MIX, 0.30f);
+    b.set(rvb,  RVB_SIZE, 0.72f); b.set(rvb, RVB_MIX, 0.30f);
+    b.set(out,  OUT_LEVEL, 0.55f);
+}
+
 typedef void (*PresetFn)(Builder &);
 
 struct PresetEntry { RackPreset info; PresetFn build; };
 
 const PresetEntry PRESETS[] = {
-    { { "CLASSIC",      "two oscillators, ladder, delay and reverb", 0 },  presetClassic },
-    { { "INIT",         "one oscillator, one envelope - a place to start", 0 }, presetInit },
-    { { "BASS",         "legato mono, sub oscillator, short filter thump", 0 }, presetBass },
-    { { "SQUARE LEAD",  "pulse width on an LFO, glide and echo", 0 },      presetSquareLead },
-    { { "SAW PAD",      "eight voices, two detuned saws, long reverb", 0 }, presetPad },
-    { { "PLUCK",        "no sustain, resonant filter chirp", 0 },          presetPluck },
-    { { "DRONE",        "the filter is the oscillator - no keys needed", 1 }, presetDrone },
-    { { "WIND",         "noise through a resonant filter, no oscillator", 0 }, presetWind },
-    { { "SUPERSAW",     "three detuned saws - the trance lead", 0 },       presetSupersaw },
-    { { "ACID",         "303: one saw, glide, and a screaming filter", 0 }, presetAcid },
-    { { "HOOVER",       "the rave stab - detuned way past comfortable", 0 }, presetHoover },
-    { { "REESE",        "two saws a hair apart, mono, low and moving", 0 }, presetReese },
-    { { "TRANCE GATE",  "a pad chopped into sixteenths by a square LFO", 0 }, presetTranceGate },
-    { { "ORGAN STAB",   "house chord stab, pulse with a saw on top", 0 },   presetOrganStab },
+    { { "CLASSIC",      "two oscillators, ladder, delay and reverb", 0,
+      "CLASSIC\n\nTwo oscillators through a mixer into the ladder filter, one envelope on the cutoff and one on the amplifier. Every hard-wired subtractive synth is a version of this patch.\n\nTRY: drop VCF CUTOFF and raise RES. Move the second VCO's FINE away from +7 and listen to the beating speed change." },  presetClassic },
+    { { "INIT",         "one oscillator, one envelope - a place to start", 0,
+      "INIT\n\nThe smallest thing that makes a note: one oscillator, one envelope, one amplifier. Nothing to unpick before you start building.\n\nTRY: right-click the rack to add a VCF, patch the VCO into it and it into the VCA, and you have built CLASSIC's front half yourself." }, presetInit },
+    { { "BASS",         "legato mono, sub oscillator, short filter thump", 0,
+      "BASS\n\nLegato mono with a sine an octave below the saw, and a filter envelope short enough to be a thump rather than a sweep.\n\nTRY: play two overlapping notes - it slides, because MODE is LEGATO and GLIDE is up. Raise the filter envelope's D to hear the thump become a sweep." }, presetBass },
+    { { "SQUARE LEAD",  "pulse width on an LFO, glide and echo", 0,
+      "SQUARE LEAD\n\nA pulse whose width the LFO keeps moving, which is what stops a square wave sounding like a test tone.\n\nTRY: set the VCO's PWM to zero. The movement stops dead and the sound goes flat - that one knob is most of what you were hearing." },      presetSquareLead },
+    { { "SAW PAD",      "eight voices, two detuned saws, long reverb", 0,
+      "SAW PAD\n\nEight voices, two saws pulled a few cents apart, and enough reverb to lose the edges. The slow attack is on both envelopes.\n\nTRY: hold a chord and turn VCF CV2 - that is the LFO on the cutoff, and it is what keeps a long note from standing still." }, presetPad },
+    { { "PLUCK",        "no sustain, resonant filter chirp", 0,
+      "PLUCK\n\nNo sustain at all on either envelope, so a held key still decays to nothing. The filter envelope is short and the resonance is high, which puts a chirp on the front of every note.\n\nTRY: raise the amplifier envelope's S and it stops being a pluck immediately." },          presetPluck },
+    { { "DRONE",        "the filter is the oscillator - no keys needed", 1,
+      "DRONE\n\nNo keyboard anywhere. The filter's RES is past the point of self-oscillation, so the filter IS the oscillator; two slow LFOs walk its cutoff and pink noise gives it something to catch on.\n\nTRY: turn VCF RES down. The sound stops - that is what resonance is." }, presetDrone },
+    { { "WIND",         "noise through a resonant filter, no oscillator", 0,
+      "WIND\n\nNoise through a resonant filter and no oscillator anywhere. The keyboard opens the amplifier and tracks the cutoff, so it is playable even though there is no pitch in it.\n\nTRY: raise VCF RES further and it starts to whistle a note out of the noise." }, presetWind },
+    { { "SUPERSAW",     "three detuned saws - the trance lead", 0,
+      "SUPERSAW\n\nThree saws a few cents apart. The beating between them is the entire sound.\n\nTRY: set all three FINE knobs to 0. It collapses into one thin oscillator, and you can hear exactly what the detuning was buying." },       presetSupersaw },
+    { { "ACID",         "303: one saw, glide, and a screaming filter", 0,
+      "ACID\n\nA 303 in the parts that matter: one saw, glide between overlapping notes, and resonance high enough that the filter envelope is the melody.\n\nTRY: play detached and then legato - the glide only happens on the second. Sweep VCF CUTOFF while playing." }, presetAcid },
+    { { "HOOVER",       "the rave stab - detuned way past comfortable", 0,
+      "HOOVER\n\nA saw and a pulse detuned a third of a semitone apart - far enough that a tuner would call both of them wrong - with the pulse width swept underneath.\n\nTRY: pull the two FINE knobs back toward zero and watch the rave drain out of it." }, presetHoover },
+    { { "REESE",        "two saws a hair apart, mono, low and moving", 0,
+      "REESE\n\nTwo saws a hair apart, mono and low. The interference between them moves slowly enough to hear as a sweep rather than as a chord.\n\nTRY: set KBD VOICES to 8 and MODE to POLY. It turns to mud - this one only works in mono, and that is the point." }, presetReese },
+    { { "TRANCE GATE",  "a pad chopped into sixteenths by a square LFO", 0,
+      "TRANCE GATE\n\nA pad, and then a SECOND amplifier that a square LFO opens and shuts. Hold a chord and the rhythm is the LFO's, not yours.\n\nTRY: turn the LFO's RATE. That is the tempo. Turn the gate VCA's RESP to EXP and the edges soften." }, presetTranceGate },
+    { { "ORGAN STAB",   "house chord stab, pulse with a saw on top", 0,
+      "ORGAN STAB\n\nA pulse with a saw an octave above it, and envelopes short enough that a held chord still sounds hit rather than pressed.\n\nTRY: raise both envelopes' S. It stops being a stab and becomes an organ, which is the same rack with two knobs moved." },   presetOrganStab },
 
-    { { "CHORD",        "three oscillators a third and a fifth apart", 0 },  presetChord },
-    { { "OCTAVES",      "four oscillators an octave apart, mixed like drawbars", 0 }, presetOctaves },
-    { { "HARD SYNC",    "one oscillator restarting another, swept", 0 },     presetHardSync },
-    { { "RING MOD",     "gain allowed to go negative - sum and difference", 0 }, presetRingMod },
-    { { "FM BELL",      "one sine bending another's pitch, on an envelope", 0 }, presetFmBell },
-    { { "SAMPLE HOLD",  "random voltages on a clock - plays itself", 1 },    presetSampleHold },
-    { { "DUB SIREN",    "a mixer summing pitch and wobble, into a long echo", 0 }, presetDubSiren },
-    { { "WOBBLE",       "the cutoff on a fast LFO, resonance up", 0 },       presetWobble },
-    { { "PWM STRINGS",  "two pulses on two LFOs that never line up", 0 },    presetPwmStrings },
-    { { "KICK",         "an envelope on the pitch and no filter at all", 0 }, presetKick },
-    { { "SNARE",        "noise, a resonant filter, and a very short envelope", 0 }, presetSnare },
-    { { "HOWL",         "a filter inside a delay's feedback - plays itself", 1 }, presetHowl }
+    { { "CHORD",        "three oscillators a third and a fifth apart", 0,
+      "CHORD\n\nThree oscillators, the second a major third up and the third a fifth up, so one key plays a triad.\n\nTRY: set the second VCO's COARSE to +3 instead of +4. The whole rack turns minor. That is the cheapest music theory lesson here." },  presetChord },
+    { { "OCTAVES",      "four oscillators an octave apart, mixed like drawbars", 0,
+      "OCTAVES\n\nFour oscillators an octave apart, mixed like organ drawbars. The mixer levels are the registration.\n\nTRY: pull levels 3 and 4 to zero and it goes dark; push them up and it gets reedy. No filter is involved - this is additive synthesis in a modular's clothes." }, presetOctaves },
+    { { "HARD SYNC",    "one oscillator restarting another, swept", 0,
+      "HARD SYNC\n\nOne oscillator restarting another. The slave's own pitch is swept by an envelope, but it can never finish a cycle before the master resets it, so what changes is the shape of each period rather than the note.\n\nTRY: turn the second VCO's COARSE. No filter can make this sound." },     presetHardSync },
+    { { "RING MOD",     "gain allowed to go negative - sum and difference", 0,
+      "RING MOD\n\nA VCA with its RESP switch on RING - four quadrants, so the gain follows the control voltage through zero and out the other side. Two oscillators multiplied together give their sum and difference and neither original.\n\nTRY: turn the modulator's COARSE. Bell, gong, scrap metal." }, presetRingMod },
+    { { "FM BELL",      "one sine bending another's pitch, on an envelope", 0,
+      "FM BELL\n\nOne sine bending another's pitch, with an envelope on how much. Deep at the start and clean by the end is what makes a struck sound.\n\nNote the modulation is exponential rather than through-zero, so the ratios are not tidy integers - which is why this lands nearer a gamelan than an electric piano." }, presetFmBell },
+    { { "SAMPLE HOLD",  "random voltages on a clock - plays itself", 1,
+      "SAMPLE HOLD\n\nPlays itself. A square LFO clocks the sample-and-hold, which grabs a new random voltage every tick; the attenuverter squeezes that into about an octave and it becomes the pitch. The same clock opens the envelope.\n\nTRY: the LFO's RATE is the tempo, the ATT's AMT is how wide the tune is." },    presetSampleHold },
+    { { "DUB SIREN",    "a mixer summing pitch and wobble, into a long echo", 0,
+      "DUB SIREN\n\nAn input jack takes one cable, so adding a wobble to a pitch is not a matter of plugging in twice - the keyboard's pitch and the LFO are summed in a MIX first, and the sum drives the oscillator.\n\nTRY: raise MIX level 2 past 0.1 and it stops being a siren and starts being a mistake." }, presetDubSiren },
+    { { "WOBBLE",       "the cutoff on a fast LFO, resonance up", 0,
+      "WOBBLE\n\nThe cutoff on a fast LFO, deep, with the resonance high enough that the sweep whistles.\n\nThis is the same modulation TRANCE GATE puts on an amplifier, moved one module to the left - and that is the whole difference between a rhythm and a voice." },       presetWobble },
+    { { "PWM STRINGS",  "two pulses on two LFOs that never line up", 0,
+      "PWM STRINGS\n\nTwo pulse waves whose widths are moved by two LFOs at CLOSE BUT UNEQUAL rates, so the pair never lines up and drifts in and out of phase forever.\n\nTRY: set both LFO rates to the same number. The drift stops and so does the string machine." },    presetPwmStrings },
+    { { "KICK",         "an envelope on the pitch and no filter at all", 0,
+      "KICK\n\nAn envelope on the pitch and no filter anywhere. Fifty milliseconds, three octaves down, and an amplitude envelope that outlives it.\n\nTRY: raise the pitch envelope's D toward 0.5 and the kick becomes a falling whistle. An envelope patched somewhere unusual stops being an envelope and becomes a gesture." }, presetKick },
+    { { "SNARE",        "noise, a resonant filter, and a very short envelope", 0,
+      "SNARE\n\nNoise, a filter with the resonance most of the way up, and an envelope short enough to be a hit. There is no oscillator.\n\nTRY: VCF CUTOFF is the pitch of it. Drop it and the snare becomes a tom; raise it and it becomes a hat." }, presetSnare },
+    { { "HOWL",         "a filter inside a delay's feedback - plays itself", 1,
+      "HOWL\n\nA resonant filter inside a delay's feedback path - a loop the patch cannot resolve in one pass, so one cable in it is read a block late, and that block of delay is what keeps it from being an infinite regress.\n\nTRY: MIX level 2 is the loop gain. Below about 0.9 it dies away; above it, it climbs until the filter saturates." }, presetHowl },
+
+    { { "GRAND TOUR",   "every module in the set, patched into one instrument", 0,
+      "GRAND TOUR\n\nEvery module type in the rack, working at once.\n\nThe signal path is ordinary: three oscillators through a mixer into the ladder, two envelopes, a delay and a reverb. What is not ordinary is everything driving it.\n\nThe keyboard never reaches the oscillators. It reaches an ARP, and the arpeggiator's clock is what plays the rack. That same clock is sent through a MULT to both envelopes AND to the noise module's sample-and-hold, so every arpeggio step also grabs a new random voltage - which an ATT scales down to something musical and sends to the filter's second CV input.\n\nA second LFO bends the delay's TIME, which is why the echoes wow like tape.\n\nTRY: hold a chord and change the ARP's MODE and OCT. Then turn the ATT's AMT 1 to zero and hear the filter stop jumping." },
+      presetGrandTour }
 };
 
 } /* anonymous namespace */
@@ -1614,14 +1753,14 @@ const RackPreset *rackPresetAt(int i)
  *
  * It goes to the right of the output module, so it is the last thing in the
  * chain on screen as well as in the signal. */
-static void addOutputScope(Engine *e)
+static int addOutputScope(Engine *e)
 {
     Module *out = 0;
     for (int i = 0; i < e->patch.slotCount(); i++) {
         Module *m = e->patch.module(i);
         if (m && m->typeId == "OUT") { out = m; break; }
     }
-    if (!out) return;
+    if (!out) return -1;
 
     int srcL = -1, portL = -1, srcR = -1, portR = -1;
     const std::vector<Cable> &cs = e->patch.cableList();
@@ -1630,14 +1769,31 @@ static void addOutputScope(Engine *e)
         if (cs[i].dstPort == 0) { srcL = cs[i].src; portL = cs[i].srcPort; }
         if (cs[i].dstPort == 1) { srcR = cs[i].src; portR = cs[i].srcPort; }
     }
-    if (srcL < 0) return;                       /* nothing reaches the output */
+    if (srcL < 0) return -1;                    /* nothing reaches the output */
     if (srcR < 0) { srcR = srcL; portR = portL; }
 
     const int sc = e->addModule("SCOPE",
                                 out->x + (float)panelWidth(*out) + 14.0f, out->y);
-    if (sc < 0) return;
+    if (sc < 0) return -1;
     e->connect(srcL, portL, sc, 0);
     e->connect(srcR, portR, sc, 1);
+    return sc;
+}
+
+/* The rack's own explanation, in a panel at the end of the row. Placed after
+ * the scope so the two things you read rather than hear sit together. */
+static void addNotes(Engine *e, const char *notes, int afterId)
+{
+    if (!notes || !*notes) return;
+
+    float x = 20.0f, y = 20.0f;
+    const Module *after = e->patch.module(afterId);
+    if (after) { x = after->x + (float)panelWidth(*after) + 14.0f; y = after->y; }
+
+    const int t = e->addModule("TEXT", x, y);
+    Module *m = e->patch.module(t);
+    std::string *buf = m ? m->textBuffer() : 0;
+    if (buf) *buf = notes;
 }
 
 void Engine::buildPreset(int index)
@@ -1646,7 +1802,7 @@ void Engine::buildPreset(int index)
     clear();
     Builder b = { this, 20.0f, 20.0f };
     PRESETS[index].build(b);
-    addOutputScope(this);
+    addNotes(this, PRESETS[index].info.notes, addOutputScope(this));
 }
 
 void Engine::buildDefaultPatch() { buildPreset(0); }

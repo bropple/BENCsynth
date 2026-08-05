@@ -165,6 +165,7 @@ void bs_rack_init(bs_rack *r)
     memset(&r->dragRope, 0, sizeof r->dragRope);
     r->ropes.clear();
     r->ropeKey.clear();
+    r->edits.clear();
     r->hoverCable = -1;
     r->menuModule = -1;
     r->menuRackPos = (Vector2){ 0, 0 };
@@ -359,6 +360,13 @@ void bs_rack_frame(bs_rack *r, bs_ui *ui, bs::Engine *eng, Rectangle view, float
                                 er.width, er.height * 0.5f - 2.0f };
                 bs_scope(a, sc->traceA, bs::ModuleScope::TRACE, sc->writePos, BS_ACCENT);
                 bs_scope(b, sc->traceB, bs::ModuleScope::TRACE, sc->writePos, BS_AMBER);
+            } else if (mod->typeId == "TEXT") {
+                bs::ModuleText *t = static_cast<bs::ModuleText *>(mod);
+                if ((int)r->edits.size() <= id) r->edits.resize((size_t)id + 1);
+                ui->suppress = (top != id) || r->patching;
+                if (bs_textarea(ui, 30000 + id, er, t->text,
+                                &r->edits[(size_t)id], 1)) r->edited = 1;
+                ui->suppress = 0;
             } else if (mod->typeId == "OUT") {
                 bs::ModuleOut *o = static_cast<bs::ModuleOut *>(mod);
                 Rectangle mr = { er.x, er.y + 14.0f, er.width, er.height - 20.0f };

@@ -219,6 +219,39 @@ void test_patchfile()
         }
     }
 
+    /* A scratchpad's text has to survive the round trip, and the characters
+     * that can break a line-based format have to survive it too: a newline
+     * would end the record, and a backslash is what the escaping is made of. */
+    {
+        Engine e;
+        e.init(48000.0f);
+        const int t = e.addModule("TEXT", 40, 60);
+        e.addModule("OUT", 300, 60);
+        ok(t >= 0, "a TEXT module was created");
+
+        std::string *buf = e.patch.module(t) ? e.patch.module(t)->textBuffer() : 0;
+        ok(buf != 0, "the TEXT module offers a buffer");
+        if (buf) {
+            *buf = "line one\nline two\\ with a backslash\n\nand a blank line";
+
+            ok(bs_patch_save(&e, PATH, status, (int)sizeof status) != 0,
+               "a rack with notes saved");
+
+            Engine f;
+            f.init(48000.0f);
+            ok(bs_patch_load(&f, PATH, status, (int)sizeof status) != 0,
+               "a rack with notes loaded");
+
+            std::string *back = 0;
+            for (int i = 0; i < f.patch.slotCount(); i++) {
+                Module *m = f.patch.module(i);
+                if (m && m->typeId == "TEXT") back = m->textBuffer();
+            }
+            ok(back != 0, "the TEXT module came back");
+            if (back) ok(*back == *buf, "the notes came back byte for byte");
+        }
+    }
+
     std::remove(PATH);
     std::remove(DIR);
 }

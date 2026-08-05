@@ -28,6 +28,11 @@ struct RackPreset {
      * Declared rather than inferred, so the test suite knows which silence is
      * a bug and which is the point. */
     int selfPlaying;
+    /* What the rack is doing and what to turn, dropped into a TEXT panel when
+     * it is built. A patch cannot explain itself - the cables say what is
+     * connected and nothing says why - so this is the only place the intent
+     * can live. */
+    const char *notes;
 };
 
 int               rackPresetCount();

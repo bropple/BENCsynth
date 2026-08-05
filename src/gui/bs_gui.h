@@ -17,6 +17,8 @@
 #include "raylib.h"
 #include "bs_module.h"
 
+#include <string>
+
 /* ------------------------------------------------------------------ *
  * Palette
  * ------------------------------------------------------------------ */
@@ -92,6 +94,12 @@ typedef struct bs_ui {
     /* Set for one frame when a control changed, so the caller can mark the
      * patch dirty without every widget returning a tuple. */
     int  changed;
+
+    /* Which text area has the keyboard, by caller-chosen id. Zero is nobody,
+     * and nobody is the usual state. While it is set, the window stops feeding
+     * keystrokes to the musical typing - otherwise typing a note into a
+     * scratchpad also plays it. */
+    int  focus;
 
     /* Set by the caller around a group of controls that must not take the
      * mouse this frame - a panel with another one drawn over it, or anything
@@ -219,6 +227,34 @@ void bs_menu_open(bs_ui *ui, Vector2 at, const char **items, int count, int tag)
 void bs_menu_close(bs_ui *ui);
 /* Returns the index chosen this frame, or -1. Call before bs_ui_overlay. */
 int  bs_menu_take(bs_ui *ui, int *tag);
+
+/* ------------------------------------------------------------------ *
+ * Text area
+ *
+ * A scrolling, editable, soft-wrapped text box: caret, selection, clipboard
+ * and a scrollbar when the text outgrows it.
+ *
+ * Wrapping and caret placement lean on the interface font being monospace,
+ * which Terminus is and raylib's fallback is too. That turns "which character
+ * is under this pixel" from a measuring problem into a division, and it is the
+ * difference between this being a few hundred lines and being a project.
+ *
+ * `id` is any nonzero number unique among the areas on screen; it is what
+ * focus is tracked by. Returns nonzero on any frame the text changed.
+ * ------------------------------------------------------------------ */
+
+typedef struct bs_edit {
+    int   caret;      /* byte index of the insertion point                */
+    int   sel;        /* the other end of the selection; == caret if none */
+    float scroll;     /* pixels scrolled down                             */
+    float blink;
+    int   dragText;   /* sweeping out a selection with the mouse          */
+    int   dragBar;    /* dragging the scrollbar thumb                     */
+    float dragGrab;   /* where in the thumb it was taken hold of          */
+} bs_edit;
+
+int bs_textarea(bs_ui *ui, int id, Rectangle r, std::string &text, bs_edit *st,
+                int editable);
 
 /* Draws whatever popped up, above everything. Call once, last. */
 void bs_ui_overlay(bs_ui *ui);

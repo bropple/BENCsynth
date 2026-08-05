@@ -809,6 +809,171 @@ void ModuleOut::process()
 }
 
 /* ================================================================== *
+ * TEXT - a scratchpad
+ * ================================================================== */
+
+ModuleText::ModuleText()
+{
+    /* Wide and tall, and no jacks at all. It is the one module whose whole
+     * output is read rather than heard. */
+    configure("TEXT", "NOTES", 13, 1);
+}
+
+/* ================================================================== *
+ * ARP - arpeggiator
+ *
+ * Reads a polyphonic pitch-and-gate pair and plays the held notes one at a
+ * time, in order, on a clock. That is the natural shape for it here: the
+ * keyboard module already hands out one channel per held key, so an
+ * arpeggiator is a module that collapses those channels back into one and
+ * decides which of them is sounding.
+ * ================================================================== */
+
+class ModuleArp : public Module {
+public:
+    ModuleArp() : phase(0.0f), step(-1), heldCount(0), curPitch(0.0f),
+                  gateTimer(0.0f), trigTimer(0.0f), lastClock(0.0f),
+                  rng(0x2545F491u)
+    {
+        configure("ARP", "ARP", 6, 2);
+        static const char *MODES[] = { "UP", "DOWN", "UPDN", "RAND", "PLAYED" };
+        addKnob("RATE", 0.5f, 24.0f, 8.0f, "%.2f Hz", PC_EXP);
+        addSwitch("MODE", MODES, 5, 0);
+        addKnob("OCT", 1.0f, 4.0f, 1.0f, "%.0f", PC_LIN, 1.0f);
+        addKnob("GATE", 0.05f, 0.95f, 0.50f, "%.2f");
+
+        addInput("V/OCT");
+        addInput("GATE");
+        addInput("CLOCK");
+
+        addOutput("V/OCT");
+        addOutput("GATE");
+        addOutput("TRIG");
+    }
+
+    void reset()
+    {
+        phase = 0.0f; step = -1; heldCount = 0;
+        curPitch = 0.0f; gateTimer = 0.0f; trigTimer = 0.0f; lastClock = 0.0f;
+    }
+
+    void process()
+    {
+        setAllOutputChannels(1);
+
+        /* The held notes, taken from the channels whose gate is open, and
+         * sorted - an arpeggio is about pitch order, not about which voice the
+         * allocator happened to put a key in. */
+        heldCount = 0;
+        const int ch = in(1).channels;
+        for (int c = 0; c < ch && heldCount < BS_MAX_POLY; c++) {
+            if (in(1).get(c, 0) < 1.0f) continue;
+            held[heldCount++] = in(0).get(c, 0);
+        }
+        if (pi(1) != MODE_PLAYED) {
+            for (int i = 1; i < heldCount; i++) {
+                const float k = held[i];
+                int j = i - 1;
+                while (j >= 0 && held[j] > k) { held[j + 1] = held[j]; j--; }
+                held[j + 1] = k;
+            }
+        }
+
+        const int octs = pi(2);
+        const int len  = heldCount * (octs < 1 ? 1 : octs);
+        if (len == 0) {
+            /* Nothing down: rest, and start from the top next time rather than
+             * from wherever the last chord happened to stop. */
+            step = -1;
+            phase = 0.0f;
+            gateTimer = 0.0f;
+            for (int i = 0; i < BS_BLOCK; i++) {
+                outs[0].v[0][i] = curPitch;
+                outs[1].v[0][i] = 0.0f;
+                outs[2].v[0][i] = 0.0f;
+            }
+            return;
+        }
+
+        const float rate = pv(0);
+        const float period = 1.0f / rate;
+        const float gateLen = period * pv(3);
+        const bool  external = patched(2);
+
+        for (int i = 0; i < BS_BLOCK; i++) {
+            bool tick = false;
+            if (external) {
+                const float c = in(2).get(0, i);
+                if (lastClock < 1.0f && c >= 1.0f) tick = true;
+                lastClock = c;
+            } else {
+                phase += rate * st;
+                if (phase >= 1.0f) { phase -= 1.0f; tick = true; }
+            }
+
+            if (tick) {
+                step = advance(step, len);
+                curPitch = pitchAt(step, len, octs);
+                gateTimer = gateLen;
+                trigTimer = 0.001f;
+            }
+
+            outs[0].v[0][i] = curPitch;
+            outs[1].v[0][i] = gateTimer > 0.0f ? 10.0f : 0.0f;
+            outs[2].v[0][i] = trigTimer > 0.0f ? 10.0f : 0.0f;
+            if (gateTimer > 0.0f) gateTimer -= st;
+            if (trigTimer > 0.0f) trigTimer -= st;
+        }
+    }
+
+private:
+    enum { MODE_UP = 0, MODE_DOWN, MODE_UPDOWN, MODE_RANDOM, MODE_PLAYED };
+
+    int advance(int s, int len)
+    {
+        const int mode = pi(1);
+        if (mode == MODE_RANDOM) {
+            rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
+            return (int)(rng % (unsigned)len);
+        }
+        if (mode == MODE_UPDOWN && len > 1) {
+            /* Up and back without repeating the turning points, which is what
+             * makes it a shape rather than a stutter at each end. */
+            const int span = len * 2 - 2;
+            return (s + 1) % span;
+        }
+        return (s + 1) % len;
+    }
+
+    float pitchAt(int s, int len, int octs) const
+    {
+        const int mode = pi(1);
+        int idx = s;
+        if (mode == MODE_UPDOWN && len > 1) {
+            const int span = len * 2 - 2;
+            idx = s % span;
+            if (idx >= len) idx = span - idx;
+        }
+        if (idx < 0) idx = 0;
+        if (idx >= len) idx = len - 1;
+
+        const int oct = idx / (heldCount ? heldCount : 1);
+        int note = heldCount ? (idx % heldCount) : 0;
+        if (mode == MODE_DOWN) note = heldCount - 1 - note;
+        (void)octs;
+        return held[note] + (float)oct;
+    }
+
+    float phase;
+    int   step;
+    float held[BS_MAX_POLY];
+    int   heldCount;
+    float curPitch;
+    float gateTimer, trigTimer, lastClock;
+    unsigned rng;
+};
+
+/* ================================================================== *
  * Registry
  * ================================================================== */
 
@@ -827,7 +992,9 @@ static const ModuleType TYPES[] = {
     { "ATT",   "ATT",        "UTILITY",makeT<ModuleAtt>   },
     { "DLY",   "DLY",        "EFFECT", makeT<ModuleDly>   },
     { "RVB",   "RVB",        "EFFECT", makeT<ModuleRvb>   },
+    { "ARP",   "ARP",        "SOURCE", makeT<ModuleArp>   },
     { "SCOPE", "SCOPE",      "UTILITY",makeT<ModuleScope> },
+    { "TEXT",  "TEXT / NOTES","UTILITY",makeT<ModuleText> },
     { "OUT",   "OUT",        "OUTPUT", makeT<ModuleOut>   }
 };
 

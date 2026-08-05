@@ -53,6 +53,11 @@ typedef struct bs_rack {
     std::vector<bs_rope> ropes;
     std::vector<long>    ropeKey;
 
+    /* Caret and scroll for each scratchpad panel, by module id. Kept here
+     * because a text area is a caret in a buffer that has to survive between
+     * frames, and immediate mode leaves it nowhere else to live. */
+    std::vector<bs_edit> edits;
+
     int hoverCable;        /* the cable under the pointer, for tracing a patch */
     int menuModule;        /* whose context menu is open */
     Vector2 menuRackPos;   /* where a module added from the menu should land */

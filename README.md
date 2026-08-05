@@ -117,9 +117,9 @@ a source — works as well.
 
 ## The factory racks
 
-`RACKS` in the toolbar replaces everything with one of twenty-six worked
-examples. Every one of them has a SCOPE across its output, so you can see the
-waveform as well as hear it.
+`RACKS` in the toolbar replaces everything with one of twenty-seven worked
+examples. Every one has a SCOPE across its output so you can see the waveform,
+and a NOTES panel saying what it is doing and which knob to turn.
 A modular's problem is not that it cannot make a sound, it is that it makes no
 sound until you already know what you are doing — and the fastest way to learn
 what resonance does is to be handed a rack where it is already doing something
@@ -168,6 +168,14 @@ answer to *what else is this thing for*:
 | **SNARE** | noise, a resonant filter and a very short envelope. Cutoff is the pitch of it — drop it for a tom, raise it for a hat |
 | **HOWL** | a resonant filter inside a delay's feedback path. Plays itself; the loop only works because a cycle in the patch is read one block late |
 
+And one that is the answer to *what can this thing actually do*:
+
+![GRAND TOUR](docs/grand-tour.png)
+
+| | |
+|---|---|
+| **GRAND TOUR** | every module type in the set, patched into one instrument. The keyboard never reaches the oscillators — it reaches an ARP, and the arpeggiator's clock is what plays the rack. That same clock goes through a MULT to both envelopes *and* to the sample-and-hold, so every step also grabs a random voltage, which an ATT scales down and sends to the filter. A second LFO bends the delay's time, so the echoes wow like tape. |
+
 `./bencsynth --rack PLUCK` opens straight into one, and
 `./bencsynth-render out.wav PLUCK` renders a phrase through it without a window
 or a sound card.
@@ -190,7 +198,9 @@ or a sound card.
 | **ATT** | two attenuverters with offsets. |
 | **DLY** | echo — time with CV, feedback, tone, mix. |
 | **RVB** | a small room. Size, damping, mix, stereo out. |
+| **ARP** | takes a polyphonic pitch and gate, plays the held notes one at a time on an internal or external clock. Up / down / up-down / random / as-played, octave range, gate length. |
 | **SCOPE** | two traces with a time base, so you can see what you patched. |
+| **TEXT** | a scratchpad that does nothing to the audio. Somewhere to write down what a rack is for — which is the one thing a patch cannot tell you, since the cables say what is connected and nothing says why. Saves with the patch. |
 | **OUT** | the output stage, with a peak-and-RMS meter. |
 
 Voltages follow hardware convention throughout: audio at ±5 V, one volt per
