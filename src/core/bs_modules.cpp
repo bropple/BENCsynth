@@ -371,10 +371,14 @@ public:
     ModuleVca()
     {
         configure("VCA", "VCA", 5, 2);
-        static const char *RESP[] = { "LIN", "EXP" };
+        /* RING is a third response rather than a separate module: an amplifier
+         * whose gain is allowed to go negative is a ring modulator, and that is
+         * the only difference between the two. Appended rather than inserted,
+         * so a saved patch's 0 and 1 still mean what they meant. */
+        static const char *RESP[] = { "LIN", "EXP", "RING" };
         addKnob("GAIN", 0.0f, 1.0f, 0.0f, "%.2f");
         addKnob("CV",   0.0f, 1.0f, 1.0f, "%.2f");
-        addSwitch("RESP", RESP, 2, 1);
+        addSwitch("RESP", RESP, 3, 1);
 
         addInput("IN");
         addInput("CV");
@@ -389,15 +393,25 @@ public:
 
         const float g0   = pv(0);
         const float cvA  = pv(1);
-        const bool  expo = pi(2) == 1;
+        const int   resp = pi(2);
 
         for (int c = 0; c < ch; c++) {
             for (int i = 0; i < BS_BLOCK; i++) {
+                if (resp == 2) {
+                    /* Four quadrants: the gain follows the control voltage
+                     * through zero and out the other side, so a bipolar
+                     * audio-rate CV multiplies the two signals together and
+                     * what comes out is their sum and difference frequencies
+                     * and none of either original. Scaled so +/-5 V is +/-1. */
+                    const float g = g0 + cvA * in(1).get(c, i) * 0.2f;
+                    outs[0].v[c][i] = in(0).get(c, i) * clampf(g, -1.5f, 1.5f);
+                    continue;
+                }
                 /* CV is read against the 10 V an envelope or a gate produces,
                  * so a full envelope opens the VCA fully. */
                 float g = g0 + cvA * in(1).get(c, i) * 0.1f;
                 g = clampf(g, 0.0f, 1.5f);
-                if (expo) g = (std::exp(4.0f * g) - 1.0f) * (1.0f / 53.598150f);
+                if (resp == 1) g = (std::exp(4.0f * g) - 1.0f) * (1.0f / 53.598150f);
                 outs[0].v[c][i] = in(0).get(c, i) * g;
             }
         }

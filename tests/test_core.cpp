@@ -557,13 +557,15 @@ static void test_presets()
         okf(peakOf(&buf[0], SPAN * 2) <= 1.001f, msg,
             peakOf(&buf[0], SPAN * 2), 1.0);
 
-        /* DRONE is the one rack that is meant to sound with nothing held, and
-         * the only way that happens is the filter self-oscillating. If it ever
-         * goes quiet, the resonance range has moved. */
-        if (std::strcmp(rp->name, "DRONE") == 0) {
-            okf(idle > 0.005f,
-                "DRONE idled at RMS %.4f, expected above %.3f - the filter is "
-                "supposed to be self-oscillating", idle, 0.005);
+        /* Some racks are meant to sound with nothing held down - a filter past
+         * self-oscillation, a sequence on a clock, a delay feeding itself. The
+         * preset says which it is, so this can insist on the right one:
+         * silence from those is a bug, and noise from the others is too. */
+        if (rp->selfPlaying) {
+            std::snprintf(msg, sizeof msg,
+                          "%s idled at RMS %%.4f, expected above %%.3f - it is "
+                          "supposed to play itself", rp->name);
+            okf(idle > 0.005f, msg, idle, 0.005);
         } else {
             std::snprintf(msg, sizeof msg,
                           "%s idled at RMS %%.4f, expected below %%.2f", rp->name);

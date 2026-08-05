@@ -117,8 +117,9 @@ a source — works as well.
 
 ## The factory racks
 
-`RACKS` in the toolbar replaces everything with one of fourteen worked
-examples.
+`RACKS` in the toolbar replaces everything with one of twenty-six worked
+examples. Every one of them has a SCOPE across its output, so you can see the
+waveform as well as hear it.
 A modular's problem is not that it cannot make a sound, it is that it makes no
 sound until you already know what you are doing — and the fastest way to learn
 what resonance does is to be handed a rack where it is already doing something
@@ -146,6 +147,26 @@ categories — a rack you can hum is a rack you can take apart to find out why:
 | **REESE** | two saws a hair apart, mono and low. Only works in mono — eight voices of it is mud |
 | **TRANCE GATE** | a pad behind a second VCA that a square LFO opens sixteen times a bar. Hold a chord and the rhythm is the LFO's; turn its RATE and the tempo changes |
 | **ORGAN STAB** | house chord stab, a pulse with a saw an octave above |
+
+And twelve that each exist to show one trick — an oscillator used as a
+modulator, a filter inside a delay's feedback path, an amplifier with its gain
+allowed to go negative. They are instruments, but they are also the shortest
+answer to *what else is this thing for*:
+
+| | |
+|---|---|
+| **CHORD** | three oscillators a third and a fifth apart, so one key is a chord. Retune COARSE to +3 and +7 and the whole rack turns minor |
+| **OCTAVES** | four oscillators an octave apart, mixed like drawbars. The mixer levels are the registration — additive synthesis in a modular's clothes |
+| **HARD SYNC** | one oscillator restarting another. The slave's pitch is swept but it can never finish a cycle, so what changes is the shape of each period, not the note |
+| **RING MOD** | a VCA in its four-quadrant mode, driven at audio rate. Out comes the sum and difference of two frequencies and neither original |
+| **FM BELL** | one sine bending another's pitch, with an envelope on how much. Exponential rather than through-zero FM, so it lands nearer a gamelan than an electric piano |
+| **SAMPLE HOLD** | plays itself. A square LFO clocks the sample-and-hold, an attenuverter squeezes the random voltage into an octave, and that is the pitch. Nothing is connected to the keyboard |
+| **DUB SIREN** | a mixer used as a CV summer: keyboard pitch and an LFO added *before* the oscillator, because an input jack takes one cable |
+| **WOBBLE** | the cutoff on a fast LFO with the resonance up. The same modulation TRANCE GATE puts on an amplifier, moved one module left |
+| **PWM STRINGS** | two pulses on two LFOs at *close but unequal* rates, so they drift in and out of phase forever. That drift is the whole string-machine sound |
+| **KICK** | an envelope on the pitch and no filter anywhere. Fifty milliseconds, three octaves down |
+| **SNARE** | noise, a resonant filter and a very short envelope. Cutoff is the pitch of it — drop it for a tom, raise it for a hat |
+| **HOWL** | a resonant filter inside a delay's feedback path. Plays itself; the loop only works because a cycle in the patch is read one block late |
 
 `./bencsynth --rack PLUCK` opens straight into one, and
 `./bencsynth-render out.wav PLUCK` renders a phrase through it without a window

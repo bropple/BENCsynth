@@ -23,6 +23,11 @@ namespace bs {
 struct RackPreset {
     const char *name;    /* menu label                          */
     const char *blurb;   /* one line, for the status area       */
+    /* Some racks make a sound with nothing held down - a filter past
+     * self-oscillation, a sequence clocked by an LFO, a delay feeding itself.
+     * Declared rather than inferred, so the test suite knows which silence is
+     * a bug and which is the point. */
+    int selfPlaying;
 };
 
 int               rackPresetCount();
