@@ -99,6 +99,7 @@ far down a key you click sets the velocity.
 | right-click a jack | unplug it |
 | right-click the rack | add a module |
 | right-click a module title | unpatch / reset knobs / remove |
+| `DELETE` over a module | remove it |
 | drag a module title | move the panel |
 | drag, or wheel, on a knob | turn it |
 | shift-drag a knob | turn it slowly |

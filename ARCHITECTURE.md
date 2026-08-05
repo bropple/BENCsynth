@@ -239,6 +239,33 @@ around the centre means the thing you were looking at slides away and you chase
 it with the other hand. Since scroll *is* the rack point at the viewport's top
 left, keeping the point under the cursor fixed pins the new scroll exactly.
 
+## One bug, three times
+
+A mouse press or release is true for the *whole frame* it happens on. Anything
+that opens a thing on one edge, and then later in the same frame asks whether
+that edge happened, will find that it did - and act on it.
+
+It shipped three times before the pattern was named:
+
+- The information window opened on a click and was dismissed by the same click,
+  because the dismiss test ran further down the frame and found the pointer
+  outside the panel.
+- The module and rack menus were opened by a right-click and chosen from by
+  that same right-click, in `bs_menu_take` further down the frame. Worse, the
+  pointer sat at the menu's own top-left corner, and `(m.y - rect.y - 4) / 22`
+  truncates from `-0.18` to `0` - so it selected the first entry. On the module
+  menu that entry was UNPATCH, and right-clicking a title bar appeared to strip
+  the module's cables rather than offer a menu.
+
+The rule now: whatever opens on an edge sets a flag saying it opened this
+frame, and whatever consumes that edge checks the flag first. `menuFresh` does
+this for menus and a local `justOpened` does it for the information window.
+Anything that starts *and finishes* inside one frame - a button, a knob grab -
+is not affected, which is why buttons were always fine.
+
+Two of the three were invisible on the page and obvious the moment a real click
+was sent, which is what `tools/click-test.sh` is for.
+
 ## Testing what can be wrong quietly
 
 `tests/test_core.cpp` runs against the same objects the synthesizer runs on,

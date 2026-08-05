@@ -90,6 +90,10 @@ typedef struct bs_ui {
     int       menuHover;
     Vector2   menuAnchor;
     int       menuTag;      /* what the menu belongs to, for the caller  */
+    /* Set on the frame a menu opens. A menu opened by a button press would
+     * otherwise be chosen from by that same press, which is still "pressed"
+     * for the rest of the frame - see bs_menu_take. */
+    int       menuFresh;
 
     /* Set for one frame when a control changed, so the caller can mark the
      * patch dirty without every widget returning a tuple. */

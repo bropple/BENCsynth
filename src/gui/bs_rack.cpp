@@ -171,6 +171,8 @@ void bs_rack_init(bs_rack *r)
     r->menuRackPos = (Vector2){ 0, 0 };
     r->edited = 0;
     r->presetLoaded = -1;
+    r->deleteRequest = -1;
+    r->deleteRequest = -1;
     buildAddMenu();
     buildPresetMenu();
 }
@@ -228,6 +230,7 @@ void bs_rack_frame(bs_rack *r, bs_ui *ui, bs::Engine *eng, Rectangle view, float
 
     r->edited = 0;
     r->presetLoaded = -1;
+    r->deleteRequest = -1;
 
     if (r->zoom < 0.35f) r->zoom = 0.35f;
     if (r->zoom > 2.50f) r->zoom = 2.50f;
@@ -598,6 +601,15 @@ void bs_rack_frame(bs_rack *r, bs_ui *ui, bs::Engine *eng, Rectangle view, float
     if (r->scrollX > maxScrollX) r->scrollX = maxScrollX;
     if (r->scrollY > maxScrollY) r->scrollY = maxScrollY;
 
+    /* Delete takes out whatever the pointer is over. The module menu has a
+     * REMOVE entry and always did, but a menu is somewhere you have to think
+     * to look; the key is what people try first. Not while a scratchpad has
+     * the keyboard, where Delete means delete a character. */
+    if (overView && top >= 0 && !r->patching && ui->focus == 0 &&
+        IsKeyPressed(KEY_DELETE)) {
+        r->deleteRequest = top;
+    }
+
     /* ---- the add menu ---- */
 
     if (overView && top == -1 && hoverMod == -1 && !r->patching &&
@@ -612,6 +624,13 @@ void bs_rack_frame(bs_rack *r, bs_ui *ui, bs::Engine *eng, Rectangle view, float
 
 int bs_rack_menu(bs_rack *r, bs_ui *ui, bs::Engine *eng)
 {
+    if (r->deleteRequest >= 0) {
+        eng->removeModule(r->deleteRequest);
+        r->deleteRequest = -1;
+        r->edited = 1;
+        return 1;
+    }
+
     int tag = 0;
     const int hit = bs_menu_take(ui, &tag);
     if (hit < 0) return 0;

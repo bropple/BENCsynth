@@ -69,6 +69,11 @@ typedef struct bs_rack {
      * menus, so it is the rack that acts on the choice; the window only wants
      * to know so it can say which one arrived. */
     int presetLoaded;
+
+    /* A module the pointer was over when Delete was pressed. Acted on after
+     * the frame, because removing one mid-pass would free a panel the loop is
+     * still walking. */
+    int deleteRequest;
 } bs_rack;
 
 void bs_rack_init(bs_rack *r);

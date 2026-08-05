@@ -734,6 +734,7 @@ void bs_menu_open(bs_ui *ui, Vector2 at, const char **items, int count, int tag)
     if (y < 4.0f) y = 4.0f;
 
     ui->menuOpen   = 1;
+    ui->menuFresh  = 1;
     ui->menuItems  = items;
     ui->menuCount  = count;
     ui->menuTag    = tag;
@@ -748,12 +749,26 @@ int bs_menu_take(bs_ui *ui, int *tag)
 {
     if (!ui->menuOpen) return -1;
 
-    const Vector2 m = bs_mouse();
+    const Vector2 m = GetMousePosition();
     ui->menuHover = -1;
-    if (CheckCollisionPointRec(m, ui->menuRect)) {
-        const int row = (int)((m.y - ui->menuRect.y - 4.0f) / (float)MENU_ROW);
-        if (row >= 0 && row < ui->menuCount) ui->menuHover = row;
+    /* Measured from the first row's top edge, and only downward. Dividing a
+     * small negative number by the row height and truncating gives zero, so a
+     * pointer just *above* the list reads as being on its first entry - which
+     * is how a right-click that opened a menu at the pointer ended up
+     * selecting the item under the pointer's own corner. */
+    const float rel = m.y - ui->menuRect.y - 4.0f;
+    if (rel >= 0.0f && CheckCollisionPointRec(m, ui->menuRect)) {
+        const int row = (int)(rel / (float)MENU_ROW);
+        if (row < ui->menuCount) ui->menuHover = row;
     }
+
+    /* A press is true for the whole frame it happens on, and the menus opened
+     * by a right-click on a panel or on the rack are opened by one - so
+     * without this, that same press reaches here further down the frame and
+     * chooses from the menu it just opened. The module menu's first entry is
+     * UNPATCH, which is why right-clicking a title bar appeared to strip its
+     * cables instead of offering anything. */
+    if (ui->menuFresh) { ui->menuFresh = 0; return -1; }
 
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) ||
         IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
