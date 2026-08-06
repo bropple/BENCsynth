@@ -428,6 +428,33 @@ agree with anyone about is the VST3 ABI.
 Both SDKs are MIT — CLAP always was, and Steinberg relicensed VST3 in October
 2025 — so this adds no licensing obligation beyond attribution.
 
+### Four settings the integration needs
+
+The build goes through `cmake/CMakeLists.txt` rather than clap-wrapper's own
+convenience top level, and each of those four lines is there because leaving it
+out fails in a way that does not name the cause:
+
+- **clap-wrapper as a subdirectory, not the top level.** Its
+  `top_level_default.cmake` builds every format it thinks the platform can
+  manage, and on MSVC that includes **AAX** — which then demands the Avid SDK
+  and stops the configure dead. AAX is GPL3-or-commercial and needs Avid/PACE
+  signing to load anywhere, so it is not something to acquire by accident.
+  `CLAP_WRAPPER_CAN_BUILD_AAX` is computed rather than an `option()`, so it
+  cannot be turned off from the command line; not running that file is the way
+  out.
+- **`CMAKE_CXX_STANDARD 17`.** The wrapper uses `u8""` literals, which became
+  `char8_t` in C++20 and no longer convert to `const char *`. Its own top level
+  pins 17; inherited from a compiler default it breaks, and a new enough GCC
+  now defaults to C++23.
+- **`CMAKE_POSITION_INDEPENDENT_CODE ON`.** Static libraries are linked into a
+  shared module. Without it the link fails on `relocation R_X86_64_PC32 ...
+  can not be used when making a shared object`, which never says `-fPIC`.
+- **`CMAKE_MSVC_RUNTIME_LIBRARY` static.** The VST3 SDK builds itself against
+  the static CRT and mixing the two produces `LNK2038: mismatch detected for
+  'RuntimeLibrary'` against every object in the wrapper. Static is the right
+  side regardless: the shipped VST3 imports only `KERNEL32`, `USER32`,
+  `SHELL32` and `ole32`, so it needs no Visual C++ redistributable.
+
 Versions are pinned (`clap-wrapper v0.15.1`, CLAP `1.2.10`) rather than
 tracked. The first attempt at this used CLAP 1.2.2 and failed to compile:
 clap-wrapper's main follows the CLAP SDK closely enough that it wanted
