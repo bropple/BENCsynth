@@ -283,7 +283,9 @@ jobs:
           make clap-fetch
           make vst3-fetch
       - name: Build
-        run: make vst3
+        run: |
+          make clap        # the VST3 is a shim; it is useless without this
+          make vst3
       - name: It is a VST3 bundle with the right entry point
         run: |
           find build/bencsynth.vst3 -type f
@@ -331,13 +333,16 @@ jobs:
             https://github.com/steinbergmedia/vst3sdk.git vendor/vst3sdk
           cd vendor/vst3sdk && git submodule update --init --depth 1 \
             base pluginterfaces public.sdk cmake
+      # cmake/CMakeLists.txt rather than clap-wrapper's own top level: that one
+      # builds every format the platform can manage, which on MSVC includes AAX
+      # and stops the configure dead demanding the Avid SDK.
       - name: Build
-        shell: bash
+        shell: pwsh
         run: |
-          cmake -S vendor/clap-wrapper -B build/vst3 -A x64 \
-            -DCLAP_SDK_ROOT="$PWD/vendor/clap" \
-            -DVST3_SDK_ROOT="$PWD/vendor/vst3sdk" \
-            -DCLAP_WRAPPER_OUTPUT_NAME=bencsynth
+          cmake -S cmake -B build/vst3 -A x64 `
+            -DCLAP_WRAPPER_DIR="$env:GITHUB_WORKSPACE/vendor/clap-wrapper" `
+            -DCLAP_SDK_ROOT="$env:GITHUB_WORKSPACE/vendor/clap" `
+            -DVST3_SDK_ROOT="$env:GITHUB_WORKSPACE/vendor/vst3sdk"
           cmake --build build/vst3 --target bencsynth_as_vst3 --config Release
       - name: Find and check it
         shell: bash

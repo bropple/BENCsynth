@@ -449,13 +449,13 @@ vst3-fetch:
 vst3:
 ifeq ($(CLAP_FOUND),yes)
 	@test -d $(CW_DIR) || { echo "  run 'make vst3-fetch' first."; false; }
-	cmake -S $(CW_DIR) -B $(VST3_BUILD) -DCMAKE_BUILD_TYPE=Release \
+	cmake -S cmake -B $(VST3_BUILD) -DCMAKE_BUILD_TYPE=Release \
+	    -DCLAP_WRAPPER_DIR="$(CURDIR)/$(CW_DIR)" \
 	    -DCLAP_SDK_ROOT="$(CURDIR)/vendor/clap" \
-	    -DVST3_SDK_ROOT="$(CURDIR)/$(VST3_SDK_DIR)" \
-	    -DCLAP_WRAPPER_OUTPUT_NAME=bencsynth
+	    -DVST3_SDK_ROOT="$(CURDIR)/$(VST3_SDK_DIR)"
 	cmake --build $(VST3_BUILD) --target bencsynth_as_vst3 --config Release -j
 	rm -rf $(VST3_BUNDLE)
-	cp -r $(VST3_BUILD)/Release/bencsynth.vst3 $(VST3_BUNDLE)
+	cp -r "$$(find $(VST3_BUILD) -name 'bencsynth.vst3' -maxdepth 3 | head -1)" $(VST3_BUNDLE)
 	@echo "built $(VST3_BUNDLE)"
 else
 	@echo "  no CLAP headers - run 'make clap-fetch' first."
