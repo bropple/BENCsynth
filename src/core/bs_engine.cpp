@@ -547,6 +547,140 @@ void presetPad(Builder &b)
 
 /* No sustain at all on either envelope, and enough resonance that the filter
  * envelope is audible as a chirp on the front of every note. */
+/* A piano, out of parts that have never met one.
+ *
+ * Subtractive synthesis cannot actually make an acoustic piano: a real one is
+ * a struck string whose partials are stretched sharp of the harmonic series,
+ * and nothing here can be inharmonic. What it can do is reproduce the three
+ * gestures the ear identifies a piano BY, which turn out not to be the
+ * waveform at all:
+ *
+ *   1. Amplitude decays continuously while the key is held. Not a plateau -
+ *      almost every other patch in this rack sustains, and that alone is most
+ *      of what makes them sound synthetic.
+ *   2. Brightness collapses far faster than loudness. The hammer strike is
+ *      the only bright part; a second later the same note is nearly a sine.
+ *   3. Both of those scale with velocity and with pitch. Hard notes are
+ *      brighter, high notes are shorter and thinner.
+ *
+ * So the work is in three envelopes and the filter, not the oscillators. Two
+ * saws a hair apart stand in for the two or three strings a real note has, a
+ * pulse adds the hollow midrange, and a noise burst two hundredths of a second
+ * long is the hammer hitting - remove that last one and the whole thing turns
+ * into an organ. */
+void presetPiano(Builder &b)
+{
+    b.row(R1);
+    const int kbd  = b.put("KBD");
+    const int vco1 = b.put("VCO");
+    const int vco2 = b.put("VCO");
+    const int nse  = b.put("NOISE");
+    const int vcaN = b.put("VCA");
+    const int mix  = b.put("MIX");
+    const int vcf  = b.put("VCF");
+
+    b.row(R2);
+    const int envF = b.put("ADSR");
+    const int envA = b.put("ADSR");
+    const int envN = b.put("ADSR");
+    const int vca  = b.put("VCA");
+    const int rvb  = b.put("RVB");
+    const int out  = b.put("OUT");
+
+    /* Pitch to both oscillators and to the filter: keyboard tracking is what
+     * makes the top octave thin and short instead of a loud honk. */
+    b.wire(kbd, KBD_PITCH, vco1, VCO_IN_PITCH);
+    b.wire(kbd, KBD_PITCH, vco2, VCO_IN_PITCH);
+    b.wire(kbd, KBD_PITCH, vcf,  VCF_IN_PITCH);
+
+    b.wire(kbd, KBD_GATE, envF, ADSR_IN_GATE);
+    b.wire(kbd, KBD_GATE, envA, ADSR_IN_GATE);
+    b.wire(kbd, KBD_GATE, envN, ADSR_IN_GATE);
+    b.wire(kbd, KBD_TRIG, envF, ADSR_IN_TRIG);
+    b.wire(kbd, KBD_TRIG, envA, ADSR_IN_TRIG);
+    b.wire(kbd, KBD_TRIG, envN, ADSR_IN_TRIG);
+
+    /* Velocity into the filter envelope as well as the amplifier. Playing
+     * harder on a piano does not just make it louder, it makes it brighter,
+     * and that is the half people actually hear. */
+    b.wire(kbd, KBD_VEL, envA, ADSR_IN_VEL);
+    b.wire(kbd, KBD_VEL, envF, ADSR_IN_VEL);
+    b.wire(kbd, KBD_VEL, envN, ADSR_IN_VEL);
+
+    /* Two saws a few cents apart for the strings, a narrow pulse for the
+     * hollow middle. */
+    b.wire(vco1, VCO_SAW, mix, 0);
+    b.wire(vco2, VCO_SAW, mix, 1);
+    b.wire(vco2, VCO_PLS, mix, 2);
+
+    /* The hammer. Its own envelope, because it has to be gone long before the
+     * filter envelope is. */
+    b.wire(nse, NOISE_WHT, vcaN, VCA_IN);
+    b.wire(envN, ADSR_ENV, vcaN, VCA_IN_CV);
+    b.wire(vcaN, 0, mix, 3);
+
+    b.wire(mix, 0, vcf, VCF_IN);
+    b.wire(envF, ADSR_ENV, vcf, VCF_IN_CV1);
+    b.wire(vcf, VCF_LP24, vca, VCA_IN);
+    b.wire(envA, ADSR_ENV, vca, VCA_IN_CV);
+    b.wire(vca, 0, rvb, 0);
+    b.wire(rvb, 0, out, 0);
+    b.wire(rvb, 1, out, 1);
+
+    b.set(kbd, KBD_VOICES, 8.0f);
+
+    b.set(vco1, VCO_FINE, -4.0f);
+    b.set(vco2, VCO_FINE,  5.0f);
+    b.set(vco2, VCO_PW,   0.32f);
+
+    b.set(nse, NOISE_LEVEL, 0.85f);
+    b.set(vcaN, VCA_GAIN, 0.0f);       /* the envelope opens it, nothing else */
+    b.set(vcaN, VCA_RESP, 1.0f);
+
+    b.set(mix, MIX_1, 0.52f);
+    b.set(mix, MIX_2, 0.44f);
+    b.set(mix, MIX_3, 0.20f);
+    b.set(mix, MIX_4, 0.30f);
+    b.set(mix, MIX_MASTER, 0.80f);
+
+    /* Low base cutoff and a lot of envelope: the note has to arrive bright and
+     * be dull within a second, which is a bigger sweep than most patches want.
+     * Resonance stays low - a piano has no whistle in it. */
+    b.set(vcf, VCF_CUTOFF, 320.0f);
+    b.set(vcf, VCF_RES,    0.14f);
+    b.set(vcf, VCF_DRIVE,  1.25f);
+    b.set(vcf, VCF_CV1,    0.74f);
+    b.set(vcf, VCF_KTRK,   0.85f);
+
+    /* The filter envelope is the short one. */
+    b.set(envF, ADSR_A, 0.001f); b.set(envF, ADSR_D, 0.60f);
+    b.set(envF, ADSR_S, 0.00f);  b.set(envF, ADSR_R, 0.22f);
+    b.set(envF, ADSR_VEL, 0.75f);
+
+    /* The amplifier envelope is the long one, and its S is *zero* on purpose.
+     * A sustain level is a plateau, and a piano has none - the string decays
+     * continuously from the moment it is struck. Holding at any nonzero S is
+     * what makes a synth patch sound like an organ pretending. Release is
+     * short, which is the damper coming down. */
+    b.set(envA, ADSR_A, 0.002f); b.set(envA, ADSR_D, 5.00f);
+    b.set(envA, ADSR_S, 0.00f);  b.set(envA, ADSR_R, 0.30f);
+    b.set(envA, ADSR_VEL, 0.85f);
+
+    /* Twenty milliseconds. Long enough to hear, short enough not to be a
+     * texture. */
+    b.set(envN, ADSR_A, 0.0005f); b.set(envN, ADSR_D, 0.022f);
+    b.set(envN, ADSR_S, 0.0f);    b.set(envN, ADSR_R, 0.02f);
+    b.set(envN, ADSR_VEL, 0.9f);
+
+    b.set(vca, VCA_RESP, 1.0f);
+
+    b.set(rvb, RVB_SIZE, 0.44f);
+    b.set(rvb, RVB_DAMP, 0.55f);
+    b.set(rvb, RVB_MIX,  0.17f);
+
+    b.set(out, OUT_LEVEL, 0.82f);
+}
+
 void presetPluck(Builder &b)
 {
     b.row(R1);
@@ -1814,6 +1948,8 @@ const PresetEntry PRESETS[] = {
       "SQUARE LEAD\n\nA pulse whose width the LFO keeps moving, which is what stops a square wave sounding like a test tone.\n\nTRY: set the VCO's PWM to zero. The movement stops dead and the sound goes flat - that one knob is most of what you were hearing." },      presetSquareLead },
     { { "SAW PAD",      "eight voices, two detuned saws, long reverb", 0,
       "SAW PAD\n\nEight voices, two saws pulled a few cents apart, and enough reverb to lose the edges. The slow attack is on both envelopes.\n\nTRY: hold a chord and turn VCF CV2 - that is the LFO on the cutoff, and it is what keeps a long note from standing still." }, presetPad },
+    { { "PIANO",        "struck string - decays while held, brightness first", 0,
+      "PIANO\n\nSubtractive synthesis cannot make a real piano: a struck string's partials are stretched sharp of the harmonic series and nothing here can be inharmonic. What it can copy is the three things the ear actually identifies a piano by, none of which are the waveform.\n\nOne: it decays while you hold it. Two: the brightness dies far faster than the loudness, so a note a second old is nearly a sine. Three: both scale with how hard you hit it and how high you play.\n\nSo the sound is in three envelopes, not the oscillators. Two saws a few cents apart are the strings, the pulse is the hollow midrange, and the 22 ms noise burst is the hammer.\n\nTRY: pull the NOISE mixer channel (IN4) to zero. The hammer disappears and it turns into an organ - that one twentieth of a second is most of the instrument. Then put it back and raise the amplifier envelope's S: it stops being a piano the moment it stops decaying." }, presetPiano },
     { { "PLUCK",        "no sustain, resonant filter chirp", 0,
       "PLUCK\n\nNo sustain at all on either envelope, so a held key still decays to nothing. The filter envelope is short and the resonance is high, which puts a chirp on the front of every note.\n\nTRY: raise the amplifier envelope's S and it stops being a pluck immediately." },          presetPluck },
     { { "DRONE",        "the filter is the oscillator - no keys needed", 1,
