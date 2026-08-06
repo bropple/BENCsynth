@@ -81,19 +81,29 @@ jobs:
       # Stronger than validating the Turtle in isolation: this asks lilv to go
       # looking for plugins the way a host does and checks that ours is one of
       # the things it finds. A bundle can be valid RDF and still be invisible.
+      # The system path is on LV2_PATH as well as the bundle, and not as a
+      # convenience: LV2_PATH replaces the default rather than adding to it, so
+      # with only the bundle on it lilv cannot see lv2core.ttl, cannot resolve
+      # lv2:InstrumentPlugin as a subclass of lv2:Plugin, and reports the
+      # plugin's class as the generic "Plugin". Nothing is wrong with the
+      # bundle when that happens; the search path is just missing the
+      # vocabulary. A host has both.
       - name: lilv finds it, the way a host would
         run: |
-          export LV2_PATH="$PWD/build"
+          export LV2_PATH="$PWD/build:/usr/lib/lv2"
           lv2ls | tee /tmp/found.txt
           grep -q 'bropple/BENCsynth' /tmp/found.txt
           echo "discovered"
       - name: And it reports itself as an instrument with the right ports
         run: |
-          export LV2_PATH="$PWD/build"
+          export LV2_PATH="$PWD/build:/usr/lib/lv2"
           lv2info 'https://github.com/bropple/BENCsynth' | tee /tmp/info.txt
-          grep -qi 'InstrumentPlugin' /tmp/info.txt
-          # Eleven ports: MIDI in, two audio out, eight macros.
-          test "$(grep -c 'Port ' /tmp/info.txt)" = 11
+          grep -qi 'Instrument' /tmp/info.txt
+          # Eleven: MIDI in, two audio out, eight macros. This is the seam an
+          # LV2 plugin has no compiler to guard - the Turtle and the port enum
+          # in the C have to agree, and nothing makes them.
+          test "$(grep -cE '^	Port [0-9]+:' /tmp/info.txt)" = 11
+          grep -q 'state#interface' /tmp/info.txt
       - name: It loads, plays and restores its state
         run: make lv2-test
       - name: The bundle is what a host expects to find
