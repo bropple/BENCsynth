@@ -93,7 +93,11 @@ struct BencSynthClap {
     bool       floating;        /* false: reparent into the host's window */
     uint64_t   parentHandle;
     uint32_t   guiW, guiH;
-    void      *cocoaView;       /* macOS: our view inside the host's */
+#if defined(__APPLE__)
+    bs::CocoaView *cocoaView;   /* our view inside the host's */
+#else
+    void      *cocoaView;
+#endif
     float      rate;            /* the host's, told to the editor */
     bool       shmOpen;
     bool       guiCreated;
@@ -846,8 +850,11 @@ static bool gui_set_parent(const clap_plugin_t *p, const clap_window_t *window)
     if (s->cocoaView) bs::bs_cocoa_detach(s->cocoaView);
     s->cocoaView = bs::bs_cocoa_attach(window->cocoa, (int)s->guiW, (int)s->guiH);
     if (!s->cocoaView) return false;
-    bs::bs_cocoa_set_status(s->cocoaView,
-                            "BENCsynth - the rack is not drawn here yet");
+    /* Stage 2a: prove the display path before asking anything to feed it. If
+     * this pattern appears, an IOSurface reaches the screen with the right
+     * channel order and the right way up, and what remains is transport. */
+    bs::bs_cocoa_test_pattern(s->cocoaView);
+    bs::bs_cocoa_set_status(s->cocoaView, "BENCsynth - display path test");
     s->parentHandle = (uint64_t)(uintptr_t)window->cocoa;
 #else
     return false;
