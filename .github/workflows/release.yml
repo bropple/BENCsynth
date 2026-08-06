@@ -69,7 +69,11 @@ jobs:
 
       - name: Package the program
         run: |
-          V="${GITHUB_REF_NAME:-dev}"
+          # Same trap as the publish job had: on workflow_dispatch
+          # GITHUB_REF_NAME is the branch, so this shipped a zip called
+          # bencsynth-main-windows-x86_64.zip. The input wins when it is set.
+          V="${{ github.event.inputs.tag }}"
+          [ -n "$V" ] || V="${GITHUB_REF_NAME:-dev}"
           D="bencsynth-$V-windows-x86_64"
           mkdir -p "$D"
           cp bencsynth.exe README.md ARCHITECTURE.md LICENSE NOTICE "$D"/
