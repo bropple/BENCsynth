@@ -86,6 +86,9 @@ struct BencSynthClap {
     /* ---- the editor, when there is one ---- */
     bs::ShmMap shm;
     void      *editorProc;
+    bool       floating;        /* false: reparent into the host's window */
+    uint64_t   parentHandle;
+    uint32_t   guiW, guiH;
     bool       shmOpen;
     bool       guiCreated;
     std::string bundleDir;      /* where this binary lives, to find the editor */
@@ -633,15 +636,22 @@ static const void *pl_get_extension(const clap_plugin_t *, const char *id)
 static bool gui_is_api_supported(const clap_plugin_t *, const char *api,
                                  bool is_floating)
 {
-    /* Floating only, for now. Saying yes to embedded and then producing a
-     * window the host cannot place is worse than saying no. */
-    if (!is_floating) return false;
 #if defined(_WIN32)
-    return std::strcmp(api, CLAP_WINDOW_API_WIN32) == 0;
+    if (std::strcmp(api, CLAP_WINDOW_API_WIN32) != 0) return false;
+    /* Both. Hosts built around an FX rack - REAPER is one - embed the plugin's
+     * view in their own window and never ask for a floating one, so refusing
+     * embedded means those hosts show their generic parameter list and no
+     * plugin ever gets to draw itself. The editor's window is an HWND, and
+     * SetParent works across processes. */
+    return true;
 #elif defined(__APPLE__)
-    return std::strcmp(api, CLAP_WINDOW_API_COCOA) == 0;
+    /* Floating only. Embedding here means handing an NSView across a process
+     * boundary, which needs remote-layer machinery; claiming support and
+     * producing nothing would be worse than admitting it. */
+    return std::strcmp(api, CLAP_WINDOW_API_COCOA) == 0 && is_floating;
 #else
-    return std::strcmp(api, CLAP_WINDOW_API_X11) == 0;
+    if (std::strcmp(api, CLAP_WINDOW_API_X11) != 0) return false;
+    return is_floating;
 #endif
 }
 
@@ -650,12 +660,15 @@ static bool gui_get_preferred_api(const clap_plugin_t *, const char **api,
 {
 #if defined(_WIN32)
     *api = CLAP_WINDOW_API_WIN32;
+    /* Embedded, because that is what the hosts on this platform actually do. */
+    *is_floating = false;
 #elif defined(__APPLE__)
     *api = CLAP_WINDOW_API_COCOA;
+    *is_floating = true;
 #else
     *api = CLAP_WINDOW_API_X11;
-#endif
     *is_floating = true;
+#endif
     return true;
 }
 
@@ -664,6 +677,8 @@ static bool gui_create(const clap_plugin_t *p, const char *api, bool is_floating
     BencSynthClap *s = self_of(p);
     if (!gui_is_api_supported(p, api, is_floating)) return false;
     if (s->guiCreated) return true;
+    s->floating     = is_floating;
+    s->parentHandle = 0;
 
     /* The salt keeps two instances in one project from colliding on a name. */
     static std::atomic<unsigned long> counter(0);
@@ -674,6 +689,9 @@ static bool gui_create(const clap_plugin_t *p, const char *api, bool is_floating
     s->appliedSnapSeq  = 0;
     s->appliedParamSeq = 0;
     s->pendingEdit.store(0);
+
+    s->shm.block->wantW.store(s->guiW);
+    s->shm.block->wantH.store(s->guiH);
 
     /* The editor starts from what the plugin is currently playing. */
     pushRackToEditor(s);
@@ -709,9 +727,11 @@ static void gui_destroy(const clap_plugin_t *p)
 
 static bool gui_set_scale(const clap_plugin_t *, double) { return false; }
 
-static bool gui_get_size(const clap_plugin_t *, uint32_t *w, uint32_t *h)
+static bool gui_get_size(const clap_plugin_t *p, uint32_t *w, uint32_t *h)
 {
-    *w = 1280; *h = 800;
+    BencSynthClap *s = self_of(p);
+    *w = s->guiW;
+    *h = s->guiH;
     return true;
 }
 
@@ -730,9 +750,37 @@ static bool gui_adjust_size(const clap_plugin_t *, uint32_t *, uint32_t *)
     return true;
 }
 
-/* The window belongs to another process; the host cannot size or place it. */
-static bool gui_set_size(const clap_plugin_t *, uint32_t, uint32_t) { return false; }
-static bool gui_set_parent(const clap_plugin_t *, const clap_window_t *) { return false; }
+/* Embedded, the host owns the geometry - but the window it is resizing lives
+ * in another process, so the size goes through the shared block and the editor
+ * applies it on its own thread. */
+static bool gui_set_size(const clap_plugin_t *p, uint32_t w, uint32_t h)
+{
+    BencSynthClap *s = self_of(p);
+    if (w < 640) w = 640;
+    if (h < 480) h = 480;
+    s->guiW = w;
+    s->guiH = h;
+    if (s->shmOpen) {
+        s->shm.block->wantW.store(w, std::memory_order_release);
+        s->shm.block->wantH.store(h, std::memory_order_release);
+    }
+    return true;
+}
+
+static bool gui_set_parent(const clap_plugin_t *p, const clap_window_t *window)
+{
+    BencSynthClap *s = self_of(p);
+    if (!window) return false;
+#if defined(_WIN32)
+    if (std::strcmp(window->api, CLAP_WINDOW_API_WIN32) != 0) return false;
+    s->parentHandle = (uint64_t)(uintptr_t)window->win32;
+#else
+    return false;
+#endif
+    if (s->shmOpen)
+        s->shm.block->embedParent.store(s->parentHandle, std::memory_order_release);
+    return true;
+}
 static bool gui_set_transient(const clap_plugin_t *, const clap_window_t *) { return false; }
 static void gui_suggest_title(const clap_plugin_t *, const char *) {}
 
@@ -743,6 +791,8 @@ static bool gui_show(const clap_plugin_t *p)
     if (s->editorProc && bs::bs_shm_editor_running(s->editorProc)) return true;
 
     s->shm.block->quit.store(0, std::memory_order_release);
+    s->shm.block->embedParent.store(s->floating ? 0 : s->parentHandle,
+                                    std::memory_order_release);
     const char *hint = s->bundleDir.empty() ? 0 : s->bundleDir.c_str();
     if (!bs::bs_shm_spawn_editor(hint, s->shm.name, &s->editorProc)) {
         /* Nothing to show and no way to say why through this interface. The
@@ -821,6 +871,10 @@ static const clap_plugin_t *createPlugin(const clap_host_t *host)
     s->shmOpen     = false;
     s->guiCreated  = false;
     s->appliedEditSeq = s->appliedSnapSeq = s->appliedParamSeq = 0;
+    s->floating     = true;
+    s->parentHandle = 0;
+    s->guiW = 1280;
+    s->guiH = 800;
     s->pendingEdit.store(0);
     s->bundleDir   = g_bundleDir;
     s->havePreset = 0;

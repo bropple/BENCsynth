@@ -417,15 +417,26 @@ int main(int argc, char **argv)
 #else
             const char *api = CLAP_WINDOW_API_X11;
 #endif
-            ok(g->is_api_supported(p, api, true),
-               "a floating window is supported");
-            ok(!g->is_api_supported(p, api, false),
-               "embedding is refused rather than half-promised");
-
             const char *pref = 0;
             bool floating = false;
-            ok(g->get_preferred_api(p, &pref, &floating) && floating,
-               "floating is the preferred mode");
+            ok(g->get_preferred_api(p, &pref, &floating),
+               "it states a preferred windowing mode");
+
+#if defined(_WIN32)
+            /* Hosts built around an FX rack embed and never ask for floating,
+             * so on Windows both have to work and embedded is preferred. */
+            ok(g->is_api_supported(p, api, false), "embedding is supported");
+            ok(g->is_api_supported(p, api, true), "floating is supported too");
+            ok(!floating, "embedded is preferred, which is what hosts here do");
+#else
+            ok(g->is_api_supported(p, api, true), "a floating window is supported");
+            /* Refused rather than half-promised: embedding on X11 and Cocoa
+             * needs machinery this does not have yet, and claiming it would
+             * produce a window the host cannot place. */
+            ok(!g->is_api_supported(p, api, false),
+               "embedding is refused rather than half-promised");
+            ok(floating, "floating is the preferred mode here");
+#endif
 
             uint32_t w = 0, h = 0;
             ok(g->get_size(p, &w, &h) && w > 0 && h > 0, "it reports a size");
@@ -433,7 +444,11 @@ int main(int argc, char **argv)
             /* Starting the editor needs a display and the standalone binary.
              * Without either, creating the shared block is still worth
              * checking - that is the half that runs in the plugin. */
+#if defined(_WIN32)
+            ok(g->create(p, api, false), "the GUI is created");
+#else
             ok(g->create(p, api, true), "the GUI is created");
+#endif
 
             if (std::getenv("DISPLAY") && std::getenv("BENCSYNTH_EDITOR")) {
                 const bool shown = g->show(p);

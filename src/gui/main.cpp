@@ -14,6 +14,9 @@
 #include "bs_rack.h"
 #include "bs_keyboard.h"
 #include "bs_patchfile.h"
+#if defined(_WIN32)
+#  include <windows.h>
+#endif
 #include "bs_shm.h"
 #include "bs_sync.h"
 #include "bs_filedlg.h"
@@ -468,7 +471,20 @@ int main(int argc, char **argv)
         return failed;
     }
 
+    /* Embedded in a host's window: no decorations of our own, because the
+     * host draws the frame and a title bar inside an FX rack looks like a bug.
+     * The handle is read before the window exists so the flag can be set. */
+    unsigned long long embedParent = 0;
+    if (editorShm) {
+        bs::ShmMap peek;
+        if (bs::bs_shm_open(&peek, editorShm)) {
+            embedParent = peek.block->embedParent.load();
+            bs::bs_shm_close(&peek);
+        }
+    }
+
     SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT | FLAG_VSYNC_HINT);
+    if (embedParent) SetConfigFlags(FLAG_WINDOW_UNDECORATED);
     InitWindow(WIN_W, WIN_H, "BENCsynth");
     SetWindowMinSize(WIN_MIN_W, WIN_MIN_H);
     SetTargetFPS(60);
@@ -554,6 +570,29 @@ int main(int argc, char **argv)
         shmText.resize(bs::BS_SHM_RACK_MAX);
         flat.resize(bs::BS_SHM_PARAM_MAX);
         say(&app, "editing a plugin - the host is making the sound");
+
+        /* Become a child of the host's window. SetParent works across process
+         * boundaries on Windows, which is the whole reason the editor can be a
+         * separate process and still appear inside a DAW's FX rack. The style
+         * has to change too: a window created as top-level keeps its caption
+         * and border otherwise, inside somebody else's frame. */
+#if defined(_WIN32)
+        if (embedParent) {
+            HWND child  = (HWND)GetWindowHandle();
+            HWND parent = (HWND)(uintptr_t)embedParent;
+            if (child && parent) {
+                SetWindowLongPtrA(child, GWL_STYLE,
+                                  WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS);
+                SetParent(child, parent);
+                const uint32_t w = shm.block->wantW.load();
+                const uint32_t h = shm.block->wantH.load();
+                SetWindowPos(child, 0, 0, 0,
+                             (int)(w ? w : (uint32_t)WIN_W),
+                             (int)(h ? h : (uint32_t)WIN_H),
+                             SWP_NOZORDER | SWP_SHOWWINDOW);
+            }
+        }
+#endif
     }
 
     app_retitle(&app);
@@ -704,6 +743,16 @@ int main(int argc, char **argv)
              * audio device. Draining is not optional: in editor mode nothing
              * calls render(), so anything left in this queue would sit there
              * until it filled and then be silently dropped forever. */
+            /* The host owns the geometry when embedded, and it resizes its
+             * own window, not ours - so the size arrives here instead. */
+            if (embedParent) {
+                const int w = (int)b->wantW.load(std::memory_order_acquire);
+                const int h = (int)b->wantH.load(std::memory_order_acquire);
+                if (w > 0 && h > 0 &&
+                    (w != GetScreenWidth() || h != GetScreenHeight()))
+                    SetWindowSize(w, h);
+            }
+
             bs::NoteEvent ne;
             while (g_engine.events.pop(&ne)) {
                 g_engine.keys.apply(ne);      /* keep the on-screen keys honest */

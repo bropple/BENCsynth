@@ -42,6 +42,12 @@ CORE_LIB := libbencsynth.a
 # memory. Both halves need this, and the standalone IS the editor (--editor),
 # so it is linked into the program as well as into the plugins.
 PLUGIN_SRC := src/plugin/bs_shm.cpp src/plugin/bs_sync.cpp
+# Listed as prerequisites everywhere PLUGIN_SRC is used. These describe a
+# struct that lives in shared memory and is read by two separate binaries: if
+# one is rebuilt against a new layout and the other is not, they map the same
+# bytes and disagree about what is in them, which looks exactly like an editor
+# that attaches and then does nothing.
+PLUGIN_HDR := src/plugin/bs_shm.h src/plugin/bs_sync.h
 
 GUI_SRC  := src/gui/main.cpp \
             src/gui/bs_gui.cpp \
@@ -361,7 +367,7 @@ clap-fetch:
 	mv vendor/clap-$(CLAP_VERSION) vendor/clap
 	@echo "CLAP $(CLAP_VERSION) headers in vendor/clap"
 
-$(CLAP_BINARY): $(CLAP_SRC) $(CORE_SRC) $(wildcard src/clap/Info.plist)
+$(CLAP_BINARY): $(CLAP_SRC) $(PLUGIN_HDR) $(CORE_SRC) $(wildcard src/clap/Info.plist)
 	@mkdir -p $(dir $(CLAP_BINARY))
 	$(CXX) $(filter-out -MMD -MP,$(CXXFLAGS)) $(CPPFLAGS) -I$(CLAP_INCLUDE) \
 	    -Isrc/plugin -fPIC -fvisibility=hidden \
@@ -382,7 +388,7 @@ IPCTEST := bencsynth-ipc-test$(EXE)
 ipc-test: $(IPCTEST) $(GUI)
 	./$(IPCTEST) ./$(GUI)
 
-$(IPCTEST): tools/ipc_test.cpp $(PLUGIN_SRC) $(CORE_LIB)
+$(IPCTEST): tools/ipc_test.cpp $(PLUGIN_SRC) $(PLUGIN_HDR) $(CORE_LIB)
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -Isrc/plugin -o $@ tools/ipc_test.cpp \
 	    $(PLUGIN_SRC) $(CORE_LIB) $(CLAP_RT)
 

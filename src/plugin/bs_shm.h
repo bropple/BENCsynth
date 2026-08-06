@@ -90,6 +90,14 @@ struct ShmBlock {
     std::atomic<uint32_t> noteTail;    /* written by the plugin */
     ShmNote               notes[BS_SHM_NOTE_MAX];
 
+    /* Embedding. Zero means the editor owns a top-level window; otherwise
+     * this is the host's native handle (an HWND on Windows, an X11 Window
+     * elsewhere) that the editor reparents itself into. The host then owns the
+     * geometry, so it also tells us what size to be. */
+    std::atomic<uint64_t> embedParent;
+    std::atomic<uint32_t> wantW;
+    std::atomic<uint32_t> wantH;
+
     /* The editor bumps this every frame. The plugin uses it to notice an
      * editor that died without saying goodbye. */
     std::atomic<uint32_t> alive;
