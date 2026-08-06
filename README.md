@@ -268,28 +268,60 @@ rebuilding anything.
 
 ```
 make clap-fetch && make clap-install     # CLAP - most hosts, rack and editor
-make lv2-install                          # LV2  - Ardour, Qtractor, LMMS 1.3
+make lv2-install                         # LV2  - Ardour, Qtractor, LMMS 1.3
 ```
 
-The editor is the standalone binary, so **both files have to be installed** —
-`bencsynth.clap` and `bencsynth` itself. The plugin looks for it in
-`BENCSYNTH_EDITOR`, then beside the `.clap`, then on `PATH`.
+Both copy the plugin where hosts already look, so there is nothing to configure
+in the host — restart it and it is there.
 
-builds the bundle and copies it where hosts already look — `~/.lv2` on Linux,
-`~/Library/Audio/Plug-Ins/LV2` on macOS, `%APPDATA%\LV2` on Windows. Nothing to
-configure in the host; restart it and the plugin is there. Copy the whole
-`bencsynth.lv2` *directory* if you move it by hand — the `.ttl` files beside
-the binary are what make it visible at all. It takes MIDI in, gives stereo out, exposes
-eight macro controls for automation, and stores the whole rack as text inside
-the host's project — so build a rack in the standalone, and the song reopens
-with it.
+### Where they go
 
-**LV2 rather than VST**, and that is not a preference. LMMS cannot load VST3 at
-all, and VST2's SDK has not been licensable since 2018. LV2 is the only format
-an LMMS instrument can use without a licensing problem — but it needs an LMMS
-from the **1.3 line**, since the 1.2.2 that is still called stable predates
-LMMS's LV2 support. [`docs/PLUGIN.md`](docs/PLUGIN.md) has the whole argument,
-the version matrix, and what is left to build.
+**CLAP** — a single `bencsynth.clap` file on Linux and Windows; a bundle
+directory on macOS.
+
+| | User | System |
+|---|---|---|
+| **Windows** | `%LOCALAPPDATA%\Programs\Common\CLAP` | `%COMMONPROGRAMFILES%\CLAP` |
+| **Linux** | `~/.clap` | `/usr/lib/clap` |
+| **macOS** | `~/Library/Audio/Plug-Ins/CLAP` | `/Library/Audio/Plug-Ins/CLAP` |
+
+On Windows that expands to `C:\Users\<you>\AppData\Local\Programs\Common\CLAP`.
+To open it without typing the path:
+
+```powershell
+explorer "$env:LOCALAPPDATA\Programs\Common\CLAP"
+```
+
+**LV2** — always the whole `bencsynth.lv2` *directory*, never the binary alone.
+The `.ttl` files beside it are what make it visible at all.
+
+| | User | System |
+|---|---|---|
+| **Windows** | `%APPDATA%\LV2` | `%COMMONPROGRAMFILES%\LV2` |
+| **Linux** | `~/.lv2` | `/usr/local/lib/lv2`, `/usr/lib/lv2` |
+| **macOS** | `~/Library/Audio/Plug-Ins/LV2` | `/Library/Audio/Plug-Ins/LV2` |
+
+`%APPDATA%` is `AppData\Roaming`, not `AppData` — a bundle one directory short
+of that is found by nothing and reported by nobody.
+
+### The editor is a separate file
+
+`bencsynth.clap` opens the rack by starting the standalone binary, so **both
+have to be installed**. Putting `bencsynth.exe` in the same folder as the
+`.clap` is the simplest way; the plugin looks in `BENCSYNTH_EDITOR` first, then
+beside itself, then on `PATH`.
+
+Either format takes MIDI in, gives stereo out, exposes eight macro controls for
+automation, and stores the whole rack as text in the host's project. The CLAP
+adds a rack selector reaching every preset, and the editor.
+
+**Why both formats.** LMMS cannot load VST3 at all and VST2's SDK has not been
+licensable since 2018, so LV2 is the only format an LMMS instrument can use —
+and even then it needs an LMMS from the **1.3 line**, built after April 2026,
+since the 1.2.2 that is still called stable has no LV2 support whatsoever.
+Everywhere else, CLAP is the better target: it carries the editor, and
+`clap-wrapper` turns it into VST3. [`docs/PLUGIN.md`](docs/PLUGIN.md) has the
+whole argument, the version matrix, and what is left to build.
 
 ---
 
