@@ -89,6 +89,7 @@ struct BencSynthClap {
     bool       floating;        /* false: reparent into the host's window */
     uint64_t   parentHandle;
     uint32_t   guiW, guiH;
+    float      rate;            /* the host's, told to the editor */
     bool       shmOpen;
     bool       guiCreated;
     std::string bundleDir;      /* where this binary lives, to find the editor */
@@ -429,6 +430,9 @@ static bool pl_activate(const clap_plugin_t *p, double sample_rate,
 {
     BencSynthClap *s = self_of(p);
     s->engine.init((float)sample_rate);
+    s->rate = (float)sample_rate;
+    if (s->shmOpen)
+        s->shm.block->sampleRate.store(s->rate, std::memory_order_relaxed);
     if (!s->custom) s->engine.buildPreset(s->havePreset);
     return true;
 }
@@ -442,6 +446,15 @@ static void pl_reset(const clap_plugin_t *p)
     self_of(p)->engine.panic();
 }
 
+/* Everything the host played, mirrored to the editor so its keyboard lights up
+ * and its rack shows something happening. Only host events go through here -
+ * events that arrived *from* the editor are applied directly and never echoed,
+ * or a held key would bounce between the two processes forever. */
+static inline void mirror(BencSynthClap *s, uint8_t kind, uint8_t note, float v)
+{
+    if (s->shmOpen) bs::bs_shm_push_host_note(s->shm.block, kind, note, v);
+}
+
 /* One event, already known to be due. */
 static void handleEvent(BencSynthClap *s, const clap_event_header_t *h, int at)
 {
@@ -450,15 +463,19 @@ static void handleEvent(BencSynthClap *s, const clap_event_header_t *h, int at)
     switch (h->type) {
     case CLAP_EVENT_NOTE_ON: {
         const clap_event_note_t *e = (const clap_event_note_t *)h;
-        if (e->key >= 0) s->engine.noteOn(e->key, (float)e->velocity, at);
+        if (e->key >= 0) {
+            s->engine.noteOn(e->key, (float)e->velocity, at);
+            mirror(s, bs::NE_NOTE_ON, (uint8_t)e->key, (float)e->velocity);
+        }
         break;
     }
     case CLAP_EVENT_NOTE_OFF:
     case CLAP_EVENT_NOTE_CHOKE: {
         const clap_event_note_t *e = (const clap_event_note_t *)h;
         /* key -1 is a wildcard: every note on the port. */
-        if (e->key < 0) s->engine.panic();
-        else            s->engine.noteOff(e->key, at);
+        if (e->key < 0) { s->engine.panic(); mirror(s, bs::NE_ALL_OFF, 0, 0.0f); }
+        else { s->engine.noteOff(e->key, at);
+               mirror(s, bs::NE_NOTE_OFF, (uint8_t)e->key, 0.0f); }
         break;
     }
     case CLAP_EVENT_PARAM_VALUE: {
@@ -473,21 +490,36 @@ static void handleEvent(BencSynthClap *s, const clap_event_header_t *h, int at)
         case 0x90:
             /* Note-on with zero velocity is a note-off, and has been since
              * running status made that cheaper to send. */
-            if (m[2] > 0) s->engine.noteOn(m[1], (float)m[2] / 127.0f, at);
-            else          s->engine.noteOff(m[1], at);
+            if (m[2] > 0) {
+                s->engine.noteOn(m[1], (float)m[2] / 127.0f, at);
+                mirror(s, bs::NE_NOTE_ON, m[1], (float)m[2] / 127.0f);
+            } else {
+                s->engine.noteOff(m[1], at);
+                mirror(s, bs::NE_NOTE_OFF, m[1], 0.0f);
+            }
             break;
         case 0x80:
             s->engine.noteOff(m[1], at);
+            mirror(s, bs::NE_NOTE_OFF, m[1], 0.0f);
             break;
         case 0xe0: {
             const int raw = ((int)m[2] << 7) | (int)m[1];   /* 0..16383 */
-            s->engine.setBend((float)(raw - 8192) / 8192.0f, at);
+            const float bend = (float)(raw - 8192) / 8192.0f;
+            s->engine.setBend(bend, at);
+            mirror(s, bs::NE_BEND, 0, bend);
             break;
         }
         case 0xb0:
-            if (m[1] == 1)        s->engine.setMod((float)m[2] / 127.0f, at);
-            else if (m[1] == 64)  s->engine.setSustain(m[2] >= 64, at);
-            else if (m[1] == 123 || m[1] == 120) s->engine.panic();
+            if (m[1] == 1) {
+                s->engine.setMod((float)m[2] / 127.0f, at);
+                mirror(s, bs::NE_MOD, 0, (float)m[2] / 127.0f);
+            } else if (m[1] == 64) {
+                s->engine.setSustain(m[2] >= 64, at);
+                mirror(s, bs::NE_SUSTAIN, 0, m[2] >= 64 ? 1.0f : 0.0f);
+            } else if (m[1] == 123 || m[1] == 120) {
+                s->engine.panic();
+                mirror(s, bs::NE_ALL_OFF, 0, 0.0f);
+            }
             break;
         default:
             break;
@@ -551,6 +583,14 @@ static clap_process_status pl_process(const clap_plugin_t *p,
             outR[done + i] = tmp[i * 2 + 1];
         }
         done += n;
+    }
+
+    /* What only this side knows. Once per block, and never read here. */
+    if (s->shmOpen) {
+        bs::ShmBlock *sb = s->shm.block;
+        sb->load.store(s->engine.load, std::memory_order_relaxed);
+        sb->voices.store((uint32_t)s->engine.voicesSounding(), std::memory_order_relaxed);
+        sb->voicesMax.store((uint32_t)s->engine.voicesAllocated(), std::memory_order_relaxed);
     }
 
     /* Never SLEEP: a rack can be self-playing - a filter past self-oscillation,
@@ -692,6 +732,7 @@ static bool gui_create(const clap_plugin_t *p, const char *api, bool is_floating
 
     s->shm.block->wantW.store(s->guiW);
     s->shm.block->wantH.store(s->guiH);
+    s->shm.block->sampleRate.store(s->rate, std::memory_order_relaxed);
 
     /* The editor starts from what the plugin is currently playing. */
     pushRackToEditor(s);
@@ -875,6 +916,7 @@ static const clap_plugin_t *createPlugin(const clap_host_t *host)
     s->parentHandle = 0;
     s->guiW = 1280;
     s->guiH = 800;
+    s->rate = 48000.0f;
     s->pendingEdit.store(0);
     s->bundleDir   = g_bundleDir;
     s->havePreset = 0;

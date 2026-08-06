@@ -90,6 +90,24 @@ struct ShmBlock {
     std::atomic<uint32_t> noteTail;    /* written by the plugin */
     ShmNote               notes[BS_SHM_NOTE_MAX];
 
+    /* Notes the *host* played, on their way to the editor. Without these the
+     * editor's keyboard stays dark while the DAW plays a part through it, and
+     * its scopes and meters show a rack nothing is going through - the plugin
+     * has the audio and the editor has the picture. Same ring discipline as
+     * the other direction, opposite ends. */
+    std::atomic<uint32_t> hostNoteHead;   /* written by the plugin */
+    std::atomic<uint32_t> hostNoteTail;   /* written by the editor */
+    ShmNote               hostNotes[BS_SHM_NOTE_MAX];
+
+    /* Numbers only the plugin knows. Plain relaxed atomics rather than a
+     * seqlock: each is a single word, they are read once a frame for display,
+     * and a reader that catches one an instant late has a status line that is
+     * one frame stale. */
+    std::atomic<float>    sampleRate;   /* the host's, not the editor's guess */
+    std::atomic<float>    load;
+    std::atomic<uint32_t> voices;
+    std::atomic<uint32_t> voicesMax;
+
     /* Embedding. Zero means the editor owns a top-level window; otherwise
      * this is the host's native handle (an HWND on Windows, an X11 Window
      * elsewhere) that the editor reparents itself into. The host then owns the
@@ -165,6 +183,30 @@ inline bool bs_shm_pop_note(ShmBlock *b, ShmNote *out)
     if (tail == b->noteHead.load(std::memory_order_acquire)) return false;
     *out = b->notes[tail & (BS_SHM_NOTE_MAX - 1)];
     b->noteTail.store(tail + 1, std::memory_order_release);
+    return true;
+}
+
+/* The same ring the other way round: what the DAW played, for the editor to
+ * mirror. Pushed from the audio thread, so it drops rather than waits. */
+inline bool bs_shm_push_host_note(ShmBlock *b, uint8_t kind, uint8_t note, float value)
+{
+    const uint32_t head = b->hostNoteHead.load(std::memory_order_relaxed);
+    const uint32_t tail = b->hostNoteTail.load(std::memory_order_acquire);
+    if (head - tail >= BS_SHM_NOTE_MAX) return false;
+    ShmNote &n = b->hostNotes[head & (BS_SHM_NOTE_MAX - 1)];
+    n.kind  = kind;
+    n.note  = note;
+    n.value = value;
+    b->hostNoteHead.store(head + 1, std::memory_order_release);
+    return true;
+}
+
+inline bool bs_shm_pop_host_note(ShmBlock *b, ShmNote *out)
+{
+    const uint32_t tail = b->hostNoteTail.load(std::memory_order_relaxed);
+    if (tail == b->hostNoteHead.load(std::memory_order_acquire)) return false;
+    *out = b->hostNotes[tail & (BS_SHM_NOTE_MAX - 1)];
+    b->hostNoteTail.store(tail + 1, std::memory_order_release);
     return true;
 }
 

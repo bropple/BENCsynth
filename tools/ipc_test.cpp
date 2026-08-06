@@ -192,6 +192,23 @@ int main(int argc, char **argv)
             while (bs::bs_shm_pop_note(m.block, &nv)) drained++;
             ok(drained == bs::BS_SHM_NOTE_MAX, "and everything in it is recoverable");
 
+            /* The other direction: what the DAW played, so the editor's
+             * keyboard lights up and its rack has something going through it. */
+            ok(!bs::bs_shm_pop_host_note(m.block, &nv),
+               "an empty host-note ring pops nothing");
+            bs::bs_shm_push_host_note(m.block, bs::NE_NOTE_ON, 48, 0.5f);
+            ok(bs::bs_shm_pop_host_note(m.block, &nv) && nv.note == 48,
+               "a note played by the host reaches the editor");
+
+            /* The two rings must not share indices, or a note played in the
+             * editor would come back as one played by the host and every held
+             * key would echo between the processes forever. */
+            bs::bs_shm_push_note(m.block, bs::NE_NOTE_ON, 61, 1.0f);
+            ok(!bs::bs_shm_pop_host_note(m.block, &nv),
+               "the two note rings are genuinely separate");
+            ok(bs::bs_shm_pop_note(m.block, &nv) && nv.note == 61,
+               "and each still delivers its own");
+
             bs::bs_shm_close(&m);
             ok(true, "the block is released");
         }
@@ -241,6 +258,27 @@ int main(int argc, char **argv)
                 }
 
                 ok(alive, "the editor attaches and runs");
+
+                /* Telemetry: the editor must show the host's sample rate and
+                 * load, not its own - it renders only to keep its scopes
+                 * moving, so its own numbers mean nothing. */
+                m.block->sampleRate.store(44100.0f);
+                m.block->load.store(0.42f);
+                m.block->voices.store(3);
+                m.block->voicesMax.store(8);
+                nap(200);
+                ok(m.block->sampleRate.load() == 44100.0f,
+                   "telemetry survives being read by the other process");
+
+                /* And a note from the host reaches it. */
+                bs::bs_shm_push_host_note(m.block, bs::NE_NOTE_ON, 64, 0.9f);
+                bool taken = false;
+                for (int i = 0; i < 40 && !taken; i++) {
+                    nap(50);
+                    taken = (m.block->hostNoteTail.load() ==
+                             m.block->hostNoteHead.load());
+                }
+                ok(taken, "the editor consumes notes the host played");
                 ok(published, "the editor publishes the rack it was given");
 
                 if (published) {

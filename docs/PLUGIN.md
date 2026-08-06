@@ -330,17 +330,58 @@ if the events reach the plugin. Draining it is not optional either: nothing in
 editor mode calls `render()`, so anything left in the engine's own queue would
 sit there until it filled and then be dropped forever.
 
-### Floating, not embedded
+### What the plugin tells the editor
 
-`gui.is_api_supported` returns true for floating and **false for embedded**. A
-raylib window is a top-level window GLFW created and owns; embedding means
-reparenting it into a host-supplied handle — `SetParent` on Windows,
-`XReparentWindow` on X11, and something considerably less pleasant on macOS.
-Claiming embedded support and then producing a window the host cannot place is
-worse than refusing it.
+The editor renders nothing that reaches a speaker, so everything it draws from
+audio would otherwise be dead: a flat scope, a still meter, a load of 0% and a
+sample rate that was a compiled-in constant rather than the host's.
 
-This is exactly why CLAP came before VST3 even after VST3 went MIT: `IPlugView`
-has no floating mode. Embedding is the work that route needs.
+Three things fix that, all travelling plugin → editor:
+
+- **Telemetry** — sample rate, load, sounding and allocated voices. Plain
+  relaxed atomics, not a seqlock: each is one word, read once a frame for a
+  status line, and one frame stale is invisible.
+- **Host notes** — a second ring, opposite direction to the editor's own. The
+  editor applies them to its engine so the on-screen keyboard lights up while
+  the DAW plays a part. Deliberately never echoed back, or a held key would
+  bounce between the processes forever. The two rings have separate indices and
+  a test enforces it.
+- **A shadow render.** Scopes, meters and envelope displays are modules reading
+  their own inputs, so there is no signal in the editor's process unless the
+  editor makes one. It runs the same graph with the same notes and throws the
+  audio away.
+
+The shadow render is honest about what it is: the picture is the editor's own
+render, not the plugin's output, so a waveform can sit at a different phase
+than what you hear. Shape and level are right, which is what a scope is for. It
+is paced by the frame clock and clamped to ~170 ms, so a window that stalls
+comes back and catches up rather than rendering a second of audio in one go.
+
+### Embedded, and floating where it has to be
+
+Floating was the first attempt and it was not enough. Hosts built around an FX
+rack — REAPER is one — embed the plugin's view in their own window and never
+ask for a floating one, so a floating-only plugin gets no call at all and the
+host falls back to its generic parameter list. That is exactly what happened.
+
+On Windows both modes work and **embedded is preferred**, because it is what
+hosts there actually do. The editor reparents its own window into the host's
+with `SetParent`, which works across process boundaries, and drops its caption
+and border — a title bar inside an FX rack reads as a bug. Size arrives through
+the shared block, since the host resizes its window rather than ours.
+
+That reparenting lives in `src/plugin/bs_embed.cpp` for a specific reason:
+raylib and `<windows.h>` both define `Rectangle`, `CloseWindow` and
+`ShowCursor`, and the documented workaround — `NOGDI` and `NOUSER` — removes
+precisely the USER functions `SetParent` needs. So the two headers never share
+a translation unit and a `void *` crosses between them.
+
+X11 and Cocoa remain floating. XEmbed and cross-process `NSView` embedding are
+the outstanding work there, and claiming support without them produces a window
+the host cannot place.
+
+Embedding is also most of what a VST3 needs, since `IPlugView` has no floating
+mode at all — so this was the work that route wanted anyway.
 
 ### Testing it
 

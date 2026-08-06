@@ -259,10 +259,21 @@ a build does not.
 
 ## As a plugin
 
+![BENCsynth running as a CLAP inside REAPER](docs/bencsynth-in-reaper.png)
+
+The whole rack, inside a DAW. The CLAP opens the real editor — cables, physics,
+keyboard — and the plugin plays what you patch. Notes from the host light up
+the keyboard and drive the scopes; knob moves reach the audio without
+rebuilding anything.
+
 ```
-make clap-fetch && make clap-install     # CLAP - most hosts, rack selector
+make clap-fetch && make clap-install     # CLAP - most hosts, rack and editor
 make lv2-install                          # LV2  - Ardour, Qtractor, LMMS 1.3
 ```
+
+The editor is the standalone binary, so **both files have to be installed** —
+`bencsynth.clap` and `bencsynth` itself. The plugin looks for it in
+`BENCSYNTH_EDITOR`, then beside the `.clap`, then on `PATH`.
 
 builds the bundle and copies it where hosts already look — `~/.lv2` on Linux,
 `~/Library/Audio/Plug-Ins/LV2` on macOS, `%APPDATA%\LV2` on Windows. Nothing to

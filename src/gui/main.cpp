@@ -53,6 +53,11 @@ static void audio_cb(void *buffer, unsigned int frames)
  * Header
  * ------------------------------------------------------------------ */
 
+/* Negative / zero mean "this process is the whole program" - see the status
+ * line below for why an editor must not report its own. */
+static float g_hostLoad = -1.0f;
+static float g_hostRate = 0.0f;
+
 static int draw_header(bs_ui *ui, Rectangle r, const bs::Engine *eng, int infoOpen)
 {
     DrawRectangleRec(r, BS_RACK);
@@ -88,9 +93,13 @@ static int draw_header(bs_ui *ui, Rectangle r, const bs::Engine *eng, int infoOp
      * anything while playing is how many are audible. Read through the
      * published counters - the voice array belongs to the audio thread. */
     char buf[128];
+    /* While editing a plugin the interesting numbers belong to the other
+     * process: this one renders only to keep its own scopes moving, so its
+     * load is meaningless and its sample rate is a compiled-in guess. */
     std::snprintf(buf, sizeof buf, "VOICES %d/%d    LOAD %2.0f%%    %d Hz",
                   eng->voicesSounding(), eng->voicesAllocated(),
-                  (double)(eng->load * 100.0f), SAMPLE_RATE);
+                  (double)((g_hostLoad >= 0.0f ? g_hostLoad : eng->load) * 100.0f),
+                  (int)(g_hostRate > 0.0f ? g_hostRate : (float)SAMPLE_RATE));
     const float w = bs_measure(ui, BS_F_SMALL, buf, 1.0f);
     bs_text_spaced(ui, BS_F_SMALL, buf, info.x - w - 16.0f,
                    r.y + (r.height - BS_F_SMALL) * 0.5f, BS_DIM);
@@ -745,6 +754,52 @@ int main(int argc, char **argv)
             while (g_engine.events.pop(&ne)) {
                 g_engine.keys.apply(ne);      /* keep the on-screen keys honest */
                 bs_shm_push_note(b, ne.kind, ne.note, ne.value);
+            }
+
+            /* What the DAW played. Applied to this engine so the on-screen
+             * keyboard lights up and the rack has something going through it -
+             * and deliberately not pushed back the other way, or a held note
+             * would bounce between the processes forever. */
+            bs::ShmNote hn;
+            while (bs::bs_shm_pop_host_note(b, &hn)) {
+                bs::NoteEvent he;
+                he.kind   = hn.kind;
+                he.note   = hn.note;
+                he.value  = hn.value;
+                he.offset = 0;
+                g_engine.keys.apply(he);
+            }
+
+            g_hostLoad = b->load.load(std::memory_order_relaxed);
+            g_hostRate = b->sampleRate.load(std::memory_order_relaxed);
+            if (g_hostRate > 0.0f && g_engine.patch.sampleRate() != g_hostRate)
+                g_engine.patch.setSampleRate(g_hostRate);
+
+            /* Render, and throw the audio away.
+             *
+             * The scopes, meters and envelope displays are modules reading
+             * their own inputs - there is no signal in this process unless
+             * this process produces one, and a scope that never moves while
+             * the DAW plays through the rack is worse than no scope. So the
+             * editor runs the same graph with the same notes and discards the
+             * result. The picture is this render, not the plugin's, so a
+             * waveform can sit at a different phase than what you hear; the
+             * shape and the level are right, which is what a scope is for.
+             *
+             * Paced by the frame clock, and clamped: a stalled window must not
+             * come back and render a second of audio in one go. */
+            {
+                static float carry = 0.0f;
+                carry += dt * g_engine.patch.sampleRate();
+                int want = (int)carry;
+                if (want > 8192) want = 8192;        /* ~170 ms, then give up */
+                carry -= (float)want;
+                float scratch[2 * 256];
+                while (want > 0) {
+                    const int n = want > 256 ? 256 : want;
+                    g_engine.render(scratch, n);
+                    want -= n;
+                }
             }
 
             const uint64_t sig = bs::bs_structure_signature(&g_engine);
