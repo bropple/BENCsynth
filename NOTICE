@@ -39,6 +39,20 @@ raylib is not vendored in this repository. Release builds link it statically
 from a copy built during the release job; see .github/workflows/release.yml.
 
 --------------------------------------------------------------------------
+LV2
+--------------------------------------------------------------------------
+
+The plugin build compiles against the LV2 headers. They are not vendored here -
+`make lv2` uses the system's, and says so plainly when there are none.
+
+    Copyright (c) 2006-2020 Steve Harris, David Robillard and others
+    ISC licence
+
+LV2 was chosen over VST because Steinberg's VST2 SDK has not been licensable
+since 2018 and VST3 cannot be loaded by the host this targets. No Steinberg
+code or headers are used anywhere in this project.
+
+--------------------------------------------------------------------------
 Terminus TTF
 --------------------------------------------------------------------------
 

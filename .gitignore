@@ -37,3 +37,7 @@ shots/
 # Stray screenshots from --shot, which writes to the working directory.
 /*.png
 !docs/*.png
+
+# The LV2 bundle is built, not committed.
+build/
+bencsynth-lv2-host

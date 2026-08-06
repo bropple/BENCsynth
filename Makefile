@@ -4,6 +4,9 @@
 #   make test       the core test, which needs no raylib and no sound card
 #   make render     a phrase through the default rack, written to a .wav
 #   make icons      regenerate assets/icon from the star geometry in the code
+#   make lv2        the LV2 plugin, for LMMS and every other LV2 host
+#   make lv2-test   load the bundle in a tiny host and play it
+#   make lv2-install    copy the bundle where a host will find it
 #   make core       just the DSP library
 #   make info       what the build decided about raylib, when it decided wrong
 #
@@ -47,6 +50,41 @@ GUI      := bencsynth$(EXE)
 TEST_SRC := tests/test_core.cpp tests/test_patchfile.cpp
 TEST_OBJ := $(TEST_SRC:.cpp=.o)
 TEST     := bencsynth-test$(EXE)
+
+# ------------------------------------------------------------------
+# LV2
+#
+# LMMS cannot load VST3 and will not be given a VST2 - see docs/PLUGIN.md.
+# LV2 is a plain C API with headers and no SDK licence, which is why this is
+# forty lines of makefile rather than a vendored tree.
+#
+# A bundle is a directory: two Turtle files describing the plugin and one
+# shared object implementing it.
+# ------------------------------------------------------------------
+
+LV2_SRC    := src/lv2/bencsynth_lv2.cpp
+LV2_BUNDLE := build/bencsynth.lv2
+
+ifeq ($(UNAME_S),Darwin)
+  LV2_LIB_EXT := .dylib
+  LV2_SHARED  := -dynamiclib
+else ifeq ($(OS),Windows_NT)
+  LV2_LIB_EXT := .dll
+  LV2_SHARED  := -shared
+else
+  LV2_LIB_EXT := .so
+  LV2_SHARED  := -shared
+endif
+
+LV2_CFLAGS := $(shell pkg-config --cflags lv2 2>/dev/null)
+LV2_FOUND  := $(shell pkg-config --exists lv2 2>/dev/null && echo yes)
+
+# Where a bundle goes to be found.
+ifeq ($(UNAME_S),Darwin)
+  LV2_INSTALL_DIR ?= $(HOME)/Library/Audio/Plug-Ins/LV2
+else
+  LV2_INSTALL_DIR ?= $(HOME)/.lv2
+endif
 
 RENDER_SRC := tools/render_wav.cpp
 RENDER_OBJ := $(RENDER_SRC:.cpp=.o)
@@ -125,7 +163,7 @@ endif
 
 # ------------------------------------------------------------------
 
-.PHONY: all core test clean info run render icons
+.PHONY: all core test clean info run render icons lv2 lv2-install lv2-validate lv2-test
 
 
 all: $(GUI)
@@ -164,6 +202,53 @@ $(RENDER): $(RENDER_OBJ) $(CORE_LIB)
 run: $(GUI)
 	./$(GUI)
 
+# ------------------------------------------------------------------
+# The plugin. Position-independent because it is loaded into somebody else's
+# process, and the core is compiled again here rather than reusing
+# libbencsynth.a, which is not built -fPIC.
+# ------------------------------------------------------------------
+
+lv2:
+ifeq ($(LV2_FOUND),yes)
+	@$(MAKE) --no-print-directory $(LV2_BUNDLE)
+else
+	@echo "  no LV2 headers found - install the 'lv2' development package."
+	@echo "  Everything else still builds; this target is the plugin only."
+	@false
+endif
+
+$(LV2_BUNDLE): $(LV2_SRC) $(CORE_SRC) src/lv2/bencsynth.ttl src/lv2/manifest.ttl.in
+	@mkdir -p $(LV2_BUNDLE)
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(LV2_CFLAGS) -fPIC -fvisibility=hidden \
+	    $(LV2_SHARED) -o $(LV2_BUNDLE)/bencsynth$(LV2_LIB_EXT) \
+	    $(LV2_SRC) $(CORE_SRC) -lm
+	sed 's|@LIB_EXT@|$(LV2_LIB_EXT)|' src/lv2/manifest.ttl.in > $(LV2_BUNDLE)/manifest.ttl
+	cp src/lv2/bencsynth.ttl $(LV2_BUNDLE)/bencsynth.ttl
+	@echo "built $(LV2_BUNDLE)"
+
+# The Turtle has to describe the ports the C actually connects, and nothing in
+# the compiler checks that. lv2_validate reads the bundle the way a host will.
+lv2-validate: lv2
+	lv2_validate $(LV2_BUNDLE)/*.ttl && echo "the bundle describes itself correctly"
+
+# Loads the bundle the way a host does and plays it. Compiling proves nothing
+# about whether the ports are connected to the right buffers or whether state
+# survives a round trip; this does.
+LV2HOST := bencsynth-lv2-host$(EXE)
+
+lv2-test: lv2 $(LV2HOST)
+	./$(LV2HOST) $(LV2_BUNDLE)/bencsynth$(LV2_LIB_EXT)
+
+$(LV2HOST): tools/lv2_host.cpp
+	$(CXX) $(CXXFLAGS) $(LV2_CFLAGS) -o $@ $< -ldl
+
+lv2-install: lv2
+	mkdir -p "$(LV2_INSTALL_DIR)"
+	rm -rf "$(LV2_INSTALL_DIR)/bencsynth.lv2"
+	cp -r $(LV2_BUNDLE) "$(LV2_INSTALL_DIR)/"
+	@echo "installed to $(LV2_INSTALL_DIR)/bencsynth.lv2"
+
+
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $<
 
@@ -189,6 +274,7 @@ info:
 clean:
 	rm -f $(CORE_OBJ) $(GUI_OBJ) $(TEST_OBJ) $(RENDER_OBJ) \
 	      $(CORE_OBJ:.o=.d) $(GUI_OBJ:.o=.d) $(TEST_OBJ:.o=.d) $(RENDER_OBJ:.o=.d) \
-	      $(CORE_LIB) $(GUI) $(TEST) $(RENDER) src/gui/*.res.o
+	      $(CORE_LIB) $(GUI) $(TEST) $(RENDER) $(LV2HOST) src/gui/*.res.o
+	rm -rf $(LV2_BUNDLE)
 
 -include $(CORE_OBJ:.o=.d) $(GUI_OBJ:.o=.d) $(TEST_OBJ:.o=.d) $(RENDER_OBJ:.o=.d)

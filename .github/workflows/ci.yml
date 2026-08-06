@@ -50,6 +50,49 @@ jobs:
           path: bencsynth-demo.wav
           if-no-files-found: error
 
+  # The plugin is the one part that cannot be checked by compiling it. A bundle
+  # that builds, exports lv2_descriptor and validates as Turtle can still
+  # connect the wrong port to the wrong buffer or hand back state it cannot
+  # read again - so this loads it the way a host does and plays it.
+  lv2:
+    name: lv2 plugin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: LV2 headers and validator
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lv2-dev lv2-utils
+      - name: Build the bundle
+        run: make lv2
+      - name: It describes itself correctly
+        run: make lv2-validate
+      - name: It loads, plays and restores its state
+        run: make lv2-test
+      - name: The bundle is what a host expects to find
+        run: |
+          ls -l build/bencsynth.lv2
+          test -f build/bencsynth.lv2/manifest.ttl
+          test -f build/bencsynth.lv2/bencsynth.ttl
+          test -f build/bencsynth.lv2/bencsynth.so
+          # lv2_descriptor must be visible, or a host sees a library with no
+          # plugin in it and says nothing useful about why.
+          nm -D --defined-only build/bencsynth.lv2/bencsynth.so | grep -q lv2_descriptor
+          echo "ok"
+      - name: Package
+        run: |
+          D="bencsynth-lv2-$(git rev-parse --short HEAD)"
+          mkdir -p "$D"
+          cp -r build/bencsynth.lv2 "$D"/
+          cp README.md LICENSE NOTICE docs/PLUGIN.md "$D"/
+          tar czf "$D.tar.gz" "$D"
+          echo "PKG=$D.tar.gz" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bencsynth-lv2
+          path: ${{ env.PKG }}
+          if-no-files-found: error
+
   linux:
     name: linux
     runs-on: ubuntu-latest

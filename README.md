@@ -41,6 +41,8 @@ otherwise stays out of the way.
 make            # the synthesizer
 make test       # the core tests - no raylib, no sound card needed
 make render     # a phrase through the default rack, written to a .wav
+make lv2        # the LV2 plugin, for LMMS and every other LV2 host
+make lv2-test   # load the plugin in a tiny host and play it
 make icons      # regenerate assets/icon from the star geometry in the code
 make info       # what the build decided about raylib
 ```
@@ -176,6 +178,12 @@ answer to *what else is this thing for*:
 | **SNARE** | noise, a resonant filter and a very short envelope. Cutoff is the pitch of it — drop it for a tom, raise it for a hat |
 | **HOWL** | a resonant filter inside a delay's feedback path. Plays itself; the loop only works because a cycle in the patch is read one block late |
 
+And one for a certain 1984 chase scene:
+
+| | |
+|---|---|
+| **AXEL** | a bright mono lead — a saw and a pulse five cents apart, resonance just high enough to whistle, and a slapback echo doing as much period work as the oscillators |
+
 And one that is the answer to *what can this thing actually do*:
 
 ![GRAND TOUR](docs/grand-tour.png)
@@ -246,8 +254,23 @@ from the one in the `.ico`. It needs ImageMagick; the results are committed, so
 a build does not.
 
 `ARCHITECTURE.md` goes into why it is arranged that way.
-[`docs/PLUGIN.md`](docs/PLUGIN.md) covers running BENCsynth inside a host —
-which format, which LMMS, and what is left to build.
+
+---
+
+## As a plugin
+
+`make lv2` builds `build/bencsynth.lv2`; `make lv2-install` copies it to
+`~/.lv2` where a host will find it. It takes MIDI in, gives stereo out, exposes
+eight macro controls for automation, and stores the whole rack as text inside
+the host's project — so build a rack in the standalone, and the song reopens
+with it.
+
+**LV2 rather than VST**, and that is not a preference. LMMS cannot load VST3 at
+all, and VST2's SDK has not been licensable since 2018. LV2 is the only format
+an LMMS instrument can use without a licensing problem — but it needs an LMMS
+from the **1.3 line**, since the 1.2.2 that is still called stable predates
+LMMS's LV2 support. [`docs/PLUGIN.md`](docs/PLUGIN.md) has the whole argument,
+the version matrix, and what is left to build.
 
 ---
 

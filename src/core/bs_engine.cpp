@@ -1730,6 +1730,75 @@ void presetGrandTour(Builder &b)
     b.set(out,  OUT_LEVEL, 0.55f);
 }
 
+/* A bright monophonic lead of a very particular 1984 vintage: a saw and a
+ * pulse a few cents apart, a filter open enough to be piercing with just
+ * enough resonance to whistle, and envelopes fast enough that a staccato line
+ * stays staccato. The slapback echo is doing as much period work as the
+ * oscillators are.
+ *
+ * The original was a Jupiter-8, which is two oscillators and a filter - so
+ * this is the same arrangement rather than an impression of one. */
+void presetAxel(Builder &b)
+{
+    b.row(R1);
+    const int kbd  = b.put("KBD");
+    const int vco1 = b.put("VCO");
+    const int vco2 = b.put("VCO");
+    const int mix  = b.put("MIX");
+    const int vcf  = b.put("VCF");
+    const int envF = b.put("ADSR");
+    const int envA = b.put("ADSR");
+    const int vca  = b.put("VCA");
+
+    b.row(R2);
+    b.x = 640.0f;
+    const int dly = b.put("DLY");
+    const int rvb = b.put("RVB");
+    const int out = b.put("OUT");
+
+    b.wire(kbd, KBD_PITCH, vco1, VCO_IN_PITCH);
+    b.wire(kbd, KBD_PITCH, vco2, VCO_IN_PITCH);
+    b.wire(kbd, KBD_GATE,  envF, ADSR_IN_GATE);
+    b.wire(kbd, KBD_GATE,  envA, ADSR_IN_GATE);
+    b.wire(kbd, KBD_TRIG,  envF, ADSR_IN_TRIG);
+    b.wire(kbd, KBD_TRIG,  envA, ADSR_IN_TRIG);
+
+    b.wire(vco1, VCO_SAW, mix, MIX_1);
+    b.wire(vco2, VCO_PLS, mix, MIX_2);
+    b.wire(mix, 0, vcf, VCF_IN);
+    b.wire(envF, ADSR_ENV, vcf, VCF_IN_CV1);
+    b.wire(kbd, KBD_PITCH, vcf, VCF_IN_PITCH);
+    b.wire(vcf, VCF_LP24, vca, VCA_IN);
+    b.wire(envA, ADSR_ENV, vca, VCA_IN_CV);
+    b.wire(vca, 0, dly, 0);
+    b.wire(dly, 0, rvb, 0);
+    b.wire(rvb, 0, out, 0);
+    b.wire(rvb, 1, out, 1);
+
+    /* Mono and retriggering rather than legato: the line is played detached,
+     * and every note wants its own attack. */
+    b.set(kbd,  KBD_MODE, (float)KM_MONO);
+    b.set(kbd,  KBD_VOICES, 1.0f);
+    b.set(vco1, VCO_FINE, -5.0f);
+    b.set(vco2, VCO_FINE,  6.0f);
+    b.set(vco2, VCO_PW, 0.32f);
+    b.set(mix,  MIX_1, 0.60f); b.set(mix, MIX_2, 0.55f);
+    b.set(vcf,  VCF_CUTOFF, 950.0f); b.set(vcf, VCF_RES, 0.42f);
+    b.set(vcf,  VCF_DRIVE, 1.5f);    b.set(vcf, VCF_CV1, 0.30f);
+    b.set(vcf,  VCF_KTRK, 0.50f);
+    b.set(envF, ADSR_A, 0.001f); b.set(envF, ADSR_D, 0.30f);
+    b.set(envF, ADSR_S, 0.30f);  b.set(envF, ADSR_R, 0.20f);
+    b.set(envA, ADSR_A, 0.002f); b.set(envA, ADSR_D, 0.35f);
+    b.set(envA, ADSR_S, 0.80f);  b.set(envA, ADSR_R, 0.12f);
+    b.set(vca,  VCA_RESP, 1.0f);
+    b.set(dly,  DLY_TIME, 0.30f); b.set(dly, DLY_FBK, 0.28f);
+    b.set(dly,  DLY_MIX, 0.20f);
+    b.set(rvb,  RVB_SIZE, 0.50f); b.set(rvb, RVB_MIX, 0.18f);
+    /* Loud, because it is a lead and a lead that sits politely in the mix is
+     * not doing its job. */
+    b.set(out,  OUT_LEVEL, 0.85f);
+}
+
 typedef void (*PresetFn)(Builder &);
 
 struct PresetEntry { RackPreset info; PresetFn build; };
@@ -1788,6 +1857,10 @@ const PresetEntry PRESETS[] = {
       "SNARE\n\nNoise, a filter with the resonance most of the way up, and an envelope short enough to be a hit. There is no oscillator.\n\nTRY: VCF CUTOFF is the pitch of it. Drop it and the snare becomes a tom; raise it and it becomes a hat." }, presetSnare },
     { { "HOWL",         "a filter inside a delay's feedback - plays itself", 1,
       "HOWL\n\nA resonant filter inside a delay's feedback path - a loop the patch cannot resolve in one pass, so one cable in it is read a block late, and that block of delay is what keeps it from being an infinite regress.\n\nTRY: MIX level 2 is the loop gain. Below about 0.9 it dies away; above it, it climbs until the filter saturates." }, presetHowl },
+
+    { { "AXEL",         "a bright mono lead of a very particular 1984 vintage", 0,
+      "AXEL\n\nA saw and a pulse five cents apart, a filter open enough to be piercing with just enough resonance to whistle, and envelopes fast enough that a staccato line stays staccato.\n\nMono and retriggering rather than legato - the line is played detached and every note wants its own attack. The slapback echo is doing as much period work as the oscillators are.\n\nThe original was a Jupiter-8, which is two oscillators and a filter, so this is the same arrangement rather than an impression of one.\n\nTRY: turn DLY MIX down and most of the decade goes with it. Then put VCF RES up to 0.7 for the version that hurts." },
+      presetAxel },
 
     { { "GRAND TOUR",   "every module in the set, patched into one instrument", 0,
       "GRAND TOUR\n\nEvery module type in the rack, working at once.\n\nThe signal path is ordinary: three oscillators through a mixer into the ladder, two envelopes, a delay and a reverb. What is not ordinary is everything driving it.\n\nThe keyboard never reaches the oscillators. It reaches an ARP, and the arpeggiator's clock is what plays the rack. That same clock is sent through a MULT to both envelopes AND to the noise module's sample-and-hold, so every arpeggio step also grabs a new random voltage - which an ATT scales down to something musical and sends to the filter's second CV input.\n\nA second LFO bends the delay's TIME, which is why the echoes wow like tape.\n\nTRY: hold a chord and change the ARP's MODE and OCT. Then turn the ATT's AMT 1 to zero and hear the filter stop jumping." },
