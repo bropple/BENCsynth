@@ -15,7 +15,7 @@ That leaves four candidates, and the ranking is not close:
 |---|---|---|---|
 | **LV2** | native, works now | Ardour, Qtractor, Carla, REAPER, Mixbus | **first target** |
 | **CLAP** | in development, not merged | Bitwig, REAPER, Studio One, FL | **second target** |
-| VST3 | not supported | everywhere | via clap-wrapper, later |
+| VST3 | not supported | everywhere | MIT since Oct 2025 — viable directly |
 | VST2 | supported | everywhere old | no — see below |
 
 **VST2 is out on licensing, not on merit.** Steinberg withdrew the VST2 SDK in
@@ -25,6 +25,27 @@ observation. For a project that has been careful about the OFL on its font and
 carries a NOTICE file, that is not a trade worth making for one host's older
 plugin path.
 
+**VST3 stopped being a licensing question on 29 October 2025.** Steinberg
+relicensed the VST3 SDK (3.8) under **MIT**, replacing the old dual
+GPLv3+/proprietary arrangement. There is no agreement to sign and no
+proprietary licence to manage — `vst3sdk/LICENSE.txt` is a plain MIT grant, and
+clap-wrapper's own licensing table lists it as such, with only Steinberg's
+trademark guidelines applying to use of the VST name and logo. (ASIO went
+GPLv3 in the same announcement, which is a separate matter and does not affect
+us.)
+
+That changes VST3 from "reachable through a wrapper" to a target we could write
+directly, and it is the format with by far the widest host support — Ableton,
+Cubase, FL Studio, Studio One, Bitwig, REAPER, Ardour and Mixbus all load it.
+It does not change the LMMS answer: LMMS has zero VST3 code, so none of this
+helps there.
+
+The one place VST3 is genuinely worse than CLAP is the editor. `IPlugView`
+embeds into a host-supplied parent window (HWND, NSView, X11) and VST3 has no
+first-class floating mode, whereas CLAP supports plugin-created floating
+windows outright. That matters here because raylib owns its own top-level
+window — see the editor section.
+
 **CLAP is not ready for LMMS yet.** Support is a draft pull request
 ([LMMS/lmms#7199](https://github.com/LMMS/lmms/pull/7199)) — 137 commits,
 tested only on Linux Mint, with known parameter-automation problems and a note
@@ -33,7 +54,8 @@ landed.
 
 So: **LV2 first**, because it is the only format an instrument can use in LMMS
 without a licensing problem, and it is a plain C API with no SDK to license.
-**CLAP second**, because it is the better API and because
+**CLAP second**, because it is the better API, because it is the only format
+with a floating-window editor mode that suits raylib, and because
 [clap-wrapper](https://github.com/free-audio/clap-wrapper) turns one CLAP into
 VST3 and AU builds — which is how the VST3 that LMMS cannot load reaches every
 host that can, without writing a VST3 at all.
@@ -325,6 +347,8 @@ remaining problem is on the host's side.
 - [LMMS Lv2 wiki page](https://github.com/LMMS/lmms/wiki/Lv2)
 - [VST3 support in LMMS](https://neomoon.one/vst3-support-in-lmms/)
 - [LV2 filesystem hierarchy standard](https://lv2plug.in/pages/filesystem-hierarchy-standard.html)
+- [Steinberg relicenses VST3 under MIT, 29 Oct 2025](https://www.soundonsound.com/news/steinberg-adopt-mit-license-vst3)
+- [clap-wrapper licensing table](https://github.com/free-audio/clap-wrapper)
 - [Use vcpkg for MinGW dependencies — LMMS/lmms#8218](https://github.com/LMMS/lmms/pull/8218)
   (April 2026: when Windows builds first got lilv, and therefore LV2)
 - [Enable Lv2 Atom ports — LMMS/lmms#5691](https://github.com/LMMS/lmms/pull/5691)
