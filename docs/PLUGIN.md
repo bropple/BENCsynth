@@ -74,19 +74,31 @@ The good news is that when it does work, it works everywhere: the 1.3 line
 carries LV2 on Linux, macOS and Windows, so one format covers all three
 platforms rather than needing a different plugin per system.
 
-### One thing to verify before committing
+### LMMS does not implement LV2 state — checked, not guessed
 
-The LMMS LV2 wiki lists its supported features as *"Core (except CV ports),
-URIDs, MIDI atoms, Buffer Size, Options, Worker"* — and **`state:interface` is
-not on that list.** For most plugins that is a detail. For this one it is
-central: the entire rack is state, a text blob, not a set of control ports.
-Without the state extension a rack could not be saved inside an LMMS project,
-and the plugin would come back empty every time the song was reopened.
+The wiki's feature list omits `state:interface`, and the wiki is incomplete
+enough that this could have been an oversight. It is not. `src/core/lv2/Lv2Proc.cpp`
+on master contains no reference to `LV2_State_Interface` and never calls
+`extension_data` looking for one. The supported-feature list `Lv2Manager`
+declares is `urid:map`, `urid:unmap`, `options`, `worker:schedule` and the three
+`buf-size` block-length features. State is absent because there is no state
+support to declare.
 
-The wiki is visibly incomplete, so this may simply be undocumented rather than
-missing. It is the first thing to test with a stub plugin, before any real work
-goes in — and if it is genuinely absent, the fallback is a file path in the
-state and the rack loaded from disk, which is worse but workable.
+For most plugins that is a detail. For this one it is central: the whole rack
+*is* state — a text blob, not a set of control ports. So **in LMMS specifically,
+the rack does not survive a project save.** The eight macro ports do, being
+ordinary control ports that LMMS models and automates like any other. Which
+modules exist and how they are wired does not.
+
+`state:interface` stays regardless. It is correct, it is what the extension is
+for, and it works in Ardour, Qtractor, Carla and REAPER — most of where an LV2
+actually goes. The gap is LMMS's, and it closes on its own the day LMMS
+implements state.
+
+Until then the workable fallback is loading the rack from a file instead of
+from host state: an environment variable or a path convention read at
+`instantiate`, needing nothing from the host. Worse than state, and unbuilt,
+but it is the option that exists.
 
 ## What is already done
 
@@ -148,9 +160,10 @@ and this is the largest single piece of work.
 
 Three routes:
 
-- **Ship headless first.** An LV2 with no UI still loads in LMMS, still makes
-  sound, and still saves its state — you build the rack in the standalone,
-  save a `.bencsynth`, and load it in the plugin. That is a genuinely useful
+- **Ship headless first.** An LV2 with no UI still loads in LMMS and still
+  makes sound — you build the rack in the standalone, save a `.bencsynth`, and
+  load it in the plugin. (It saves its state anywhere that implements state;
+  see above for why LMMS is not yet such a place.) That is a genuinely useful
   product and it is reachable in a few hundred lines. **Do this first.**
 - **An external UI.** LV2 has `ui:external-ui` and CLAP has a floating-window
   mode; both let the plugin open its *own* top-level window rather than
@@ -196,6 +209,79 @@ and leaving it in means one code path rather than two.
 Nothing in steps 1–3 requires touching `src/core`. That was the point of
 keeping it clean.
 
+## Installing it
+
+```
+make lv2-install
+```
+
+That is the whole thing. It copies the bundle into the user-level directory
+from the LV2 filesystem hierarchy standard, which every host already searches.
+
+| | User | System |
+|---|---|---|
+| **Linux** | `~/.lv2` | `/usr/local/lib/lv2`, `/usr/lib/lv2` |
+| **macOS** | `~/Library/Audio/Plug-Ins/LV2` | `/Library/Audio/Plug-Ins/LV2` |
+| **Windows** | `%APPDATA%\LV2` | `%COMMONPROGRAMFILES%\LV2` |
+
+Then restart the host — LMMS scans once at startup, so a bundle dropped in
+while it is running will not appear.
+
+**Copy the whole `bencsynth.lv2` directory, not the `.so` inside it.** The
+bundle is the unit LV2 deals in: the two `.ttl` files beside the binary are
+what tell a host the plugin exists at all. A lone shared object is invisible,
+and silently so.
+
+`LV2_INSTALL_DIR=/elsewhere make lv2-install` overrides the destination. Note
+that `LV2_PATH` **replaces** the default search path rather than extending it,
+so anything set there must include the standard directories itself — exactly
+what made CI report the plugin's class as plain `Plugin` until the system
+directory went back on.
+
+### There is no LV2 path setting in LMMS, and that is correct
+
+LMMS's settings dialog has directory fields for VST, LADSPA, SF2 and GIG, and
+none for LV2. Nothing is missing or disabled. `Lv2Manager` calls
+`lilv_world_load_all()` and never touches `LV2_PATH`, so discovery belongs
+entirely to lilv — which has the standard directories compiled in. There is no
+path for LMMS to offer because LMMS does not do the looking.
+
+Lilv's built-in Windows default is `%APPDATA%\LV2;%COMMONPROGRAMFILES%\LV2` —
+semicolons, not colons — with the environment variables expanded by lilv at
+startup. `%APPDATA%\LV2` really is the whole answer on Windows.
+
+**Carla is not needed.** That advice predates LMMS's own LV2 support and is
+still the top search result for the question. `lilv` is a dependency in LMMS's
+`vcpkg.json`, so official Windows builds have LV2 compiled in.
+
+### Whether LMMS will accept this plugin
+
+`Lv2Proc::check()` refuses a plugin that requires a feature LMMS does not
+support, requires an unsupported option, has more than two audio channels in or
+out, has **no** audio output, or has more than one MIDI port in either
+direction. BENCsynth requires only `urid:map`, has two audio outs and no audio
+in, exactly one MIDI in, no MIDI out, and no CV ports. It clears every one of
+those.
+
+MIDI does reach it: atom ports were enabled in
+[LMMS/lmms#5691](https://github.com/LMMS/lmms/pull/5691), and piano-roll notes
+are forwarded to LV2 instruments as MIDI atoms.
+
+### If LMMS does not show it
+
+In rough order of likelihood:
+
+1. **It is the wrong LMMS.** 1.2.2 has no LV2 support whatsoever. It must be a
+   1.3 alpha or nightly. This is the answer most of the time.
+2. **The `.so` was copied instead of the bundle directory.**
+3. **`LV2_PATH` is set and omits the standard directories.**
+4. **Something in the bundle was rejected.** Set `LMMS_LV2_DEBUG` in the
+   environment and LMMS lists what it turned down and why.
+
+`lv2ls` from `lilv-utils` is the quickest independent check: if it prints
+`https://github.com/bropple/BENCsynth`, the bundle is discoverable and any
+remaining problem is on the host's side.
+
 ## Sources
 
 - [LMMS VST plugin support](https://deepwiki.com/LMMS/lmms/6.1-vst-plugin-support)
@@ -203,3 +289,7 @@ keeping it clean.
 - [LV2 support — LMMS/lmms#562](https://github.com/LMMS/lmms/issues/562)
 - [LMMS Lv2 wiki page](https://github.com/LMMS/lmms/wiki/Lv2)
 - [VST3 support in LMMS](https://neomoon.one/vst3-support-in-lmms/)
+- [LV2 filesystem hierarchy standard](https://lv2plug.in/pages/filesystem-hierarchy-standard.html)
+- [Enable Lv2 Atom ports — LMMS/lmms#5691](https://github.com/LMMS/lmms/pull/5691)
+- lilv `meson.build` (the compiled-in default search path) and LMMS
+  `src/core/lv2/Lv2Manager.cpp`, `Lv2Proc.cpp`, `vcpkg.json`, all on master
