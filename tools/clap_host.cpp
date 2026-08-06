@@ -422,9 +422,11 @@ int main(int argc, char **argv)
             ok(g->get_preferred_api(p, &pref, &floating),
                "it states a preferred windowing mode");
 
-#if defined(_WIN32)
-            /* Hosts built around an FX rack embed and never ask for floating,
-             * so on Windows both have to work and embedded is preferred. */
+#if defined(_WIN32) || defined(__APPLE__)
+            /* Hosts built around an FX rack embed and never ask for floating.
+             * REAPER's only question on both platforms is
+             * is_api_supported(<api>, floating=0); answering no ends the
+             * conversation and leaves a plugin with no window. */
             ok(g->is_api_supported(p, api, false), "embedding is supported");
             ok(g->is_api_supported(p, api, true), "floating is supported too");
             ok(!floating, "embedded is preferred, which is what hosts here do");
@@ -444,11 +446,8 @@ int main(int argc, char **argv)
             /* Starting the editor needs a display and the standalone binary.
              * Without either, creating the shared block is still worth
              * checking - that is the half that runs in the plugin. */
-#if defined(_WIN32)
-            ok(g->create(p, api, false), "the GUI is created");
-#else
-            ok(g->create(p, api, true), "the GUI is created");
-#endif
+            /* Whatever it said it prefers, which is the mode a host uses. */
+            ok(g->create(p, api, floating), "the GUI is created");
 
             if (std::getenv("DISPLAY") && std::getenv("BENCSYNTH_EDITOR")) {
                 const bool shown = g->show(p);

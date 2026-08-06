@@ -49,7 +49,7 @@ PLUGIN_SRC := src/plugin/bs_shm.cpp src/plugin/bs_sync.cpp src/plugin/bs_embed.c
 # bytes and disagree about what is in them, which looks exactly like an editor
 # that attaches and then does nothing.
 PLUGIN_HDR := src/plugin/bs_shm.h src/plugin/bs_sync.h src/plugin/bs_embed.h \
-              src/plugin/bs_log.h
+              src/plugin/bs_log.h src/plugin/bs_cocoa.h
 
 GUI_SRC  := src/gui/main.cpp \
             src/gui/bs_gui.cpp \
@@ -148,6 +148,11 @@ ifeq ($(UNAME_S),Darwin)
   CLAP_BUNDLE  := build/bencsynth.clap
   CLAP_BINARY  := $(CLAP_BUNDLE)/Contents/MacOS/bencsynth
   CLAP_SHARED  := -dynamiclib $(MAC_ARCHS)
+  # Embedding on this platform means handing pixels between processes rather
+  # than reparenting a window, so there is Objective-C++ and there are
+  # frameworks. See src/plugin/bs_cocoa.h for why.
+  CLAP_EXTRA_SRC := src/plugin/bs_cocoa.mm
+  CLAP_FRAMEWORKS := -framework Cocoa -framework QuartzCore -framework IOSurface
   CLAP_LINK    :=
   CLAP_INSTALL_DIR ?= $(HOME)/Library/Audio/Plug-Ins/CLAP
 else ifeq ($(OS),Windows_NT)
@@ -411,7 +416,7 @@ $(CLAP_BINARY): $(CLAP_SRC) $(PLUGIN_HDR) $(CORE_SRC) $(wildcard src/clap/Info.p
 	$(CXX) $(filter-out -MMD -MP,$(CXXFLAGS)) $(CPPFLAGS) -I$(CLAP_INCLUDE) \
 	    -Isrc/plugin -fPIC -fvisibility=hidden \
 	    $(CLAP_SHARED) $(CLAP_LINK) -o $(CLAP_BINARY) \
-	    $(CLAP_SRC) $(CORE_SRC) -lm $(CLAP_RT)
+	    $(CLAP_SRC) $(CLAP_EXTRA_SRC) $(CORE_SRC) -lm $(CLAP_RT) $(CLAP_FRAMEWORKS)
 ifeq ($(UNAME_S),Darwin)
 	cp src/clap/Info.plist $(CLAP_BUNDLE)/Contents/Info.plist
 	@$(MAKE) --no-print-directory mac-sign SIGN=$(CLAP_BUNDLE)

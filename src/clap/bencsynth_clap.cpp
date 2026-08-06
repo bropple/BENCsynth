@@ -21,6 +21,9 @@
 #include "bs_shm.h"
 #include "bs_sync.h"
 #include "bs_log.h"
+#if defined(__APPLE__)
+#  include "bs_cocoa.h"
+#endif
 
 #include <clap/clap.h>
 
@@ -90,6 +93,7 @@ struct BencSynthClap {
     bool       floating;        /* false: reparent into the host's window */
     uint64_t   parentHandle;
     uint32_t   guiW, guiH;
+    void      *cocoaView;       /* macOS: our view inside the host's */
     float      rate;            /* the host's, told to the editor */
     bool       shmOpen;
     bool       guiCreated;
@@ -691,10 +695,12 @@ static bool gui_is_api_supported(const clap_plugin_t *, const char *api,
      * SetParent works across processes. */
     return true;
 #elif defined(__APPLE__)
-    /* Floating only. Embedding here means handing an NSView across a process
-     * boundary, which needs remote-layer machinery; claiming support and
-     * producing nothing would be worse than admitting it. */
-    return std::strcmp(api, CLAP_WINDOW_API_COCOA) == 0 && is_floating;
+    /* Embedded, because that is the only thing hosts here ask for. REAPER's
+     * one question is is_api_supported(cocoa, floating=0) - answer no and it
+     * never asks anything else, which is a plugin with no window and no
+     * explanation. Floating stays available for hosts that prefer it. */
+    (void)is_floating;
+    return std::strcmp(api, CLAP_WINDOW_API_COCOA) == 0;
 #else
     if (std::strcmp(api, CLAP_WINDOW_API_X11) != 0) return false;
     return is_floating;
@@ -710,7 +716,7 @@ static bool gui_get_preferred_api(const clap_plugin_t *, const char **api,
     *is_floating = false;
 #elif defined(__APPLE__)
     *api = CLAP_WINDOW_API_COCOA;
-    *is_floating = true;
+    *is_floating = false;
 #else
     *api = CLAP_WINDOW_API_X11;
     *is_floating = true;
@@ -756,6 +762,9 @@ static void gui_destroy(const clap_plugin_t *p)
     BencSynthClap *s = self_of(p);
     if (!s->guiCreated) return;
 
+#if defined(__APPLE__)
+    if (s->cocoaView) { bs::bs_cocoa_detach(s->cocoaView); s->cocoaView = 0; }
+#endif
     if (s->shmOpen) {
         /* Ask first. A window that saves nothing on the way out loses whatever
          * was on screen, so the editor gets a moment to publish and exit. */
@@ -811,6 +820,9 @@ static bool gui_set_size(const clap_plugin_t *p, uint32_t w, uint32_t h)
     if (h < 480) h = 480;
     s->guiW = w;
     s->guiH = h;
+#if defined(__APPLE__)
+    if (s->cocoaView) bs::bs_cocoa_resize(s->cocoaView, (int)w, (int)h);
+#endif
     if (s->shmOpen) {
         s->shm.block->wantW.store(w, std::memory_order_release);
         s->shm.block->wantH.store(h, std::memory_order_release);
@@ -826,6 +838,17 @@ static bool gui_set_parent(const clap_plugin_t *p, const clap_window_t *window)
 #if defined(_WIN32)
     if (std::strcmp(window->api, CLAP_WINDOW_API_WIN32) != 0) return false;
     s->parentHandle = (uint64_t)(uintptr_t)window->win32;
+#elif defined(__APPLE__)
+    if (std::strcmp(window->api, CLAP_WINDOW_API_COCOA) != 0) return false;
+    /* A view of our own inside the host's. Nothing renders into it yet - the
+     * editor's pixels arrive over an IOSurface in the next stage - so for now
+     * it says what it is rather than showing a blank rectangle. */
+    if (s->cocoaView) bs::bs_cocoa_detach(s->cocoaView);
+    s->cocoaView = bs::bs_cocoa_attach(window->cocoa, (int)s->guiW, (int)s->guiH);
+    if (!s->cocoaView) return false;
+    bs::bs_cocoa_set_status(s->cocoaView,
+                            "BENCsynth - the rack is not drawn here yet");
+    s->parentHandle = (uint64_t)(uintptr_t)window->cocoa;
 #else
     return false;
 #endif
@@ -839,6 +862,15 @@ static void gui_suggest_title(const clap_plugin_t *, const char *) {}
 static bool gui_show(const clap_plugin_t *p)
 {
     BencSynthClap *s = self_of(p);
+#if defined(__APPLE__)
+    /* Stage 1: the view exists and says so, but nothing renders into it. The
+     * editor process is not started, because a floating window alongside an
+     * embedded panel is two half-answers rather than one. */
+    if (!s->floating) {
+        bs::bs_log("gui.show  (macOS embedded - view only, no editor yet)");
+        return s->cocoaView != 0;
+    }
+#endif
     bs::bs_log("gui.show  (created=%d shm=%d editorDir=%s)",
                s->guiCreated ? 1 : 0, s->shmOpen ? 1 : 0,
                s->bundleDir.empty() ? "(none)" : s->bundleDir.c_str());
@@ -935,6 +967,7 @@ static const clap_plugin_t *createPlugin(const clap_host_t *host)
     s->parentHandle = 0;
     s->guiW = 1280;
     s->guiH = 800;
+    s->cocoaView = 0;
     s->rate = 48000.0f;
     s->pendingEdit.store(0);
     s->bundleDir   = g_bundleDir;
