@@ -152,12 +152,23 @@ jobs:
         with: { path: dl }
       - run: ls -lR dl
 
+      # On a tag push GITHUB_REF_NAME is the tag; on workflow_dispatch it is
+      # the branch, which is how a previous run tried to publish a release
+      # called "main". The input wins whenever it is set.
+      - name: Which version
+        run: |
+          V="${{ github.event.inputs.tag }}"
+          [ -n "$V" ] || V="$GITHUB_REF_NAME"
+          case "$V" in v*) ;; *) echo "refusing to release '$V' - not a v tag"; exit 1;; esac
+          echo "VERSION=$V" >> "$GITHUB_ENV"
+          echo "releasing $V"
+
       # One plugin bundle rather than three downloads, and the executable goes
       # in it: the CLAP's editor IS the standalone binary, so a plugin pack
       # without it opens to a generic parameter list and nothing else.
       - name: Assemble the plugin pack
         run: |
-          V="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
+          V="$VERSION"
           D="bencsynth-$V-windows-plugins"
           mkdir -p "$D"
           cp dl/plugins-msys2/bencsynth.clap "$D"/
@@ -175,7 +186,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          V="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
+          V="$VERSION"
           gh release create "$V" dist/* \
             --title "BENCsynth $V" \
             --notes-file .github/release-notes.md \
