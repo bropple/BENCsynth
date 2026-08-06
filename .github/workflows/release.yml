@@ -19,131 +19,13 @@ permissions:
   contents: write        # needed to create the release
 
 jobs:
-  linux:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libasound2-dev libx11-dev libxrandr-dev \
-            libxi-dev libxcursor-dev libxinerama-dev libgl1-mesa-dev
-      - name: raylib
-        run: |
-          git clone --depth 1 --branch 5.5 https://github.com/raysan5/raylib.git /tmp/raylib
-          cmake -S /tmp/raylib -B /tmp/raylib/build -DCMAKE_INSTALL_PREFIX=/tmp/rl \
-            -DBUILD_SHARED_LIBS=OFF -DBUILD_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Release
-          cmake --build /tmp/raylib/build -j3
-          cmake --install /tmp/raylib/build
-      - name: Build
-        run: |
-          RAYLIB=/tmp/rl make
-          make test
-      - name: Package
-        run: |
-          V="${GITHUB_REF_NAME:-dev}"
-          D="bencsynth-$V-linux-x86_64"
-          mkdir -p "$D"
-          cp bencsynth README.md ARCHITECTURE.md LICENSE NOTICE "$D"/
-          # The font travels with it. Without one the program still runs, in
-          # raylib's built-in face, which is not the look this is for.
-          cp -r assets "$D"/
-          tar czf "$D.tar.gz" "$D"
-          ls -l ./*.tar.gz
-      - uses: actions/upload-artifact@v4
-        with: { name: pkg-linux, path: '*.tar.gz', if-no-files-found: error }
-
-  macos:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      # From source and static. Homebrew's raylib is a dylib under
-      # /opt/homebrew, and a release binary linked against it aborts at launch
-      # on any machine that does not happen to have it - which is every machine
-      # that has just downloaded a release.
-      - name: raylib
-        run: |
-          git clone --depth 1 --branch 5.5 https://github.com/raysan5/raylib.git /tmp/raylib
-          cmake -S /tmp/raylib -B /tmp/raylib/build -DCMAKE_INSTALL_PREFIX=/tmp/rl \
-            -DBUILD_SHARED_LIBS=OFF -DBUILD_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Release
-          cmake --build /tmp/raylib/build -j3
-          cmake --install /tmp/raylib/build
-      - name: Build
-        run: |
-          RAYLIB=/tmp/rl make
-          make test
-
-      # Writes the disk image's .DS_Store directly. Driving Finder over
-      # AppleScript, which is the usual way, needs an interactive session and
-      # cannot work on a runner.
-      - name: dmgbuild
-        run: |
-          python3 -m venv /tmp/dmgvenv
-          /tmp/dmgvenv/bin/pip install --quiet dmgbuild
-          /tmp/dmgvenv/bin/dmgbuild --help >/dev/null
-
-      - name: The binary is self-contained
-        run: |
-          otool -L bencsynth
-          if otool -L bencsynth | tail -n +2 | \
-             grep -vE '^[[:space:]]+(/usr/lib/|/System/)'; then
-            echo "links a library that will not be present on a stock macOS"
-            exit 1
-          fi
-          echo "self-contained"
-
-      - name: Package
-        run: |
-          V="${GITHUB_REF_NAME:-dev}"
-          A="$(uname -m)"
-
-          # A .app is a directory Finder draws as one icon, and a tarball of
-          # one arrives looking like a folder called Contents to whoever opens
-          # it. The disk image is the real deliverable; the tarball is there
-          # for anyone who wants the bare binary.
-          BS_VERSION="${V#v}" ./tools/macos-app.sh bencsynth BENCsynth.app
-
-          # Finder decides an app is an app from these two facts alone.
-          plutil -lint BENCsynth.app/Contents/Info.plist
-          test "$(plutil -extract CFBundleExecutable raw \
-                    BENCsynth.app/Contents/Info.plist)" = BENCsynth
-          test "$(plutil -extract CFBundlePackageType raw \
-                    BENCsynth.app/Contents/Info.plist)" = APPL
-
-          # A release must not ship a bundle macOS will call damaged.
-          codesign --verify --deep --strict --verbose=2 BENCsynth.app
-
-          # No version in the volume name: it becomes the mounted disk's name,
-          # and "BENCsynth" is what belongs on a desktop.
-          DMGBUILD=/tmp/dmgvenv/bin/dmgbuild \
-            ./tools/macos-dmg.sh BENCsynth.app \
-              "bencsynth-$V-macos-$A.dmg" BENCsynth
-
-          # A release must not quietly ship the unstyled fallback either.
-          mkdir -p /tmp/dmg
-          hdiutil attach "bencsynth-$V-macos-$A.dmg" -nobrowse -mountpoint /tmp/dmg
-          ls -la /tmp/dmg
-          test -f /tmp/dmg/.DS_Store
-          test -L /tmp/dmg/Applications
-          test -d /tmp/dmg/BENCsynth.app
-          test -f /tmp/dmg/BENCsynth.app/Contents/Resources/BENCsynth.icns
-          test -f /tmp/dmg/BENCsynth.app/Contents/Resources/assets/fonts/TerminusTTF.ttf
-          hdiutil detach /tmp/dmg
-
-          D="bencsynth-$V-macos-$A"
-          mkdir -p "$D"
-          cp bencsynth README.md ARCHITECTURE.md LICENSE NOTICE "$D"/
-          cp -r assets "$D"/
-          tar czf "$D.tar.gz" "$D"
-
-          ls -l ./*.dmg ./*.tar.gz
-      - uses: actions/upload-artifact@v4
-        with:
-          name: pkg-macos
-          path: |
-            *.tar.gz
-            *.dmg
-          if-no-files-found: error
+  # Windows only, for now, and deliberately.
+  #
+  # ci.yml builds and tests all three platforms on every push, so nothing here
+  # is unbuilt or unknown - but a release is a claim that someone ran the
+  # thing, and so far someone has only run this one. The Linux and macOS jobs
+  # come back when that stops being true; the code for them is in the history
+  # of this file, unchanged.
 
   windows:
     runs-on: windows-latest
@@ -185,7 +67,7 @@ jobs:
           fi
           echo "self-contained"
 
-      - name: Package
+      - name: Package the program
         run: |
           V="${GITHUB_REF_NAME:-dev}"
           D="bencsynth-$V-windows-x86_64"
@@ -195,16 +77,89 @@ jobs:
           zip -qr "$D.zip" "$D"
           ls -l ./*.zip
       - uses: actions/upload-artifact@v4
-        with: { name: pkg-windows, path: '*.zip', if-no-files-found: error }
+        with: { name: pkg-windows, path: 'bencsynth-*-windows-x86_64.zip', if-no-files-found: error }
+
+      # The CLAP and the LV2, from the same toolchain. The VST3 is built
+      # separately with MSVC - it shares no code with these, so it does not
+      # have to share a compiler either.
+      - name: Build the plugins
+        run: |
+          make clap-fetch
+          make clap
+          make lv2 || echo "no LV2 headers on this runner - skipping"
+      - name: The plugins are self-contained
+        run: |
+          for f in build/bencsynth.clap; do
+            if objdump -p "$f" | grep -iE 'DLL Name:.*(libgcc|libwinpthread|libstdc|msys)'; then
+              echo "$f imports a runtime DLL a host will not have"
+              exit 1
+            fi
+          done
+          objdump -p build/bencsynth.clap | grep -q clap_entry
+          echo "self-contained"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugins-msys2
+          path: build/bencsynth.clap
+          if-no-files-found: error
+
+  # MSVC, because the VST3 SDK expects it. Nothing of ours is linked in: the
+  # wrapper finds bencsynth.clap at runtime.
+  windows-vst3:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: clap-wrapper and the SDKs
+        shell: bash
+        run: |
+          make clap-fetch
+          make vst3-fetch
+      - name: Build
+        shell: pwsh
+        run: |
+          cmake -S cmake -B build/vst3 -A x64 `
+            -DCLAP_WRAPPER_DIR="$env:GITHUB_WORKSPACE/vendor/clap-wrapper" `
+            -DCLAP_SDK_ROOT="$env:GITHUB_WORKSPACE/vendor/clap" `
+            -DVST3_SDK_ROOT="$env:GITHUB_WORKSPACE/vendor/vst3sdk"
+          cmake --build build/vst3 --target bencsynth_as_vst3 --config Release
+      - name: Collect it
+        shell: bash
+        run: |
+          B=$(find build/vst3 -name 'bencsynth.vst3' -maxdepth 3 | head -1)
+          test -n "$B"
+          mkdir -p out && cp -r "$B" out/
+          find out -type f
+      - uses: actions/upload-artifact@v4
+        with: { name: plugins-vst3, path: out/**, if-no-files-found: error }
 
   publish:
-    needs: [linux, macos, windows]
+    needs: [windows, windows-vst3]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
-        with: { path: dist, merge-multiple: true }
-      - run: ls -lR dist
+        with: { path: dl }
+      - run: ls -lR dl
+
+      # One plugin bundle rather than three downloads, and the executable goes
+      # in it: the CLAP's editor IS the standalone binary, so a plugin pack
+      # without it opens to a generic parameter list and nothing else.
+      - name: Assemble the plugin pack
+        run: |
+          V="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
+          D="bencsynth-$V-windows-plugins"
+          mkdir -p "$D"
+          cp dl/plugins-msys2/bencsynth.clap "$D"/
+          cp -r dl/plugins-vst3/bencsynth.vst3 "$D"/
+          unzip -q dl/pkg-windows/*.zip -d /tmp/std
+          cp /tmp/std/*/bencsynth.exe "$D"/
+          cp -r /tmp/std/*/assets "$D"/
+          cp README.md LICENSE NOTICE docs/PLUGIN.md "$D"/
+          cp .github/plugin-install.md "$D"/INSTALL.md
+          mkdir -p dist
+          zip -qr "dist/$D.zip" "$D"
+          cp dl/pkg-windows/*.zip dist/
+          ls -l dist
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
