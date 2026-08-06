@@ -109,11 +109,22 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      # Explicitly rather than through the Makefile: this runner has Git Bash,
+      # not MSYS2, and make clap-fetch does not survive the difference.
       - name: clap-wrapper and the SDKs
         shell: bash
         run: |
-          make clap-fetch
-          make vst3-fetch
+          mkdir -p vendor
+          curl -sL -o /tmp/clap.tar.gz \
+            https://github.com/free-audio/clap/archive/refs/tags/1.2.10.tar.gz
+          tar xzf /tmp/clap.tar.gz -C vendor
+          mv vendor/clap-1.2.10 vendor/clap
+          git clone -q --depth 1 --branch v0.15.1 \
+            https://github.com/free-audio/clap-wrapper.git vendor/clap-wrapper
+          git clone -q --depth 1 \
+            https://github.com/steinbergmedia/vst3sdk.git vendor/vst3sdk
+          cd vendor/vst3sdk && git submodule update --init --depth 1 \
+            base pluginterfaces public.sdk cmake
       - name: Build
         shell: pwsh
         run: |
