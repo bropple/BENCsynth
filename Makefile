@@ -338,7 +338,7 @@ $(LV2_BUNDLE): $(LV2_SRC) $(CORE_SRC) src/lv2/bencsynth.ttl src/lv2/manifest.ttl
 	    $(LV2_SHARED) $(LV2_LINK) -o $(LV2_BUNDLE)/bencsynth$(LV2_LIB_EXT) \
 	    $(LV2_SRC) $(CORE_SRC) -lm
 ifeq ($(UNAME_S),Darwin)
-	@$(MAKE) --no-print-directory mac-sign BUNDLE=$(LV2_BUNDLE)
+	@$(MAKE) --no-print-directory mac-sign SIGN=$(LV2_BUNDLE)/bencsynth$(LV2_LIB_EXT)
 endif
 	sed 's|@LIB_EXT@|$(LV2_LIB_EXT)|' src/lv2/manifest.ttl.in > $(LV2_BUNDLE)/manifest.ttl
 	cp src/lv2/bencsynth.ttl $(LV2_BUNDLE)/bencsynth.ttl
@@ -412,7 +412,7 @@ $(CLAP_BINARY): $(CLAP_SRC) $(PLUGIN_HDR) $(CORE_SRC) $(wildcard src/clap/Info.p
 	    $(CLAP_SRC) $(CORE_SRC) -lm $(CLAP_RT)
 ifeq ($(UNAME_S),Darwin)
 	cp src/clap/Info.plist $(CLAP_BUNDLE)/Contents/Info.plist
-	@$(MAKE) --no-print-directory mac-sign BUNDLE=$(CLAP_BUNDLE)
+	@$(MAKE) --no-print-directory mac-sign SIGN=$(CLAP_BUNDLE)
 endif
 	@echo "built $(CLAP_BUNDLE)"
 
@@ -492,14 +492,19 @@ vst3-install: vst3 clap-install
 # quarantine flag on a downloaded file - only notarisation does that - so a
 # person who downloads a release still needs one xattr command, which the
 # install notes give them.
+# SIGN is what codesign is pointed at, which is not always the directory. A
+# .clap is a real macOS bundle with a Contents/Info.plist and signs as one; an
+# LV2 "bundle" is a plain directory of files, and codesign refuses it with
+# "bundle format unrecognized, invalid, or unsuitable". There the thing to sign
+# is the dylib inside.
 mac-sign:
-	@rm -rf $(BUNDLE)/Contents/MacOS/*.dSYM $(BUNDLE)/*.dSYM
+	@rm -rf $(dir $(SIGN))*.dSYM $(SIGN).dSYM $(SIGN)/Contents/MacOS/*.dSYM
 	@if command -v codesign >/dev/null 2>&1; then \
-	    codesign --force --deep --sign - --timestamp=none "$(BUNDLE)" && \
-	    codesign --verify --deep --strict "$(BUNDLE)" && \
-	    echo "  signed $(BUNDLE) (ad-hoc)"; \
+	    codesign --force --sign - --timestamp=none "$(SIGN)" && \
+	    codesign --verify --strict "$(SIGN)" && \
+	    echo "  signed $(SIGN) (ad-hoc)"; \
 	 else \
-	    echo "  warning: no codesign - macOS will call this bundle damaged"; \
+	    echo "  warning: no codesign - macOS will call this damaged"; \
 	 fi
 
 clap-install: clap

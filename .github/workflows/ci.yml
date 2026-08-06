@@ -483,9 +483,11 @@ jobs:
           test -f build/bencsynth.lv2/bencsynth.dylib
           grep -q 'bencsynth\.dylib' build/bencsynth.lv2/manifest.ttl
           nm -gU build/bencsynth.lv2/bencsynth.dylib | grep -q lv2_descriptor
+      # The dylib, not the directory: an LV2 bundle is a plain folder and
+      # codesign refuses it as "bundle format unrecognized".
       - name: It is signed and universal
         run: |
-          codesign --verify --deep --strict --verbose=2 build/bencsynth.lv2
+          codesign --verify --strict --verbose=2 build/bencsynth.lv2/bencsynth.dylib
           lipo -info build/bencsynth.lv2/bencsynth.dylib | grep -q x86_64
           lipo -info build/bencsynth.lv2/bencsynth.dylib | grep -q arm64
       - name: It loads, plays and restores its state
