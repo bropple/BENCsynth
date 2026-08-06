@@ -40,5 +40,7 @@ shots/
 
 # The LV2 bundle is built, not committed.
 build/
-bencsynth-lv2-host
-bencsynth-clap-host
+# Test harnesses, by pattern rather than by name - naming them one at a time
+# has now committed a binary twice.
+bencsynth-*-host
+bencsynth-*-test
