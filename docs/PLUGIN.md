@@ -286,8 +286,28 @@ are forwarded to LV2 instruments as MIDI atoms.
 
 In rough order of likelihood:
 
-1. **It is the wrong LMMS.** 1.2.2 has no LV2 support whatsoever. It must be a
-   1.3 alpha or nightly. This is the answer most of the time.
+1. **It is the wrong LMMS**, and on Windows this is stricter than it sounds.
+   1.2.2 has no LV2 at all — but neither does the released **1.3.0-alpha.1**,
+   which is from November 2020 and is still the only 1.3 tag that exists. The
+   Windows build did not get its LV2 dependencies until **April 2026**, when
+   `Use vcpkg for MinGW dependencies` (LMMS/lmms#8218) landed. So on Windows you
+   need a **master build newer than April 2026**, not "a 1.3 alpha". This is the
+   answer most of the time.
+
+   Verified against the master mingw64 build log of 2026-08-04: it compiles the
+   whole `src/core/lv2/` tree and produces `lv2instrument` and `lv2effect`. A
+   build that has LV2 puts `lv2instrument.dll` in its `plugins/` directory —
+   that file's presence is the fastest way to tell, and it is absent from
+   alpha.1 entirely.
+
+   To check a build without launching it, scan its binaries for a string that
+   only exists in the LV2 code path:
+
+   ```powershell
+   $dir="C:\Program Files\LMMS"; Get-ChildItem $dir -Recurse -Include *.exe,*.dll | ForEach-Object { $t=[Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($_.FullName)); if ($t -match 'LMMS_LV2_DEBUG') { "HIT: "+$_.Name } }
+   ```
+
+   No hits, no LV2, and no directory or environment variable will change that.
 2. **The `.so` was copied instead of the bundle directory.**
 3. **`LV2_PATH` is set and omits the standard directories.**
 4. **Something in the bundle was rejected.** Set `LMMS_LV2_DEBUG` in the
@@ -305,6 +325,8 @@ remaining problem is on the host's side.
 - [LMMS Lv2 wiki page](https://github.com/LMMS/lmms/wiki/Lv2)
 - [VST3 support in LMMS](https://neomoon.one/vst3-support-in-lmms/)
 - [LV2 filesystem hierarchy standard](https://lv2plug.in/pages/filesystem-hierarchy-standard.html)
+- [Use vcpkg for MinGW dependencies — LMMS/lmms#8218](https://github.com/LMMS/lmms/pull/8218)
+  (April 2026: when Windows builds first got lilv, and therefore LV2)
 - [Enable Lv2 Atom ports — LMMS/lmms#5691](https://github.com/LMMS/lmms/pull/5691)
 - lilv `meson.build` (the compiled-in default search path) and LMMS
   `src/core/lv2/Lv2Manager.cpp`, `Lv2Proc.cpp`, `vcpkg.json`, all on master
