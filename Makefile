@@ -273,7 +273,7 @@ endif
 
 .PHONY: all core test clean info run render icons lv2 lv2-install lv2-validate lv2-test \
         clap clap-test clap-install clap-fetch ipc-test \
-        vst3 vst3-fetch vst3-install mac-sign
+        vst3 vst3-fetch vst3-install mac-sign macos-plugin-dmg
 
 
 all: $(GUI)
@@ -506,6 +506,13 @@ mac-sign:
 	 else \
 	    echo "  warning: no codesign - macOS will call this damaged"; \
 	 fi
+
+# One disk image with the plugins, the editor and an installer that clears
+# the quarantine flag - which is the part a tarball cannot do, and the reason a
+# downloaded plugin is reported as damaged even when it is signed.
+macos-plugin-dmg:
+	@test "$(UNAME_S)" = "Darwin" || { echo "  macOS only."; false; }
+	./tools/macos-plugin-dmg.sh "bencsynth-plugins.dmg"
 
 clap-install: clap
 	mkdir -p "$(CLAP_INSTALL_DIR)"

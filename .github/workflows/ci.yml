@@ -734,6 +734,43 @@ jobs:
           path: ${{ env.DMG }}
           if-no-files-found: error
 
+      # ---- and a second image, for the plugins ----
+      #
+      # Built here rather than in the clap job because it needs the .app: the
+      # plugin opens the rack by starting that binary, so an image with the
+      # plugin and not the editor installs half a thing.
+      - name: The CLAP, to put in it
+        run: |
+          make clap-fetch
+          make clap
+      - name: The plugin disk image builds
+        run: |
+          P="bencsynth-$(git rev-parse --short HEAD)-macos-plugins.dmg"
+          echo "PLUGDMG=$P" >> "$GITHUB_ENV"
+          DMGBUILD=/tmp/dmgvenv/bin/dmgbuild ./tools/macos-plugin-dmg.sh \
+            "$P" "BENCsynth Plug-Ins"
+      - name: It carries the plugin, the editor and the installer
+        run: |
+          mkdir -p /tmp/pdmg
+          hdiutil attach -nobrowse -readonly -mountpoint /tmp/pdmg "$PLUGDMG"
+          ls -la /tmp/pdmg
+          test -d /tmp/pdmg/bencsynth.clap
+          test -d /tmp/pdmg/BENCsynth.app
+          test -x "/tmp/pdmg/Install Plug-Ins.command"
+          test -L /tmp/pdmg/Applications
+          test -f /tmp/pdmg/README.txt
+          # The signature has to survive being put in an image. If it does not,
+          # the image has bought nothing - an invalid signature is exactly the
+          # state macOS calls "damaged".
+          codesign --verify --deep --strict --verbose=2 /tmp/pdmg/bencsynth.clap
+          codesign --verify --deep --strict --verbose=2 /tmp/pdmg/BENCsynth.app
+          hdiutil detach /tmp/pdmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bencsynth-macos-plugins
+          path: ${{ env.PLUGDMG }}
+          if-no-files-found: error
+
   windows:
     name: windows
     runs-on: windows-latest
