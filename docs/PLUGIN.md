@@ -219,7 +219,10 @@ and leaving it in means one code path rather than two.
    `Engine::setMacro` / `macroValue` writing to and reading from the knobs
    themselves rather than a shadow copy, so a host automating a parameter
    moves the knob that parameter *is*.
-2. **Headless LV2** — a `bencsynth.lv2` bundle: `manifest.ttl`, `bencsynth.ttl`,
+2. ~~**Headless CLAP**~~ **Done.** Audio ports, note ports (CLAP notes and raw
+   MIDI both), nine parameters, state, and a rack selector. 39 checks in
+   `tools/clap_host.cpp`, built for Linux, Windows and macOS in CI.
+3. **Headless LV2** — a `bencsynth.lv2` bundle: `manifest.ttl`, `bencsynth.ttl`,
    and a `.so` with the twelve LV2 entry points. Atom port in for MIDI, two
    audio ports out, sixteen control ports for the macros, `state:interface` for
    the rack. Load it in LMMS; that is the milestone.
@@ -230,6 +233,48 @@ and leaving it in means one code path rather than two.
 
 Nothing in steps 1–3 requires touching `src/core`. That was the point of
 keeping it clean.
+
+## The CLAP
+
+Built, tested, and the second of the two wrappers. `make clap-fetch` once for
+the headers (MIT, vendored under `vendor/`, gitignored like raylib), then
+`make clap`, `make clap-test`, `make clap-install`.
+
+It goes where hosts already look — `~/.clap` on Linux,
+`~/Library/Audio/Plug-Ins/CLAP` on macOS,
+`%LOCALAPPDATA%\Programs\Common\CLAP` on Windows. On Linux and Windows a CLAP
+is a single file; on macOS it is a bundle directory with an `Info.plist`, which
+is why that branch of the Makefile does more.
+
+**It is not limited to one rack.** CLAP has a stepped parameter type, so the
+rack selector is parameter 9 and every preset is reachable from the host's own
+parameter list, named through `value_to_text`, saved with the project, and
+automatable. That is the thing the LV2 cannot do in LMMS, and it arrives here
+for free because the format has a vocabulary for it.
+
+Building a rack allocates, so a rack change cannot happen in `process()`. The
+parameter event records the request and calls `host->request_callback`; the
+rebuild happens in `on_main_thread`, which is exactly what that pair is for.
+`Engine::clear()` takes the graph lock, so it is safe against a render in
+flight — the same path the standalone's preset menu already uses.
+
+### The macro parameters had to be fixed to have any effect
+
+`Engine::setMacro` writes into the MACRO module's knobs and does nothing at all
+when the rack has no MACRO module — which most racks do not. Read back through
+`macroValue`, that means a host sets a parameter to 0.75, reads 0.0, and draws
+automation that visibly does nothing. The LV2 has the same hole and never
+showed it, because LV2 control ports are owned by the host and it never asks
+the plugin what they are.
+
+So the wrapper holds the authoritative macro values: it reports what the host
+set, pushes into the rack whenever there is a MACRO module to receive it,
+re-applies all eight after a rack change so switching presets does not silently
+zero them, and re-reads them from the rack after loading state, since a
+restored rack's knob positions are then the truth.
+
+Found by `tools/clap_host.cpp`, which sets a parameter and reads it back — the
+kind of check that only fails when something is actually wired wrong.
 
 ## Installing it
 

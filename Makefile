@@ -107,6 +107,45 @@ else
   LV2_INSTALL_DIR ?= $(HOME)/.lv2
 endif
 
+# ------------------------------------------------------------------
+# CLAP
+#
+# MIT, no SDK licence, and clap-wrapper turns one of these into VST3 and AU -
+# which is how this reaches hosts that will never load an LV2. The SDK is
+# headers only, so there is nothing to build and nothing to link.
+#
+# A CLAP is a single shared library named .clap on Linux and Windows; macOS
+# wants a bundle directory, which is why that branch does more.
+# ------------------------------------------------------------------
+
+CLAP_SRC     := src/clap/bencsynth_clap.cpp
+CLAP_VERSION := 1.2.2
+CLAP_INCLUDE ?= vendor/clap/include
+CLAP_FOUND   := $(if $(wildcard $(CLAP_INCLUDE)/clap/clap.h),yes,)
+
+ifeq ($(UNAME_S),Darwin)
+  CLAP_BUNDLE  := build/bencsynth.clap
+  CLAP_BINARY  := $(CLAP_BUNDLE)/Contents/MacOS/bencsynth
+  CLAP_SHARED  := -dynamiclib
+  CLAP_LINK    :=
+  CLAP_INSTALL_DIR ?= $(HOME)/Library/Audio/Plug-Ins/CLAP
+else ifeq ($(OS),Windows_NT)
+  CLAP_BUNDLE  := build/bencsynth.clap
+  CLAP_BINARY  := $(CLAP_BUNDLE)
+  CLAP_SHARED  := -shared
+  # Static for the same reason the LV2 and the executable are: a host will not
+  # have MSYS2's runtime DLLs on its PATH, and LoadLibrary failing looks
+  # exactly like the plugin not being installed.
+  CLAP_LINK    := -static
+  CLAP_INSTALL_DIR ?= $(LOCALAPPDATA)/Programs/Common/CLAP
+else
+  CLAP_BUNDLE  := build/bencsynth.clap
+  CLAP_BINARY  := $(CLAP_BUNDLE)
+  CLAP_SHARED  := -shared
+  CLAP_LINK    :=
+  CLAP_INSTALL_DIR ?= $(HOME)/.clap
+endif
+
 RENDER_SRC := tools/render_wav.cpp
 RENDER_OBJ := $(RENDER_SRC:.cpp=.o)
 RENDER     := bencsynth-render$(EXE)
@@ -184,7 +223,8 @@ endif
 
 # ------------------------------------------------------------------
 
-.PHONY: all core test clean info run render icons lv2 lv2-install lv2-validate lv2-test
+.PHONY: all core test clean info run render icons lv2 lv2-install lv2-validate lv2-test \
+        clap clap-test clap-install clap-fetch
 
 
 all: $(GUI)
@@ -288,6 +328,60 @@ lv2-install: lv2
 	@echo "  installed to $(LV2_INSTALL_DIR)/bencsynth.lv2"
 	@echo "  restart the host - it searches there by default."
 
+# ------------------------------------------------------------------
+# CLAP targets
+# ------------------------------------------------------------------
+
+clap:
+ifeq ($(CLAP_FOUND),yes)
+	@$(MAKE) --no-print-directory $(CLAP_BINARY)
+else
+	@echo "  no CLAP headers at $(CLAP_INCLUDE)."
+	@echo "  run 'make clap-fetch', or point CLAP_INCLUDE at the include/"
+	@echo "  directory of a CLAP checkout."
+	@false
+endif
+
+# Headers only, and vendor/ is gitignored - same arrangement as raylib.
+clap-fetch:
+	mkdir -p vendor
+	curl -sL -o /tmp/clap-$(CLAP_VERSION).tar.gz \
+	    https://github.com/free-audio/clap/archive/refs/tags/$(CLAP_VERSION).tar.gz
+	tar xzf /tmp/clap-$(CLAP_VERSION).tar.gz -C vendor
+	rm -rf vendor/clap
+	mv vendor/clap-$(CLAP_VERSION) vendor/clap
+	@echo "CLAP $(CLAP_VERSION) headers in vendor/clap"
+
+$(CLAP_BINARY): $(CLAP_SRC) $(CORE_SRC) $(wildcard src/clap/Info.plist)
+	@mkdir -p $(dir $(CLAP_BINARY))
+	$(CXX) $(filter-out -MMD -MP,$(CXXFLAGS)) $(CPPFLAGS) -I$(CLAP_INCLUDE) \
+	    -fPIC -fvisibility=hidden \
+	    $(CLAP_SHARED) $(CLAP_LINK) -o $(CLAP_BINARY) \
+	    $(CLAP_SRC) $(CORE_SRC) -lm
+ifeq ($(UNAME_S),Darwin)
+	cp src/clap/Info.plist $(CLAP_BUNDLE)/Contents/Info.plist
+endif
+	@echo "built $(CLAP_BUNDLE)"
+
+# Loads it the way a host does and plays it. Compiling proves nothing about
+# whether the event stream lands on the right frames or whether state survives
+# a round trip; this does.
+CLAPHOST := bencsynth-clap-host$(EXE)
+
+clap-test: clap $(CLAPHOST)
+	./$(CLAPHOST) $(CLAP_BINARY)
+
+$(CLAPHOST): tools/clap_host.cpp
+	$(CXX) $(CXXFLAGS) -I$(CLAP_INCLUDE) -o $@ $< -ldl
+
+clap-install: clap
+	mkdir -p "$(CLAP_INSTALL_DIR)"
+	rm -rf "$(CLAP_INSTALL_DIR)/bencsynth.clap"
+	cp -r $(CLAP_BUNDLE) "$(CLAP_INSTALL_DIR)/"
+	@echo
+	@echo "  installed to $(CLAP_INSTALL_DIR)/bencsynth.clap"
+	@echo "  restart the host - it searches there by default."
+
 
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $<
@@ -315,6 +409,7 @@ clean:
 	rm -f $(CORE_OBJ) $(GUI_OBJ) $(TEST_OBJ) $(RENDER_OBJ) \
 	      $(CORE_OBJ:.o=.d) $(GUI_OBJ:.o=.d) $(TEST_OBJ:.o=.d) $(RENDER_OBJ:.o=.d) \
 	      $(CORE_LIB) $(GUI) $(TEST) $(RENDER) $(LV2HOST) src/gui/*.res.o
-	rm -rf $(LV2_BUNDLE)
+	rm -rf $(LV2_BUNDLE) $(CLAP_BUNDLE)
+	rm -f $(CLAPHOST)
 
 -include $(CORE_OBJ:.o=.d) $(GUI_OBJ:.o=.d) $(TEST_OBJ:.o=.d) $(RENDER_OBJ:.o=.d)

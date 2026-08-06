@@ -260,7 +260,8 @@ a build does not.
 ## As a plugin
 
 ```
-make lv2-install
+make clap-fetch && make clap-install     # CLAP - most hosts, rack selector
+make lv2-install                          # LV2  - Ardour, Qtractor, LMMS 1.3
 ```
 
 builds the bundle and copies it where hosts already look — `~/.lv2` on Linux,

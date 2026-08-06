@@ -130,6 +130,121 @@ jobs:
           path: ${{ env.PKG }}
           if-no-files-found: error
 
+  # CLAP: MIT, no SDK licence, and clap-wrapper turns one of these into VST3
+  # and AU later. Headers only, so there is nothing to install but a tarball.
+  clap:
+    name: clap plugin (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: CLAP headers
+        run: make clap-fetch
+      - name: Build
+        run: make clap
+      - name: It loads, plays, switches racks and restores its state
+        run: make clap-test
+      - name: clap_entry survives -fvisibility=hidden
+        run: |
+          # CLAP_EXPORT has to beat the hidden default, or a host opens the
+          # library, finds no entry point, and reports nothing useful.
+          nm -D --defined-only build/bencsynth.clap | grep -q clap_entry
+      - name: Package
+        run: |
+          D="bencsynth-clap-linux-$(git rev-parse --short HEAD)"
+          mkdir -p "$D"
+          cp -r build/bencsynth.clap "$D"/
+          cp README.md LICENSE NOTICE docs/PLUGIN.md "$D"/
+          tar czf "$D.tar.gz" "$D"
+          echo "PKG=$D.tar.gz" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bencsynth-clap-linux
+          path: ${{ env.PKG }}
+          if-no-files-found: error
+
+  clap-windows:
+    name: clap plugin (windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            git
+            make
+            zip
+            tar
+      - name: CLAP headers
+        run: make clap-fetch
+      - name: Build
+        run: make clap
+      - name: It is a PE, and the entry point is exported
+        run: |
+          ls -l build/bencsynth.clap
+          file build/bencsynth.clap | grep -qi "PE32+"
+          objdump -p build/bencsynth.clap | grep -q clap_entry
+      # Same check the LV2 and the executable get: a host will not have MSYS2's
+      # runtime DLLs on its PATH, and LoadLibrary failing is indistinguishable
+      # from the plugin not being installed.
+      - name: No MSYS2 DLL dependencies
+        run: |
+          if objdump -p build/bencsynth.clap | \
+             grep -iE 'DLL Name:.*(libgcc|libwinpthread|libstdc|msys)'; then
+            echo "the plugin imports a runtime DLL a host will not have"
+            exit 1
+          fi
+          echo "ok - self-contained"
+      - name: Package
+        run: |
+          D="bencsynth-clap-windows-$(git rev-parse --short HEAD)"
+          mkdir -p "$D"
+          cp build/bencsynth.clap "$D"/
+          cp README.md LICENSE NOTICE docs/PLUGIN.md "$D"/
+          zip -r "$D.zip" "$D"
+          echo "PKG=$D.zip" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bencsynth-clap-windows
+          path: ${{ env.PKG }}
+          if-no-files-found: error
+
+  clap-macos:
+    name: clap plugin (macos)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: CLAP headers
+        run: make clap-fetch
+      - name: Build
+        run: make clap
+      - name: It is a bundle, with a plist and an exported entry point
+        run: |
+          ls -lR build/bencsynth.clap
+          test -f build/bencsynth.clap/Contents/Info.plist
+          test -f build/bencsynth.clap/Contents/MacOS/bencsynth
+          nm -gU build/bencsynth.clap/Contents/MacOS/bencsynth | grep -q clap_entry
+      - name: It loads, plays, switches racks and restores its state
+        run: make clap-test
+      - name: Package
+        run: |
+          D="bencsynth-clap-macos-$(git rev-parse --short HEAD)"
+          mkdir -p "$D"
+          cp -r build/bencsynth.clap "$D"/
+          cp README.md LICENSE NOTICE docs/PLUGIN.md "$D"/
+          tar czf "$D.tar.gz" "$D"
+          echo "PKG=$D.tar.gz" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bencsynth-clap-macos
+          path: ${{ env.PKG }}
+          if-no-files-found: error
+
   # The Linux job above builds an ELF .so. Dropping that bundle into
   # %APPDATA%\LV2 gets you a plugin that is found, read, and then not loaded,
   # because manifest.ttl points at a binary Windows cannot execute - and a host
