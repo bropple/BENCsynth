@@ -14,10 +14,8 @@
 #include "bs_rack.h"
 #include "bs_keyboard.h"
 #include "bs_patchfile.h"
-#if defined(_WIN32)
-#  include <windows.h>
-#endif
 #include "bs_shm.h"
+#include "bs_embed.h"
 #include "bs_sync.h"
 #include "bs_filedlg.h"
 #include "bs_engine.h"
@@ -572,27 +570,17 @@ int main(int argc, char **argv)
         say(&app, "editing a plugin - the host is making the sound");
 
         /* Become a child of the host's window. SetParent works across process
-         * boundaries on Windows, which is the whole reason the editor can be a
-         * separate process and still appear inside a DAW's FX rack. The style
-         * has to change too: a window created as top-level keeps its caption
-         * and border otherwise, inside somebody else's frame. */
-#if defined(_WIN32)
+         * boundaries, which is the whole reason the editor can be a separate
+         * process and still appear inside a DAW's FX rack. The handle crosses
+         * as a void* because windows.h and raylib cannot share a file - see
+         * src/plugin/bs_embed.h. */
         if (embedParent) {
-            HWND child  = (HWND)GetWindowHandle();
-            HWND parent = (HWND)(uintptr_t)embedParent;
-            if (child && parent) {
-                SetWindowLongPtrA(child, GWL_STYLE,
-                                  WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS);
-                SetParent(child, parent);
-                const uint32_t w = shm.block->wantW.load();
-                const uint32_t h = shm.block->wantH.load();
-                SetWindowPos(child, 0, 0, 0,
-                             (int)(w ? w : (uint32_t)WIN_W),
-                             (int)(h ? h : (uint32_t)WIN_H),
-                             SWP_NOZORDER | SWP_SHOWWINDOW);
-            }
+            const uint32_t w = shm.block->wantW.load();
+            const uint32_t h = shm.block->wantH.load();
+            bs::bs_embed_window(GetWindowHandle(), embedParent,
+                                (int)(w ? w : (uint32_t)WIN_W),
+                                (int)(h ? h : (uint32_t)WIN_H));
         }
-#endif
     }
 
     app_retitle(&app);
