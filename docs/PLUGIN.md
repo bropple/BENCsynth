@@ -405,6 +405,42 @@ directory the `.clap` itself is in, then `PATH`. If all three miss, `show`
 fails and says so on stderr rather than leaving a host waiting for a window
 that will never appear.
 
+## VST3, by wrapping
+
+`make vst3-fetch` once, then `make vst3`. It builds
+[clap-wrapper](https://github.com/free-audio/clap-wrapper) against the CLAP and
+VST3 SDKs and produces `build/bencsynth.vst3`.
+
+There is no second port and no second copy of the synthesizer. The wrapper
+builds a VST3 that looks for a CLAP **of the same name** in the standard CLAP
+directories and loads it at runtime — including
+`%LOCALAPPDATA%\Programs\Common\CLAP` on Windows, which is where
+`make clap-install` already puts it. CI checks this rather than assuming it:
+the built `bencsynth.so` inside the bundle exports `GetPluginFactory` and
+contains **zero** `bs::` symbols. If DSP ever ends up in there, the two copies
+would drift apart silently.
+
+That property has a useful consequence: the wrapper and the plugin need not
+share a toolchain. CI builds the VST3 with **MSVC** and the CLAP with
+**MinGW**, and they work together, because the only thing the wrapper has to
+agree with anyone about is the VST3 ABI.
+
+Both SDKs are MIT — CLAP always was, and Steinberg relicensed VST3 in October
+2025 — so this adds no licensing obligation beyond attribution.
+
+Versions are pinned (`clap-wrapper v0.15.1`, CLAP `1.2.10`) rather than
+tracked. The first attempt at this used CLAP 1.2.2 and failed to compile:
+clap-wrapper's main follows the CLAP SDK closely enough that it wanted
+`clap/ext/draft/gain-adjustment-metering.h`, which did not exist until later.
+An unpinned pair breaks on someone else's schedule.
+
+The VST3 SDK's submodules are fetched individually, because the full set drags
+in vstgui4 — by far the largest part of it, and something a wrapper never
+touches. That is 37 MB instead of several hundred.
+
+**Install both.** A VST3 without its CLAP loads into the host and has nothing
+to play.
+
 ## Installing it
 
 ```

@@ -133,7 +133,7 @@ endif
 # ------------------------------------------------------------------
 
 CLAP_SRC     := src/clap/bencsynth_clap.cpp $(PLUGIN_SRC)
-CLAP_VERSION := 1.2.2
+CLAP_VERSION := 1.2.10
 CLAP_INCLUDE ?= vendor/clap/include
 CLAP_FOUND   := $(if $(wildcard $(CLAP_INCLUDE)/clap/clap.h),yes,)
 
@@ -159,6 +159,34 @@ else
   CLAP_LINK    :=
   CLAP_RT      := -lrt
   CLAP_INSTALL_DIR ?= $(HOME)/.clap
+endif
+
+# ------------------------------------------------------------------
+# VST3, by wrapping the CLAP
+#
+# Not a second port. clap-wrapper builds a VST3 that loads a CLAP of the same
+# name from the standard CLAP directories at runtime - so this is the same
+# plugin, the same editor, reaching Ableton, Cubase, FL Studio and Studio One,
+# none of which will ever load an LV2 or a bare CLAP.
+#
+# Both SDKs are MIT: CLAP always was, and Steinberg relicensed VST3 in October
+# 2025. Pinned rather than tracked, because clap-wrapper's main branch follows
+# the CLAP SDK closely enough that an unpinned pair stops compiling.
+# ------------------------------------------------------------------
+
+CW_VERSION   := v0.15.1
+VST3_SDK_TAG := master
+CW_DIR       := vendor/clap-wrapper
+VST3_SDK_DIR := vendor/vst3sdk
+VST3_BUILD   := build/vst3
+VST3_BUNDLE  := build/bencsynth.vst3
+
+ifeq ($(UNAME_S),Darwin)
+  VST3_INSTALL_DIR ?= $(HOME)/Library/Audio/Plug-Ins/VST3
+else ifeq ($(OS),Windows_NT)
+  VST3_INSTALL_DIR ?= $(LOCALAPPDATA)/Programs/Common/VST3
+else
+  VST3_INSTALL_DIR ?= $(HOME)/.vst3
 endif
 
 RENDER_SRC := tools/render_wav.cpp
@@ -239,7 +267,8 @@ endif
 # ------------------------------------------------------------------
 
 .PHONY: all core test clean info run render icons lv2 lv2-install lv2-validate lv2-test \
-        clap clap-test clap-install clap-fetch ipc-test
+        clap clap-test clap-install clap-fetch ipc-test \
+        vst3 vst3-fetch vst3-install
 
 
 all: $(GUI)
@@ -400,6 +429,50 @@ clap-test: clap $(CLAPHOST)
 $(CLAPHOST): tools/clap_host.cpp
 	$(CXX) $(CXXFLAGS) -I$(CLAP_INCLUDE) -o $@ $< -ldl
 
+# ------------------------------------------------------------------
+# VST3 targets
+# ------------------------------------------------------------------
+
+# The VST3 SDK's submodules are fetched one at a time on purpose: the whole
+# set pulls vstgui4, which is by far the largest piece of it and which a
+# wrapper never touches.
+vst3-fetch:
+	mkdir -p vendor
+	rm -rf $(CW_DIR) $(VST3_SDK_DIR)
+	git clone -q --depth 1 --branch $(CW_VERSION) \
+	    https://github.com/free-audio/clap-wrapper.git $(CW_DIR)
+	git clone -q --depth 1 https://github.com/steinbergmedia/vst3sdk.git $(VST3_SDK_DIR)
+	cd $(VST3_SDK_DIR) && git submodule update --init --depth 1 \
+	    base pluginterfaces public.sdk cmake
+	@echo "clap-wrapper $(CW_VERSION) and the VST3 SDK are in vendor/"
+
+vst3:
+ifeq ($(CLAP_FOUND),yes)
+	@test -d $(CW_DIR) || { echo "  run 'make vst3-fetch' first."; false; }
+	cmake -S $(CW_DIR) -B $(VST3_BUILD) -DCMAKE_BUILD_TYPE=Release \
+	    -DCLAP_SDK_ROOT="$(CURDIR)/vendor/clap" \
+	    -DVST3_SDK_ROOT="$(CURDIR)/$(VST3_SDK_DIR)" \
+	    -DCLAP_WRAPPER_OUTPUT_NAME=bencsynth
+	cmake --build $(VST3_BUILD) --target bencsynth_as_vst3 --config Release -j
+	rm -rf $(VST3_BUNDLE)
+	cp -r $(VST3_BUILD)/Release/bencsynth.vst3 $(VST3_BUNDLE)
+	@echo "built $(VST3_BUNDLE)"
+else
+	@echo "  no CLAP headers - run 'make clap-fetch' first."
+	@false
+endif
+
+# The VST3 is a shim: it finds bencsynth.clap in the standard CLAP directories
+# at runtime, so the CLAP has to be installed too. Both, or the host loads a
+# plugin that has nothing to play.
+vst3-install: vst3 clap-install
+	mkdir -p "$(VST3_INSTALL_DIR)"
+	rm -rf "$(VST3_INSTALL_DIR)/bencsynth.vst3"
+	cp -r $(VST3_BUNDLE) "$(VST3_INSTALL_DIR)/"
+	@echo
+	@echo "  installed to $(VST3_INSTALL_DIR)/bencsynth.vst3"
+	@echo "  it loads bencsynth.clap from $(CLAP_INSTALL_DIR)"
+
 clap-install: clap
 	mkdir -p "$(CLAP_INSTALL_DIR)"
 	rm -rf "$(CLAP_INSTALL_DIR)/bencsynth.clap"
@@ -435,7 +508,7 @@ clean:
 	rm -f $(CORE_OBJ) $(GUI_OBJ) $(TEST_OBJ) $(RENDER_OBJ) \
 	      $(CORE_OBJ:.o=.d) $(GUI_OBJ:.o=.d) $(TEST_OBJ:.o=.d) $(RENDER_OBJ:.o=.d) \
 	      $(CORE_LIB) $(GUI) $(TEST) $(RENDER) $(LV2HOST) src/gui/*.res.o
-	rm -rf $(LV2_BUNDLE) $(CLAP_BUNDLE)
+	rm -rf $(LV2_BUNDLE) $(CLAP_BUNDLE) $(VST3_BUNDLE) $(VST3_BUILD)
 	rm -f $(CLAPHOST) $(IPCTEST)
 
 -include $(CORE_OBJ:.o=.d) $(GUI_OBJ:.o=.d) $(TEST_OBJ:.o=.d) $(RENDER_OBJ:.o=.d)

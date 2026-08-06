@@ -267,7 +267,8 @@ the keyboard and drive the scopes; knob moves reach the audio without
 rebuilding anything.
 
 ```
-make clap-fetch && make clap-install     # CLAP - most hosts, rack and editor
+make clap-fetch && make clap-install     # CLAP - REAPER, Bitwig, rack and editor
+make vst3-fetch  && make vst3-install    # VST3 - Ableton, Cubase, FL, Studio One
 make lv2-install                         # LV2  - Ardour, Qtractor, LMMS 1.3
 ```
 
@@ -291,6 +292,17 @@ To open it without typing the path:
 ```powershell
 explorer "$env:LOCALAPPDATA\Programs\Common\CLAP"
 ```
+
+**VST3** — a `bencsynth.vst3` bundle. It is a **shim**: clap-wrapper builds a
+VST3 that finds `bencsynth.clap` in the standard CLAP directories at runtime,
+so it contains no synthesizer at all and **the CLAP has to be installed too**.
+Same plugin, same editor, reaching hosts that will never load a bare CLAP.
+
+| | User | System |
+|---|---|---|
+| **Windows** | `%LOCALAPPDATA%\Programs\Common\VST3` | `%COMMONPROGRAMFILES%\VST3` |
+| **Linux** | `~/.vst3` | `/usr/lib/vst3` |
+| **macOS** | `~/Library/Audio/Plug-Ins/VST3` | `/Library/Audio/Plug-Ins/VST3` |
 
 **LV2** — always the whole `bencsynth.lv2` *directory*, never the binary alone.
 The `.ttl` files beside it are what make it visible at all.

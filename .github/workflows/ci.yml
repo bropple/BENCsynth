@@ -269,6 +269,98 @@ jobs:
           path: ${{ env.PKG }}
           if-no-files-found: error
 
+  # VST3, by wrapping the CLAP rather than porting anything. The wrapper
+  # contains no BENCsynth code at all - it finds bencsynth.clap in the standard
+  # CLAP directories at runtime - which is why the Windows job below can build
+  # it with MSVC while the CLAP itself is built with MinGW.
+  vst3:
+    name: vst3 wrapper (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: CLAP headers, clap-wrapper and the VST3 SDK
+        run: |
+          make clap-fetch
+          make vst3-fetch
+      - name: Build
+        run: make vst3
+      - name: It is a VST3 bundle with the right entry point
+        run: |
+          find build/bencsynth.vst3 -type f
+          test -f build/bencsynth.vst3/Contents/x86_64-linux/bencsynth.so
+          nm -D --defined-only build/bencsynth.vst3/Contents/x86_64-linux/bencsynth.so \
+            | grep -q GetPluginFactory
+      - name: And it is a shim, not a second copy of the synth
+        run: |
+          # No BENCsynth symbols: the wrapper loads the CLAP at runtime. If DSP
+          # ever ends up in here, the two would drift apart silently.
+          test "$(nm -D build/bencsynth.vst3/Contents/x86_64-linux/bencsynth.so | grep -c 'bs::')" = "0"
+      - name: Package
+        run: |
+          D="bencsynth-vst3-linux-$(git rev-parse --short HEAD)"
+          mkdir -p "$D"
+          cp -r build/bencsynth.vst3 build/bencsynth.clap "$D"/
+          cp README.md LICENSE NOTICE docs/PLUGIN.md "$D"/
+          tar czf "$D.tar.gz" "$D"
+          echo "PKG=$D.tar.gz" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bencsynth-vst3-linux
+          path: ${{ env.PKG }}
+          if-no-files-found: error
+
+  vst3-windows:
+    name: vst3 wrapper (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      # MSVC, not MSYS2. The VST3 SDK expects it on Windows, and nothing of
+      # ours is linked in here - the wrapper only has to agree with the host
+      # about the VST3 ABI, which is what MSVC is for.
+      - name: clap-wrapper and the SDKs
+        shell: bash
+        run: |
+          mkdir -p vendor
+          curl -sL -o /tmp/clap.tar.gz \
+            https://github.com/free-audio/clap/archive/refs/tags/1.2.10.tar.gz
+          tar xzf /tmp/clap.tar.gz -C vendor
+          mv vendor/clap-1.2.10 vendor/clap
+          git clone -q --depth 1 --branch v0.15.1 \
+            https://github.com/free-audio/clap-wrapper.git vendor/clap-wrapper
+          git clone -q --depth 1 \
+            https://github.com/steinbergmedia/vst3sdk.git vendor/vst3sdk
+          cd vendor/vst3sdk && git submodule update --init --depth 1 \
+            base pluginterfaces public.sdk cmake
+      - name: Build
+        shell: bash
+        run: |
+          cmake -S vendor/clap-wrapper -B build/vst3 -A x64 \
+            -DCLAP_SDK_ROOT="$PWD/vendor/clap" \
+            -DVST3_SDK_ROOT="$PWD/vendor/vst3sdk" \
+            -DCLAP_WRAPPER_OUTPUT_NAME=bencsynth
+          cmake --build build/vst3 --target bencsynth_as_vst3 --config Release
+      - name: Find and check it
+        shell: bash
+        run: |
+          find build/vst3 -name "bencsynth.vst3" -o -name "bencsynth.vst3" -type d | head
+          FOUND=$(find build/vst3 -name "*.vst3" | head -1)
+          test -n "$FOUND"
+          echo "VST3=$FOUND" >> "$GITHUB_ENV"
+      - name: Package
+        shell: bash
+        run: |
+          D="bencsynth-vst3-windows-$(git rev-parse --short HEAD)"
+          mkdir -p "$D"
+          cp -r "$VST3" "$D"/
+          cp README.md LICENSE NOTICE docs/PLUGIN.md "$D"/
+          7z a "$D.zip" "$D" > /dev/null
+          echo "PKG=$D.zip" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bencsynth-vst3-windows
+          path: ${{ env.PKG }}
+          if-no-files-found: error
+
   # The Linux job above builds an ELF .so. Dropping that bundle into
   # %APPDATA%\LV2 gets you a plugin that is found, read, and then not loaded,
   # because manifest.ttl points at a binary Windows cannot execute - and a host
