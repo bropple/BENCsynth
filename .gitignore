@@ -41,3 +41,4 @@ shots/
 # The LV2 bundle is built, not committed.
 build/
 bencsynth-lv2-host
+bencsynth-clap-host
