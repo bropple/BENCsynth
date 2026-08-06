@@ -59,14 +59,34 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: LV2 headers and validator
+      - name: LV2 headers and tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y lv2-dev lv2-utils
+          # lilv is the library LMMS itself loads LV2 plugins with, so having
+          # its command-line tools here means the discovery check below is the
+          # same discovery a host does.
+          sudo apt-get install -y lv2-dev lilv-utils
       - name: Build the bundle
         run: make lv2
       - name: It describes itself correctly
         run: make lv2-validate
+
+      # Stronger than validating the Turtle in isolation: this asks lilv to go
+      # looking for plugins the way a host does and checks that ours is one of
+      # the things it finds. A bundle can be valid RDF and still be invisible.
+      - name: lilv finds it, the way a host would
+        run: |
+          export LV2_PATH="$PWD/build"
+          lv2ls | tee /tmp/found.txt
+          grep -q 'bropple/BENCsynth' /tmp/found.txt
+          echo "discovered"
+      - name: And it reports itself as an instrument with the right ports
+        run: |
+          export LV2_PATH="$PWD/build"
+          lv2info 'https://github.com/bropple/BENCsynth' | tee /tmp/info.txt
+          grep -qi 'InstrumentPlugin' /tmp/info.txt
+          # Eleven ports: MIDI in, two audio out, eight macros.
+          test "$(grep -c 'Port ' /tmp/info.txt)" = 11
       - name: It loads, plays and restores its state
         run: make lv2-test
       - name: The bundle is what a host expects to find

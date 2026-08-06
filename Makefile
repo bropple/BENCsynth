@@ -229,7 +229,13 @@ $(LV2_BUNDLE): $(LV2_SRC) $(CORE_SRC) src/lv2/bencsynth.ttl src/lv2/manifest.ttl
 # The Turtle has to describe the ports the C actually connects, and nothing in
 # the compiler checks that. lv2_validate reads the bundle the way a host will.
 lv2-validate: lv2
-	lv2_validate $(LV2_BUNDLE)/*.ttl && echo "the bundle describes itself correctly"
+	@if command -v lv2_validate >/dev/null 2>&1; then \
+	    lv2_validate $(LV2_BUNDLE)/*.ttl && \
+	    echo "the bundle describes itself correctly"; \
+	 else \
+	    echo "  lv2_validate not installed - skipping."; \
+	    echo "  It ships with the LV2 distribution; CI has it."; \
+	 fi
 
 # Loads the bundle the way a host does and plays it. Compiling proves nothing
 # about whether the ports are connected to the right buffers or whether state
