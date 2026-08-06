@@ -79,9 +79,14 @@ TEST     := bencsynth-test$(EXE)
 LV2_SRC    := src/lv2/bencsynth_lv2.cpp
 LV2_BUNDLE := build/bencsynth.lv2
 
+# Both architectures in one binary. macos-latest runners are Apple Silicon, so
+# a plain build is arm64-only and will not load in an Intel host at all -
+# which, like everything else on this platform, is reported as "damaged".
+MAC_ARCHS := -arch x86_64 -arch arm64
+
 ifeq ($(UNAME_S),Darwin)
   LV2_LIB_EXT := .dylib
-  LV2_SHARED  := -dynamiclib
+  LV2_SHARED  := -dynamiclib $(MAC_ARCHS)
   LV2_LINK    :=
 else ifeq ($(OS),Windows_NT)
   LV2_LIB_EXT := .dll
@@ -140,7 +145,7 @@ CLAP_FOUND   := $(if $(wildcard $(CLAP_INCLUDE)/clap/clap.h),yes,)
 ifeq ($(UNAME_S),Darwin)
   CLAP_BUNDLE  := build/bencsynth.clap
   CLAP_BINARY  := $(CLAP_BUNDLE)/Contents/MacOS/bencsynth
-  CLAP_SHARED  := -dynamiclib
+  CLAP_SHARED  := -dynamiclib $(MAC_ARCHS)
   CLAP_LINK    :=
   CLAP_INSTALL_DIR ?= $(HOME)/Library/Audio/Plug-Ins/CLAP
 else ifeq ($(OS),Windows_NT)
@@ -268,7 +273,7 @@ endif
 
 .PHONY: all core test clean info run render icons lv2 lv2-install lv2-validate lv2-test \
         clap clap-test clap-install clap-fetch ipc-test \
-        vst3 vst3-fetch vst3-install
+        vst3 vst3-fetch vst3-install mac-sign
 
 
 all: $(GUI)
@@ -332,6 +337,9 @@ $(LV2_BUNDLE): $(LV2_SRC) $(CORE_SRC) src/lv2/bencsynth.ttl src/lv2/manifest.ttl
 	    -fPIC -fvisibility=hidden \
 	    $(LV2_SHARED) $(LV2_LINK) -o $(LV2_BUNDLE)/bencsynth$(LV2_LIB_EXT) \
 	    $(LV2_SRC) $(CORE_SRC) -lm
+ifeq ($(UNAME_S),Darwin)
+	@$(MAKE) --no-print-directory mac-sign BUNDLE=$(LV2_BUNDLE)
+endif
 	sed 's|@LIB_EXT@|$(LV2_LIB_EXT)|' src/lv2/manifest.ttl.in > $(LV2_BUNDLE)/manifest.ttl
 	cp src/lv2/bencsynth.ttl $(LV2_BUNDLE)/bencsynth.ttl
 	@echo "built $(LV2_BUNDLE)"
@@ -404,6 +412,7 @@ $(CLAP_BINARY): $(CLAP_SRC) $(PLUGIN_HDR) $(CORE_SRC) $(wildcard src/clap/Info.p
 	    $(CLAP_SRC) $(CORE_SRC) -lm $(CLAP_RT)
 ifeq ($(UNAME_S),Darwin)
 	cp src/clap/Info.plist $(CLAP_BUNDLE)/Contents/Info.plist
+	@$(MAKE) --no-print-directory mac-sign BUNDLE=$(CLAP_BUNDLE)
 endif
 	@echo "built $(CLAP_BUNDLE)"
 
@@ -472,6 +481,26 @@ vst3-install: vst3 clap-install
 	@echo
 	@echo "  installed to $(VST3_INSTALL_DIR)/bencsynth.vst3"
 	@echo "  it loads bencsynth.clap from $(CLAP_INSTALL_DIR)"
+
+# macOS will not load an unsigned bundle, and says "damaged" rather than
+# anything about signatures. tools/macos-app.sh has done this for the program
+# since the first release; the plugins never got the same treatment, which is
+# exactly how they arrived reported as damaged.
+#
+# Ad-hoc (-s -) rather than a Developer ID: it satisfies the arm64 requirement
+# that a binary be signed at all, and costs nothing. It does NOT clear the
+# quarantine flag on a downloaded file - only notarisation does that - so a
+# person who downloads a release still needs one xattr command, which the
+# install notes give them.
+mac-sign:
+	@rm -rf $(BUNDLE)/Contents/MacOS/*.dSYM $(BUNDLE)/*.dSYM
+	@if command -v codesign >/dev/null 2>&1; then \
+	    codesign --force --deep --sign - --timestamp=none "$(BUNDLE)" && \
+	    codesign --verify --deep --strict "$(BUNDLE)" && \
+	    echo "  signed $(BUNDLE) (ad-hoc)"; \
+	 else \
+	    echo "  warning: no codesign - macOS will call this bundle damaged"; \
+	 fi
 
 clap-install: clap
 	mkdir -p "$(CLAP_INSTALL_DIR)"

@@ -253,6 +253,24 @@ jobs:
           test -f build/bencsynth.clap/Contents/Info.plist
           test -f build/bencsynth.clap/Contents/MacOS/bencsynth
           nm -gU build/bencsynth.clap/Contents/MacOS/bencsynth | grep -q clap_entry
+
+      # The three things that make macOS report a plugin as "damaged", each
+      # checked rather than assumed. v0.1.0's macOS CLAP failed all three.
+      - name: It is signed, universal, and carries no debug symbols
+        run: |
+          # Unsigned arm64 code does not load at all, and the message a host
+          # shows says nothing about signatures.
+          codesign --verify --deep --strict --verbose=2 build/bencsynth.clap
+
+          # Both architectures: the runner is Apple Silicon, so a plain build
+          # is arm64-only and useless to anyone on an Intel Mac.
+          lipo -info build/bencsynth.clap/Contents/MacOS/bencsynth
+          lipo -info build/bencsynth.clap/Contents/MacOS/bencsynth | grep -q x86_64
+          lipo -info build/bencsynth.clap/Contents/MacOS/bencsynth | grep -q arm64
+
+          # A .dSYM inside the bundle is build litter that gets shipped.
+          test -z "$(find build/bencsynth.clap -name '*.dSYM')"
+          echo "signed, universal, clean"
       - name: It loads, plays, switches racks and restores its state
         run: make clap-test
       - name: Package
@@ -465,6 +483,11 @@ jobs:
           test -f build/bencsynth.lv2/bencsynth.dylib
           grep -q 'bencsynth\.dylib' build/bencsynth.lv2/manifest.ttl
           nm -gU build/bencsynth.lv2/bencsynth.dylib | grep -q lv2_descriptor
+      - name: It is signed and universal
+        run: |
+          codesign --verify --deep --strict --verbose=2 build/bencsynth.lv2
+          lipo -info build/bencsynth.lv2/bencsynth.dylib | grep -q x86_64
+          lipo -info build/bencsynth.lv2/bencsynth.dylib | grep -q arm64
       - name: It loads, plays and restores its state
         run: LV2_INCLUDE=/tmp/lv2-1.18.10/include make lv2-test
       - name: Package
