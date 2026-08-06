@@ -397,6 +397,25 @@ editor from a real plugin instance.
 
 Both run in CI under Xvfb.
 
+### When there is no window, the log says why
+
+A plugin has nowhere to speak: stderr is swallowed by the host, there is no
+window yet to put a message in, and every failure is reported as "it did not
+open". Two very different causes look identical from outside — the host never
+asking for a GUI, and the editor process failing to start — and both were
+diagnosed by guessing before this existed.
+
+So the plugin keeps a short log: `~/Library/Logs/BENCsynth.log` on macOS,
+`$HOME/.bencsynth.log` on Linux, `%LOCALAPPDATA%\BENCsynth.log` on Windows.
+Always on, appended, truncated past 256 KB. It records each `is_api_supported`
+question with the mode asked for, each `create` / `set_parent` / `show`, and
+every path tried when looking for the editor, with what happened at each.
+
+A host that only embeds never asks for floating, so a floating-only build is
+never asked for anything at all — and that is visible in the log as
+`is_api_supported(..., floating=0)` returning nothing useful, with no `show`
+following it.
+
 ### Finding the editor
 
 The plugin and the standalone are separate files and nothing guarantees they

@@ -20,6 +20,7 @@
 #include "bs_patchfile.h"
 #include "bs_shm.h"
 #include "bs_sync.h"
+#include "bs_log.h"
 
 #include <clap/clap.h>
 
@@ -676,6 +677,11 @@ static const void *pl_get_extension(const clap_plugin_t *, const char *id)
 static bool gui_is_api_supported(const clap_plugin_t *, const char *api,
                                  bool is_floating)
 {
+    /* Logged because the answer to "why is there no window" is usually here:
+     * a host that only embeds never asks for floating, and a plugin that only
+     * floats is never asked for anything else. */
+    bs::bs_log("gui.is_api_supported(%s, floating=%d)", api ? api : "?",
+               is_floating ? 1 : 0);
 #if defined(_WIN32)
     if (std::strcmp(api, CLAP_WINDOW_API_WIN32) != 0) return false;
     /* Both. Hosts built around an FX rack - REAPER is one - embed the plugin's
@@ -715,7 +721,11 @@ static bool gui_get_preferred_api(const clap_plugin_t *, const char **api,
 static bool gui_create(const clap_plugin_t *p, const char *api, bool is_floating)
 {
     BencSynthClap *s = self_of(p);
-    if (!gui_is_api_supported(p, api, is_floating)) return false;
+    bs::bs_log("gui.create(%s, floating=%d)", api ? api : "?", is_floating ? 1 : 0);
+    if (!gui_is_api_supported(p, api, is_floating)) {
+        bs::bs_log("  refused - this platform build does not offer that mode");
+        return false;
+    }
     if (s->guiCreated) return true;
     s->floating     = is_floating;
     s->parentHandle = 0;
@@ -811,6 +821,7 @@ static bool gui_set_size(const clap_plugin_t *p, uint32_t w, uint32_t h)
 static bool gui_set_parent(const clap_plugin_t *p, const clap_window_t *window)
 {
     BencSynthClap *s = self_of(p);
+    bs::bs_log("gui.set_parent(%s)", window && window->api ? window->api : "?");
     if (!window) return false;
 #if defined(_WIN32)
     if (std::strcmp(window->api, CLAP_WINDOW_API_WIN32) != 0) return false;
@@ -828,7 +839,13 @@ static void gui_suggest_title(const clap_plugin_t *, const char *) {}
 static bool gui_show(const clap_plugin_t *p)
 {
     BencSynthClap *s = self_of(p);
-    if (!s->guiCreated || !s->shmOpen) return false;
+    bs::bs_log("gui.show  (created=%d shm=%d editorDir=%s)",
+               s->guiCreated ? 1 : 0, s->shmOpen ? 1 : 0,
+               s->bundleDir.empty() ? "(none)" : s->bundleDir.c_str());
+    if (!s->guiCreated || !s->shmOpen) {
+        bs::bs_log("  refused - no GUI created yet");
+        return false;
+    }
     if (s->editorProc && bs::bs_shm_editor_running(s->editorProc)) return true;
 
     s->shm.block->quit.store(0, std::memory_order_release);
@@ -836,6 +853,7 @@ static bool gui_show(const clap_plugin_t *p)
                                     std::memory_order_release);
     const char *hint = s->bundleDir.empty() ? 0 : s->bundleDir.c_str();
     if (!bs::bs_shm_spawn_editor(hint, s->shm.name, &s->editorProc)) {
+        bs::bs_log("  the editor could not be started - see the candidates above");
         /* Nothing to show and no way to say why through this interface. The
          * host will report a failed show; the message goes to stderr, which is
          * where a person looking for it will be. */
@@ -844,6 +862,7 @@ static bool gui_show(const clap_plugin_t *p)
                      "to the path of the bencsynth executable.\n");
         return false;
     }
+    bs::bs_log("  editor started");
     return true;
 }
 
@@ -967,6 +986,7 @@ static bool entry_init(const char *path)
      * platform - on macOS it is a binary inside BENCsynth.app rather than a
      * file of its own - so the naming belongs with the code that knows the
      * platform. See editorCandidates() in bs_shm.cpp. */
+    bs::bs_log("---- entry_init(%s)", path ? path : "(null)");
     g_bundleDir.clear();
     if (path && *path) {
         g_bundleDir = path;

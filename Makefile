@@ -41,13 +41,15 @@ CORE_LIB := libbencsynth.a
 # The editor runs in another process and talks to the plugin over shared
 # memory. Both halves need this, and the standalone IS the editor (--editor),
 # so it is linked into the program as well as into the plugins.
-PLUGIN_SRC := src/plugin/bs_shm.cpp src/plugin/bs_sync.cpp src/plugin/bs_embed.cpp
+PLUGIN_SRC := src/plugin/bs_shm.cpp src/plugin/bs_sync.cpp src/plugin/bs_embed.cpp \
+              src/plugin/bs_log.cpp
 # Listed as prerequisites everywhere PLUGIN_SRC is used. These describe a
 # struct that lives in shared memory and is read by two separate binaries: if
 # one is rebuilt against a new layout and the other is not, they map the same
 # bytes and disagree about what is in them, which looks exactly like an editor
 # that attaches and then does nothing.
-PLUGIN_HDR := src/plugin/bs_shm.h src/plugin/bs_sync.h src/plugin/bs_embed.h
+PLUGIN_HDR := src/plugin/bs_shm.h src/plugin/bs_sync.h src/plugin/bs_embed.h \
+              src/plugin/bs_log.h
 
 GUI_SRC  := src/gui/main.cpp \
             src/gui/bs_gui.cpp \

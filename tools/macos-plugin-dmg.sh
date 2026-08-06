@@ -117,6 +117,16 @@ It is not just the standalone program. The plugin opens the rack - cables,
 knobs, keyboard - by starting that binary as a separate process. Without it
 installed you get your DAW's generic parameter list and no rack.
 
+If something does not work
+--------------------------
+The plugin writes what it is doing to
+
+  ~/Library/Logs/BENCsynth.log
+
+Every time your DAW asks it for a window, and every place it looks for the
+editor, is in there. If no rack opens, that file says which of the two went
+wrong - the host never asking, or the editor not being found.
+
 The VST3 needs the CLAP
 -----------------------
 The VST3 is a shim that loads bencsynth.clap at runtime. Install both, or it

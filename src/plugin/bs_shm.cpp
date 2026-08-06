@@ -9,6 +9,7 @@
  */
 
 #include "bs_shm.h"
+#include "bs_log.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -178,6 +179,7 @@ bool bs_shm_spawn_editor(const char *exePath, const char *shmName, void **procOu
         std::memset(&pi, 0, sizeof pi);
         si.cb = sizeof si;
 
+        bs_log("  trying editor: %s", exe);
         if (CreateProcessA(0, cmd, 0, 0, FALSE, 0, 0, 0, &si, &pi)) {
             CloseHandle(pi.hThread);
             *procOut = pi.hProcess;
@@ -280,6 +282,7 @@ bool bs_shm_spawn_editor(const char *exePath, const char *shmName, void **procOu
         const char *exe = editorCandidates(i, exePath, buf, sizeof buf);
         if (!exe) continue;
 
+        bs_log("  trying editor: %s", exe);
         const pid_t pid = fork();
         if (pid < 0) continue;
         if (pid == 0) {
@@ -296,12 +299,19 @@ bool bs_shm_spawn_editor(const char *exePath, const char *shmName, void **procOu
             int status = 0;
             const pid_t r = waitpid(pid, &status, WNOHANG);
             if (r == pid) {
-                if (WIFEXITED(status) && WEXITSTATUS(status) == 127) break;
+                if (WIFEXITED(status) && WEXITSTATUS(status) == 127)
+                    bs_log("    not there");
+                else
+                    bs_log("    started and exited immediately");
                 break;
             }
             struct timespec ts = { 0, 5 * 1000 * 1000 };   /* 5 ms */
             nanosleep(&ts, 0);
-            if (t == 19) { *procOut = (void *)(intptr_t)pid; return true; }
+            if (t == 19) {
+                bs_log("    running (pid %ld)", (long)pid);
+                *procOut = (void *)(intptr_t)pid;
+                return true;
+            }
         }
     }
     *procOut = 0;
