@@ -259,8 +259,15 @@ a build does not.
 
 ## As a plugin
 
-`make lv2` builds `build/bencsynth.lv2`; `make lv2-install` copies it to
-`~/.lv2` where a host will find it. It takes MIDI in, gives stereo out, exposes
+```
+make lv2-install
+```
+
+builds the bundle and copies it where hosts already look — `~/.lv2` on Linux,
+`~/Library/Audio/Plug-Ins/LV2` on macOS, `%APPDATA%\LV2` on Windows. Nothing to
+configure in the host; restart it and the plugin is there. Copy the whole
+`bencsynth.lv2` *directory* if you move it by hand — the `.ttl` files beside
+the binary are what make it visible at all. It takes MIDI in, gives stereo out, exposes
 eight macro controls for automation, and stores the whole rack as text inside
 the host's project — so build a rack in the standalone, and the song reopens
 with it.

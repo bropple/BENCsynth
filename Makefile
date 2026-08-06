@@ -79,9 +79,13 @@ endif
 LV2_CFLAGS := $(shell pkg-config --cflags lv2 2>/dev/null)
 LV2_FOUND  := $(shell pkg-config --exists lv2 2>/dev/null && echo yes)
 
-# Where a bundle goes to be found.
+# Where a bundle goes to be found. These are the user-level directories from
+# the LV2 filesystem hierarchy standard, which every host searches by default -
+# no host-side configuration, no LV2_PATH, nothing to set.
 ifeq ($(UNAME_S),Darwin)
   LV2_INSTALL_DIR ?= $(HOME)/Library/Audio/Plug-Ins/LV2
+else ifeq ($(OS),Windows_NT)
+  LV2_INSTALL_DIR ?= $(APPDATA)/LV2
 else
   LV2_INSTALL_DIR ?= $(HOME)/.lv2
 endif
@@ -219,7 +223,10 @@ endif
 
 $(LV2_BUNDLE): $(LV2_SRC) $(CORE_SRC) src/lv2/bencsynth.ttl src/lv2/manifest.ttl.in
 	@mkdir -p $(LV2_BUNDLE)
-	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(LV2_CFLAGS) -fPIC -fvisibility=hidden \
+	# -MMD is filtered out: it is for incremental builds, and here it would
+	# just leave a .d file sitting inside the bundle a host is meant to read.
+	$(CXX) $(filter-out -MMD -MP,$(CXXFLAGS)) $(CPPFLAGS) $(LV2_CFLAGS) \
+	    -fPIC -fvisibility=hidden \
 	    $(LV2_SHARED) -o $(LV2_BUNDLE)/bencsynth$(LV2_LIB_EXT) \
 	    $(LV2_SRC) $(CORE_SRC) -lm
 	sed 's|@LIB_EXT@|$(LV2_LIB_EXT)|' src/lv2/manifest.ttl.in > $(LV2_BUNDLE)/manifest.ttl
@@ -250,11 +257,17 @@ lv2-test: lv2 $(LV2HOST)
 $(LV2HOST): tools/lv2_host.cpp
 	$(CXX) $(CXXFLAGS) $(LV2_CFLAGS) -o $@ $< -ldl
 
+# The whole bundle directory, not the shared object inside it. A bundle is the
+# unit LV2 deals in - the .ttl files beside the binary are what tell a host the
+# plugin exists at all - so copying only the .so leaves a host with nothing to
+# find and no reason given.
 lv2-install: lv2
 	mkdir -p "$(LV2_INSTALL_DIR)"
 	rm -rf "$(LV2_INSTALL_DIR)/bencsynth.lv2"
 	cp -r $(LV2_BUNDLE) "$(LV2_INSTALL_DIR)/"
-	@echo "installed to $(LV2_INSTALL_DIR)/bencsynth.lv2"
+	@echo
+	@echo "  installed to $(LV2_INSTALL_DIR)/bencsynth.lv2"
+	@echo "  restart the host - it searches there by default."
 
 
 %.o: %.cpp
