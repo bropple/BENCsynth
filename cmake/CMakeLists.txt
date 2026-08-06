@@ -23,6 +23,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # when making a shared object", which is a long way from saying "add -fPIC".
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# MSVC: the static CRT, because the VST3 SDK builds itself that way and mixing
+# the two is a link error listing every object in the wrapper
+# ("mismatch detected for 'RuntimeLibrary'"). Static also means the plugin does
+# not need the Visual C++ redistributable on someone else's machine, which is
+# the same reason the CLAP and the executable are linked -static under MinGW.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
 project(bencsynth-vst3 LANGUAGES C CXX)
 
 if(NOT DEFINED CLAP_WRAPPER_DIR)
