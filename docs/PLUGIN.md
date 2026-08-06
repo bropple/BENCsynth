@@ -227,6 +227,21 @@ from the LV2 filesystem hierarchy standard, which every host already searches.
 Then restart the host — LMMS scans once at startup, so a bundle dropped in
 while it is running will not appear.
 
+### Get the bundle for the platform you are on
+
+CI publishes three, one per platform: `bencsynth-lv2-linux`,
+`bencsynth-lv2-windows`, `bencsynth-lv2-macos`. They are not interchangeable.
+The binary inside is `bencsynth.so`, `bencsynth.dll` or `bencsynth.dylib`
+respectively, and `manifest.ttl` names that file specifically.
+
+This is worth being careful about because the failure is silent in the worst
+way. Put the Linux bundle in `%APPDATA%\LV2` and lilv finds the directory,
+parses the Turtle, and asks Windows to load an ELF binary. That fails, and a
+host that cannot load a plugin's binary has nothing to report — LMMS shows no
+plugin and no error, exactly as if the folder were empty. If a bundle is in the
+right place and nothing appears, check which file is in it before checking
+anything else.
+
 **Copy the whole `bencsynth.lv2` directory, not the `.so` inside it.** The
 bundle is the unit LV2 deals in: the two `.ttl` files beside the binary are
 what tell a host the plugin exists at all. A lone shared object is invisible,

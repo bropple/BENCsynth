@@ -68,16 +68,33 @@ LV2_BUNDLE := build/bencsynth.lv2
 ifeq ($(UNAME_S),Darwin)
   LV2_LIB_EXT := .dylib
   LV2_SHARED  := -dynamiclib
+  LV2_LINK    :=
 else ifeq ($(OS),Windows_NT)
   LV2_LIB_EXT := .dll
   LV2_SHARED  := -shared
+  # Static, for the same reason the executable is: a DLL that imports
+  # libstdc++-6 and libwinpthread-1 needs them on the PATH of whatever loads
+  # it, and LMMS's PATH is not MSYS2's. The host's LoadLibrary just fails and
+  # the plugin is missing with no message - identical symptom to a bundle in
+  # the wrong directory, which makes it thoroughly unfun to diagnose.
+  LV2_LINK    := -static
 else
   LV2_LIB_EXT := .so
   LV2_SHARED  := -shared
+  LV2_LINK    :=
 endif
 
-LV2_CFLAGS := $(shell pkg-config --cflags lv2 2>/dev/null)
-LV2_FOUND  := $(shell pkg-config --exists lv2 2>/dev/null && echo yes)
+# LV2 is header-only to build against, so LV2_INCLUDE lets a build point
+# straight at an unpacked release when there is no lv2.pc to find - which is
+# the normal situation on Windows and macOS, where there is no distro package
+# putting one there.
+ifneq ($(LV2_INCLUDE),)
+  LV2_CFLAGS := -I$(LV2_INCLUDE)
+  LV2_FOUND  := yes
+else
+  LV2_CFLAGS := $(shell pkg-config --cflags lv2 2>/dev/null)
+  LV2_FOUND  := $(shell pkg-config --exists lv2 2>/dev/null && echo yes)
+endif
 
 # Where a bundle goes to be found. These are the user-level directories from
 # the LV2 filesystem hierarchy standard, which every host searches by default -
@@ -216,7 +233,9 @@ lv2:
 ifeq ($(LV2_FOUND),yes)
 	@$(MAKE) --no-print-directory $(LV2_BUNDLE)
 else
-	@echo "  no LV2 headers found - install the 'lv2' development package."
+	@echo "  no LV2 headers found - install the 'lv2' development package,"
+	@echo "  or point LV2_INCLUDE at the include/ directory of an unpacked"
+	@echo "  LV2 release: LV2_INCLUDE=/path/to/lv2/include make lv2"
 	@echo "  Everything else still builds; this target is the plugin only."
 	@false
 endif
@@ -227,7 +246,7 @@ $(LV2_BUNDLE): $(LV2_SRC) $(CORE_SRC) src/lv2/bencsynth.ttl src/lv2/manifest.ttl
 	# just leave a .d file sitting inside the bundle a host is meant to read.
 	$(CXX) $(filter-out -MMD -MP,$(CXXFLAGS)) $(CPPFLAGS) $(LV2_CFLAGS) \
 	    -fPIC -fvisibility=hidden \
-	    $(LV2_SHARED) -o $(LV2_BUNDLE)/bencsynth$(LV2_LIB_EXT) \
+	    $(LV2_SHARED) $(LV2_LINK) -o $(LV2_BUNDLE)/bencsynth$(LV2_LIB_EXT) \
 	    $(LV2_SRC) $(CORE_SRC) -lm
 	sed 's|@LIB_EXT@|$(LV2_LIB_EXT)|' src/lv2/manifest.ttl.in > $(LV2_BUNDLE)/manifest.ttl
 	cp src/lv2/bencsynth.ttl $(LV2_BUNDLE)/bencsynth.ttl

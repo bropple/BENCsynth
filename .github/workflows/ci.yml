@@ -55,7 +55,7 @@ jobs:
   # connect the wrong port to the wrong buffer or hand back state it cannot
   # read again - so this loads it the way a host does and plays it.
   lv2:
-    name: lv2 plugin
+    name: lv2 plugin (linux)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -126,7 +126,122 @@ jobs:
           echo "PKG=$D.tar.gz" >> "$GITHUB_ENV"
       - uses: actions/upload-artifact@v4
         with:
-          name: bencsynth-lv2
+          name: bencsynth-lv2-linux
+          path: ${{ env.PKG }}
+          if-no-files-found: error
+
+  # The Linux job above builds an ELF .so. Dropping that bundle into
+  # %APPDATA%\LV2 gets you a plugin that is found, read, and then not loaded,
+  # because manifest.ttl points at a binary Windows cannot execute - and a host
+  # that cannot load a binary reports nothing at all. A Windows host needs a
+  # Windows bundle, so here is one.
+  lv2-windows:
+    name: lv2 plugin (windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            git
+            make
+            zip
+            tar
+
+      # Straight from the LV2 release rather than a package: LV2 is header-only
+      # to build against, the tarball layout is include/lv2/<ext>/<file>.h which
+      # is exactly what the source asks for, and this needs no pkg-config and no
+      # guessing at what MSYS2 calls the package this week.
+      - name: LV2 headers
+        run: |
+          curl -sL -o /tmp/lv2.tar.gz \
+            https://github.com/lv2/lv2/archive/refs/tags/v1.18.10.tar.gz
+          tar -xzf /tmp/lv2.tar.gz -C /tmp
+          test -f /tmp/lv2-1.18.10/include/lv2/core/lv2.h
+
+      - name: Build the bundle
+        run: LV2_INCLUDE=/tmp/lv2-1.18.10/include make lv2
+
+      - name: It is a DLL, and the manifest says so
+        run: |
+          ls -l build/bencsynth.lv2
+          test -f build/bencsynth.lv2/manifest.ttl
+          test -f build/bencsynth.lv2/bencsynth.ttl
+          test -f build/bencsynth.lv2/bencsynth.dll
+          # The manifest is generated from a template with the extension
+          # substituted in. If that substitution ever regressed, the bundle
+          # would look perfect and point at a file that is not there.
+          grep -q 'bencsynth\.dll' build/bencsynth.lv2/manifest.ttl
+
+      - name: lv2_descriptor is exported
+        run: |
+          # nm -D is for ELF; on a PE the answer is in the export table.
+          objdump -p build/bencsynth.lv2/bencsynth.dll > /tmp/exp.txt
+          grep -q 'lv2_descriptor' /tmp/exp.txt
+
+      # Same check the executable gets, and for the same reason: LMMS will not
+      # have MSYS2's runtime DLLs on its PATH, and LoadLibrary failing looks
+      # exactly like the plugin not being installed.
+      - name: No MSYS2 DLL dependencies
+        run: |
+          if objdump -p build/bencsynth.lv2/bencsynth.dll | \
+             grep -iE 'DLL Name:.*(libgcc|libwinpthread|libstdc|msys)'; then
+            echo "the plugin imports a runtime DLL a host will not have"
+            exit 1
+          fi
+          echo "ok - self-contained"
+
+      - name: Package
+        run: |
+          D="bencsynth-lv2-windows-$(git rev-parse --short HEAD)"
+          mkdir -p "$D"
+          cp -r build/bencsynth.lv2 "$D"/
+          cp README.md LICENSE NOTICE docs/PLUGIN.md "$D"/
+          zip -r "$D.zip" "$D"
+          echo "PKG=$D.zip" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bencsynth-lv2-windows
+          path: ${{ env.PKG }}
+          if-no-files-found: error
+
+  lv2-macos:
+    name: lv2 plugin (macos)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: LV2 headers
+        run: |
+          curl -sL -o /tmp/lv2.tar.gz \
+            https://github.com/lv2/lv2/archive/refs/tags/v1.18.10.tar.gz
+          tar -xzf /tmp/lv2.tar.gz -C /tmp
+      - name: Build the bundle
+        run: LV2_INCLUDE=/tmp/lv2-1.18.10/include make lv2
+      - name: It is a dylib, and the manifest says so
+        run: |
+          ls -l build/bencsynth.lv2
+          test -f build/bencsynth.lv2/bencsynth.dylib
+          grep -q 'bencsynth\.dylib' build/bencsynth.lv2/manifest.ttl
+          nm -gU build/bencsynth.lv2/bencsynth.dylib | grep -q lv2_descriptor
+      - name: It loads, plays and restores its state
+        run: LV2_INCLUDE=/tmp/lv2-1.18.10/include make lv2-test
+      - name: Package
+        run: |
+          D="bencsynth-lv2-macos-$(git rev-parse --short HEAD)"
+          mkdir -p "$D"
+          cp -r build/bencsynth.lv2 "$D"/
+          cp README.md LICENSE NOTICE docs/PLUGIN.md "$D"/
+          tar czf "$D.tar.gz" "$D"
+          echo "PKG=$D.tar.gz" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bencsynth-lv2-macos
           path: ${{ env.PKG }}
           if-no-files-found: error
 
