@@ -65,7 +65,11 @@ jobs:
           # lilv is the library LMMS itself loads LV2 plugins with, so having
           # its command-line tools here means the discovery check below is the
           # same discovery a host does.
-          sudo apt-get install -y lv2-dev lilv-utils
+          # sord-utils as well as lv2-dev: lv2_validate is a shell script that
+          # calls sord_validate, and the two live in different packages - so
+          # the validator installs, runs, and fails with "not found" for
+          # something that is not the thing you installed.
+          sudo apt-get install -y lv2-dev lilv-utils sord-utils
       - name: Build the bundle
         run: make lv2
       - name: It describes itself correctly
