@@ -32,24 +32,77 @@ namespace bs {
 /* Where the editor binary might be. The plugin and the standalone are
  * separate files and nothing guarantees they are installed together, so this
  * tries the explicit answer first and degrades to guessing. */
+/* Where the editor binary might be.
+ *
+ * `hint` is the directory the plugin itself was loaded from. The plugin and
+ * the standalone are separate files and nothing guarantees they were installed
+ * together, so this tries the explicit answer first and degrades to guessing.
+ *
+ * macOS needs more guesses than the others, because the editor there is not a
+ * loose executable at all - the standalone is BENCsynth.app, and the binary
+ * lives four levels inside it. Dropping the .app next to the .clap is the
+ * obvious thing to do and it is what a person does; looking only for a file
+ * called `bencsynth` misses it completely, which is a plugin whose window
+ * never opens and never says why.
+ */
 static const char *editorCandidates(int i, const char *hint, char *buf, size_t cap)
 {
     const char *env = std::getenv("BENCSYNTH_EDITOR");
-#if defined(_WIN32)
-    const char *exe = "bencsynth.exe";
-#else
-    const char *exe = "bencsynth";
-#endif
-    switch (i) {
-    case 0: return env && *env ? env : 0;
-    case 1:
+    if (i == 0) return env && *env ? env : 0;
+
+    /* The hint verbatim. It is normally the directory the plugin was loaded
+     * from, but a caller that already knows the executable should not have to
+     * pretend otherwise - the test harness passes one, and so might anyone
+     * embedding this. Trying it costs one failed exec. */
+    if (i == 1) {
         if (!hint || !*hint) return 0;
         std::snprintf(buf, cap, "%s", hint);
         return buf;
-    case 2: return exe;                 /* whatever PATH says */
-    default: return 0;
     }
+    i--;
+
+#if defined(_WIN32)
+    static const char *const REL[] = { "/bencsynth.exe" };
+    const char *bare = "bencsynth.exe";
+#elif defined(__APPLE__)
+    static const char *const REL[] = {
+        "/BENCsynth.app/Contents/MacOS/bencsynth",  /* beside the plugin */
+        "/bencsynth.app/Contents/MacOS/bencsynth",  /* same, lowercased  */
+        "/bencsynth"                                /* a loose binary    */
+    };
+    const char *bare = "bencsynth";
+#else
+    static const char *const REL[] = { "/bencsynth" };
+    const char *bare = "bencsynth";
+#endif
+    const int nrel = (int)(sizeof REL / sizeof REL[0]);
+
+    if (i - 1 < nrel) {
+        if (!hint || !*hint) return 0;
+        std::snprintf(buf, cap, "%s%s", hint, REL[i - 1]);
+        return buf;
+    }
+
+#if defined(__APPLE__)
+    /* Installed normally, rather than dropped beside the plugin. */
+    if (i - 1 == nrel) {
+        std::snprintf(buf, cap, "/Applications/BENCsynth.app/Contents/MacOS/bencsynth");
+        return buf;
+    }
+    if (i - 1 == nrel + 1) return bare;
+    return 0;
+#else
+    if (i - 1 == nrel) return bare;     /* whatever PATH says */
+    return 0;
+#endif
 }
+
+/* How many editorCandidates() will offer before it runs out. */
+#if defined(__APPLE__)
+#  define BS_EDITOR_TRIES 7
+#else
+#  define BS_EDITOR_TRIES 4
+#endif
 
 #if defined(_WIN32)
 
@@ -112,7 +165,7 @@ void bs_shm_close(ShmMap *m)
 bool bs_shm_spawn_editor(const char *exePath, const char *shmName, void **procOut)
 {
     char buf[512];
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < BS_EDITOR_TRIES; i++) {
         const char *exe = editorCandidates(i, exePath, buf, sizeof buf);
         if (!exe) continue;
 
@@ -223,7 +276,7 @@ void bs_shm_close(ShmMap *m)
 bool bs_shm_spawn_editor(const char *exePath, const char *shmName, void **procOut)
 {
     char buf[512];
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < BS_EDITOR_TRIES; i++) {
         const char *exe = editorCandidates(i, exePath, buf, sizeof buf);
         if (!exe) continue;
 

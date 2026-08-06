@@ -214,6 +214,52 @@ int main(int argc, char **argv)
         }
     }
 
+    /* The editor is found from a directory, which is how the plugin passes
+     * it - and on macOS what sits in that directory is BENCsynth.app, not a
+     * loose binary. A lookup that only tries `bencsynth` finds nothing, and
+     * the symptom is a plugin whose window never opens and never says why.
+     * This builds the layout a person actually creates and checks it starts. */
+#if defined(__APPLE__)
+    {
+        std::printf("\nfinding the editor inside a .app\n");
+        char tmpl[] = "/tmp/bs-appXXXXXX";
+        const char *dir = mkdtemp(tmpl);
+        ok(dir != 0, "a staging directory is made");
+        if (dir) {
+            std::string app = std::string(dir) + "/BENCsynth.app/Contents/MacOS";
+            std::string mk  = "mkdir -p '" + app + "'";
+            std::string cp  = "cp '" + std::string(exe) + "' '" + app + "/bencsynth'";
+            ok(system(mk.c_str()) == 0 && system(cp.c_str()) == 0,
+               "a BENCsynth.app is staged beside where a plugin would be");
+
+            bs::ShmMap m;
+            if (bs::bs_shm_create(&m, 7777)) {
+                bs::Engine h; h.init(48000.0f); h.buildPreset(0);
+                const std::string t = bs_patch_to_string(&h);
+                bs::bs_shm_write(&m.block->host, t.c_str(), (uint32_t)t.size());
+
+                void *proc = 0;
+                /* The *directory*, exactly as the plugin hands it over. */
+                const bool started = bs::bs_shm_spawn_editor(dir, m.name, &proc);
+                ok(started, "the editor is found inside the .app bundle");
+                if (started) {
+                    bool alive = false;
+                    for (int i = 0; i < 100 && !alive; i++) {
+                        nap(50);
+                        alive = m.block->alive.load() > 2;
+                    }
+                    ok(alive, "and it attaches");
+                    m.block->quit.store(1);
+                    bs::bs_shm_wait_editor(proc, 3000);
+                }
+                bs::bs_shm_close(&m);
+            }
+            std::string rm = "rm -rf '" + std::string(dir) + "'";
+            (void)!system(rm.c_str());
+        }
+    }
+#endif
+
     /* ================================================================
      * Part 2 - the real editor process
      * ================================================================ */

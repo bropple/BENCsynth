@@ -963,16 +963,15 @@ static const clap_plugin_factory_t FACTORY = { fa_count, fa_get, fa_create };
 
 static bool entry_init(const char *path)
 {
+    /* The directory only. What the editor is actually called differs by
+     * platform - on macOS it is a binary inside BENCsynth.app rather than a
+     * file of its own - so the naming belongs with the code that knows the
+     * platform. See editorCandidates() in bs_shm.cpp. */
     g_bundleDir.clear();
     if (path && *path) {
         g_bundleDir = path;
         const size_t cut = g_bundleDir.find_last_of("/\\");
         if (cut != std::string::npos) g_bundleDir.erase(cut);
-#if defined(_WIN32)
-        g_bundleDir += "\\bencsynth.exe";
-#else
-        g_bundleDir += "/bencsynth";
-#endif
     }
     return true;
 }
