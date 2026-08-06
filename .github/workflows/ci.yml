@@ -143,6 +143,30 @@ jobs:
         run: make clap
       - name: It loads, plays, switches racks and restores its state
         run: make clap-test
+      # The editor is a separate process with a raylib window, so this needs a
+      # display - and it is the only check that the two halves actually talk:
+      # it starts the real binary against a real shared block and waits for it
+      # to publish the rack it was handed.
+      - name: X11 and GL, for the editor process
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libgl1-mesa-dev libx11-dev libxrandr-dev \
+            libxinerama-dev libxcursor-dev libxi-dev libasound2-dev
+      - name: raylib, so the editor can be built
+        run: |
+          git clone --depth 1 --branch 5.5 https://github.com/raysan5/raylib.git /tmp/raylib
+          make -C /tmp/raylib/src PLATFORM=PLATFORM_DESKTOP RAYLIB_LIBTYPE=STATIC -j2
+          mkdir -p /tmp/rl/include /tmp/rl/lib
+          cp /tmp/raylib/src/raylib.h /tmp/raylib/src/raymath.h /tmp/raylib/src/rlgl.h /tmp/rl/include/
+          cp /tmp/raylib/src/libraylib.a /tmp/rl/lib/
+      - name: The plugin and its editor talk to each other
+        run: RAYLIB=/tmp/rl xvfb-run -a --server-args="-screen 0 1400x900x24" make ipc-test
+      - name: And the plugin really starts one
+        run: |
+          RAYLIB=/tmp/rl make
+          BENCSYNTH_EDITOR=./bencsynth xvfb-run -a \
+            --server-args="-screen 0 1400x900x24" \
+            ./bencsynth-clap-host build/bencsynth.clap
       - name: clap_entry survives -fvisibility=hidden
         run: |
           # CLAP_EXPORT has to beat the hidden default, or a host opens the

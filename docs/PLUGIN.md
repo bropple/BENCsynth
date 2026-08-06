@@ -276,6 +276,94 @@ restored rack's knob positions are then the truth.
 Found by `tools/clap_host.cpp`, which sets a parameter and reads it back — the
 kind of check that only fails when something is actually wired wrong.
 
+## The editor, in another process
+
+The CLAP opens the real BENCsynth rack — cables, physics and all — as a
+floating window, and it does that by starting a **second process**.
+
+That is forced, not chosen. raylib keeps its window, GL context, input and
+timing in one file-scope `CoreData CORE` (`rcore.c:373`), so a process gets
+exactly one raylib window however many threads it has. Two plugin instances in
+one project would fight over that single global. Threading cannot fix a
+singleton; a process boundary gives each instance its own by construction. It
+is also how LMMS hosts VST2, and why a crashing plugin there does not take the
+DAW with it.
+
+The editor is the standalone binary, run as `bencsynth --editor <name>`. It
+opens no audio device — the plugin is already making the sound, and a second
+one would be the same notes playing a few milliseconds out of step.
+
+### What crosses the boundary
+
+Four channels in a shared block, because the two directions cost different
+amounts:
+
+| | Direction | Carries | Cost on arrival |
+|---|---|---|---|
+| `edit` | editor → plugin | the whole rack, when its *structure* changed | rebuild, on the main thread |
+| `param` | editor → plugin | every knob value, flattened | written in place, per block |
+| `snap` | editor → plugin | the whole rack, on any change | stored, never rebuilt from |
+| `host` | plugin → editor | the whole rack | editor catches up |
+
+The split between `edit` and `param` is the one that matters. Adding a module
+means the plugin must rebuild, which allocates and cuts every sounding voice —
+unavoidable, and rare. Turning a knob is a float, and must not cost that: if
+both travelled the same way, a filter sweep would sound like the patch being
+reloaded sixty times a second.
+
+So the structure signature covers module types, knob counts and cables —
+**and deliberately not positions**. Dragging a module changes the rack text but
+not the signature, so it travels as a snapshot and rebuilds nothing.
+
+`snap` exists because the plugin never rebuilds for a knob turn or a drag. Its
+own copy would have the right sound and the wrong layout, so what the host
+saves is the editor's rack, not the plugin's.
+
+Every channel is a seqlock — writer bumps the sequence odd, writes, bumps it
+even; a reader seeing an odd or changed sequence tries again next frame. There
+is no lock anywhere near the audio thread, so a hung or killed editor can never
+block it. The worst it can do is stop publishing.
+
+There is also a small SPSC ring for notes played *in* the editor window. It has
+no audio device, so its on-screen keyboard and musical typing only make a sound
+if the events reach the plugin. Draining it is not optional either: nothing in
+editor mode calls `render()`, so anything left in the engine's own queue would
+sit there until it filled and then be dropped forever.
+
+### Floating, not embedded
+
+`gui.is_api_supported` returns true for floating and **false for embedded**. A
+raylib window is a top-level window GLFW created and owns; embedding means
+reparenting it into a host-supplied handle — `SetParent` on Windows,
+`XReparentWindow` on X11, and something considerably less pleasant on macOS.
+Claiming embedded support and then producing a window the host cannot place is
+worse than refusing it.
+
+This is exactly why CLAP came before VST3 even after VST3 went MIT: `IPlugView`
+has no floating mode. Embedding is the work that route needs.
+
+### Testing it
+
+`make ipc-test` — 21 protocol checks that need no window, then six that start
+the real editor binary against a real shared block and wait for it to publish
+the rack it was handed. The protocol half is where the subtle failures live: a
+signature that changed when a module moved would rebuild the rack on every
+drag, and nothing about that is visible on the page.
+
+`make clap-test` additionally drives `gui.create` / `show` / `hide` / `destroy`
+through the plugin interface, and with `BENCSYNTH_EDITOR` set it starts a real
+editor from a real plugin instance.
+
+Both run in CI under Xvfb.
+
+### Finding the editor
+
+The plugin and the standalone are separate files and nothing guarantees they
+were installed together. The plugin tries `BENCSYNTH_EDITOR`, then the
+directory the `.clap` itself is in, then `PATH`. If all three miss, `show`
+fails and says so on stderr rather than leaving a host waiting for a window
+that will never appear.
+
 ## Installing it
 
 ```

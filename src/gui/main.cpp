@@ -14,6 +14,8 @@
 #include "bs_rack.h"
 #include "bs_keyboard.h"
 #include "bs_patchfile.h"
+#include "bs_shm.h"
+#include "bs_sync.h"
 #include "bs_filedlg.h"
 #include "bs_engine.h"
 #include "bs_modules.h"
@@ -427,6 +429,10 @@ int main(int argc, char **argv)
     const char *loadPath = 0;
     const char *iconDir = 0;
     const char *startRack = 0;
+    /* Set when this process is a plugin's editor rather than the program: the
+     * rack lives in shared memory, the plugin makes the sound, and this window
+     * is the only part of BENCsynth a DAW cannot draw for itself. */
+    const char *editorShm = 0;
     int openInfo = 0;
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shot = argv[++i];
@@ -437,6 +443,8 @@ int main(int argc, char **argv)
             iconDir = argv[++i];
         else if (std::strcmp(argv[i], "--rack") == 0 && i + 1 < argc)
             startRack = argv[++i];
+        else if (std::strcmp(argv[i], "--editor") == 0 && i + 1 < argc)
+            editorShm = argv[++i];
         else loadPath = argv[i];
     }
 
@@ -521,15 +529,45 @@ int main(int argc, char **argv)
         say(&app, "default rack - press Z, or click the keys, or try RACKS");
     }
 
+    /* ---- editor mode ------------------------------------------------ *
+     *
+     * Attach to the plugin's shared block and take the rack from it. No audio
+     * device: the plugin is already making the sound, and opening a second one
+     * here would be a second synthesizer playing the same notes a few
+     * milliseconds out of step with the first. */
+    bs::ShmMap shm;
+    bool     editing     = false;
+    uint32_t seenHostSeq = 0;
+    uint32_t editSeq     = 0;
+    uint64_t lastSig     = 0;
+    std::vector<float> lastParams;
+    std::vector<char>  shmText;
+    std::vector<float> flat;
+
+    if (editorShm) {
+        if (!bs::bs_shm_open(&shm, editorShm)) {
+            std::fprintf(stderr, "BENCsynth: cannot attach to %s\n", editorShm);
+            CloseWindow();
+            return 1;
+        }
+        editing = true;
+        shmText.resize(bs::BS_SHM_RACK_MAX);
+        flat.resize(bs::BS_SHM_PARAM_MAX);
+        say(&app, "editing a plugin - the host is making the sound");
+    }
+
     app_retitle(&app);
 
-    InitAudioDevice();
-    SetAudioStreamBufferSizeDefault(512);
-    AudioStream stream = LoadAudioStream(SAMPLE_RATE, 32, 2);
-    SetAudioStreamCallback(stream, audio_cb);
-    PlayAudioStream(stream);
-    if (!IsAudioDeviceReady())
-        say(&app, "no audio device - the rack still patches, it just cannot be heard");
+    AudioStream stream = { 0 };
+    if (!editing) {
+        InitAudioDevice();
+        SetAudioStreamBufferSizeDefault(512);
+        stream = LoadAudioStream(SAMPLE_RATE, 32, 2);
+        SetAudioStreamCallback(stream, audio_cb);
+        PlayAudioStream(stream);
+        if (!IsAudioDeviceReady())
+            say(&app, "no audio device - the rack still patches, it just cannot be heard");
+    }
 
     /* A screenshot of an idle rack shows a dead meter and a flat scope, which
      * is the least informative picture of a synthesizer there is. */
@@ -542,6 +580,28 @@ int main(int argc, char **argv)
 
     int frame = 0;
     while (!WindowShouldClose()) {
+        /* ---- editor: take whatever the plugin changed ---------------- */
+        if (editing) {
+            bs::ShmBlock *b = shm.block;
+            b->alive.fetch_add(1, std::memory_order_relaxed);
+            if (b->quit.load(std::memory_order_acquire)) break;
+
+            /* The host changed the rack under us - a preset was chosen from
+             * the DAW's parameter list, or a project was loaded. Whatever is
+             * on screen is stale. */
+            uint32_t len = 0;
+            const uint32_t hs = bs::bs_shm_read(&b->host, shmText.data(), &len);
+            if (hs && hs != seenHostSeq && len) {
+                char status[192] = "";
+                if (bs_patch_from_string(&g_engine, shmText.data(), status,
+                                         (int)sizeof status)) {
+                    bs_rack_patch_replaced(&rack);
+                    lastSig = 0;               /* republish, structure and all */
+                    lastParams.clear();
+                }
+                seenHostSeq = hs;
+            }
+        }
         const float dt = GetFrameTime();
         const float W = (float)GetScreenWidth();
         const float H = (float)GetScreenHeight();
@@ -625,6 +685,70 @@ int main(int argc, char **argv)
 
         EndDrawing();
 
+        /* ---- editor: publish whatever changed ------------------------ *
+         *
+         * Two channels, because the two kinds of change cost different
+         * amounts on the other end. A new module or a new cable means the
+         * plugin has to rebuild, which allocates and cuts every sounding
+         * voice - unavoidable, and rare. A knob move is a float, and must not
+         * cost that: sending it structurally would make a filter sweep sound
+         * like the patch being reloaded sixty times a second.
+         *
+         * The signature covers structure only. Dragging a module changes the
+         * rack text but not the signature, so it travels as a snapshot and
+         * never rebuilds anything. */
+        if (editing) {
+            bs::ShmBlock *b = shm.block;
+
+            /* Notes played here go to the plugin, which is the thing with an
+             * audio device. Draining is not optional: in editor mode nothing
+             * calls render(), so anything left in this queue would sit there
+             * until it filled and then be silently dropped forever. */
+            bs::NoteEvent ne;
+            while (g_engine.events.pop(&ne)) {
+                g_engine.keys.apply(ne);      /* keep the on-screen keys honest */
+                bs_shm_push_note(b, ne.kind, ne.note, ne.value);
+            }
+
+            const uint64_t sig = bs::bs_structure_signature(&g_engine);
+            const uint32_t n   = bs::bs_flatten_params(&g_engine, flat.data(),
+                                                       (uint32_t)flat.size());
+
+            if (sig != lastSig) {
+                const std::string t = bs_patch_to_string(&g_engine);
+                bs::bs_shm_write(&b->edit, t.c_str(), (uint32_t)t.size());
+                bs::bs_shm_write(&b->snap, t.c_str(), (uint32_t)t.size());
+                editSeq = b->edit.seq.load(std::memory_order_acquire);
+                lastSig = sig;
+
+                /* Values are published against the structure they belong to,
+                 * or the plugin would write them into a rack that has not
+                 * been rebuilt yet and scatter them across the wrong knobs. */
+                std::memcpy(b->params, flat.data(), n * sizeof(float));
+                b->paramCount = n;
+                b->paramStructSeq.store(editSeq, std::memory_order_release);
+                b->paramSeq.fetch_add(1, std::memory_order_release);
+                lastParams.assign(flat.begin(), flat.begin() + n);
+            } else {
+                bool moved = lastParams.size() != n;
+                for (uint32_t i = 0; !moved && i < n; i++)
+                    moved = lastParams[i] != flat[i];
+                if (moved) {
+                    std::memcpy(b->params, flat.data(), n * sizeof(float));
+                    b->paramCount = n;
+                    b->paramStructSeq.store(editSeq, std::memory_order_release);
+                    b->paramSeq.fetch_add(1, std::memory_order_release);
+                    lastParams.assign(flat.begin(), flat.begin() + n);
+
+                    /* The host saves the snapshot, so knob positions have to
+                     * reach it too - but only the plugin's *save* reads this,
+                     * never its audio path, so it is free. */
+                    const std::string t = bs_patch_to_string(&g_engine);
+                    bs::bs_shm_write(&b->snap, t.c_str(), (uint32_t)t.size());
+                }
+            }
+        }
+
         if (shot && ++frame >= shotFrames) {
             TakeScreenshot(shot);
             break;
@@ -633,8 +757,16 @@ int main(int argc, char **argv)
 
     bs_keyboard_release_all(&kb, &g_engine);
     if (g_logo.id != 0) UnloadTexture(g_logo);
-    UnloadAudioStream(stream);
-    CloseAudioDevice();
+    if (editing) {
+        /* One last full publish, so a window closed with unsaved knob
+         * positions still hands them over before the block goes away. */
+        const std::string t = bs_patch_to_string(&g_engine);
+        bs::bs_shm_write(&shm.block->snap, t.c_str(), (uint32_t)t.size());
+        bs::bs_shm_close(&shm);
+    } else {
+        UnloadAudioStream(stream);
+        CloseAudioDevice();
+    }
     bs_ui_free(&ui);
     CloseWindow();
     return 0;

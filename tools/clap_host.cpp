@@ -397,6 +397,66 @@ int main(int argc, char **argv)
     p->process(p, &proc);
     evs.clear();
 
+    /* --- the GUI, which lives in another process ---
+     *
+     * Only the shape of it here: whether the extension is offered, whether it
+     * insists on floating (it must - a raylib window is top-level and cannot
+     * be embedded in a host's), and whether show actually starts something.
+     * The protocol itself is tested in tools/ipc_test.cpp, which can see both
+     * ends; a host cannot. */
+    {
+        const clap_plugin_gui_t *g =
+            (const clap_plugin_gui_t *)p->get_extension(p, CLAP_EXT_GUI);
+        ok(g != 0, "it offers a GUI");
+
+        if (g) {
+#if defined(__APPLE__)
+            const char *api = CLAP_WINDOW_API_COCOA;
+#elif defined(_WIN32)
+            const char *api = CLAP_WINDOW_API_WIN32;
+#else
+            const char *api = CLAP_WINDOW_API_X11;
+#endif
+            ok(g->is_api_supported(p, api, true),
+               "a floating window is supported");
+            ok(!g->is_api_supported(p, api, false),
+               "embedding is refused rather than half-promised");
+
+            const char *pref = 0;
+            bool floating = false;
+            ok(g->get_preferred_api(p, &pref, &floating) && floating,
+               "floating is the preferred mode");
+
+            uint32_t w = 0, h = 0;
+            ok(g->get_size(p, &w, &h) && w > 0 && h > 0, "it reports a size");
+
+            /* Starting the editor needs a display and the standalone binary.
+             * Without either, creating the shared block is still worth
+             * checking - that is the half that runs in the plugin. */
+            ok(g->create(p, api, true), "the GUI is created");
+
+            if (std::getenv("DISPLAY") && std::getenv("BENCSYNTH_EDITOR")) {
+                const bool shown = g->show(p);
+                ok(shown, "show starts the editor process");
+                if (shown) {
+                    for (int i = 0; i < 40; i++) {
+                        /* Let it come up, and keep processing while it does -
+                         * the audio thread must not care whether an editor
+                         * exists. */
+                        evs.clear();
+                        p->process(p, &proc);
+                    }
+                    ok(g->hide(p), "hide stops it again");
+                }
+            } else {
+                std::printf("  skip  DISPLAY/BENCSYNTH_EDITOR unset "
+                            "- not starting a real editor\n");
+            }
+            g->destroy(p);
+            ok(true, "the GUI is destroyed");
+        }
+    }
+
     /* --- state round trip, into a second fresh instance ---
      *
      * Comparing against the live instance would be wrong: its delay lines and

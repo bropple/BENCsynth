@@ -18,16 +18,30 @@
 
 #include "bs_engine.h"
 #include "bs_patchfile.h"
+#include "bs_shm.h"
+#include "bs_sync.h"
 
 #include <clap/clap.h>
 
 #include <atomic>
 #include <cstdio>
+#include <vector>
 #include <cstring>
 #include <new>
 #include <string>
 
 #define BS_CLAP_ID "net.ropple.bencsynth"
+
+/* Where the .clap itself lives, filled in by entry_init. The editor is a
+ * different file and nothing guarantees the two were installed together, so
+ * this is a hint rather than an answer - see editorCandidates() in
+ * bs_shm.cpp. */
+static std::string g_bundleDir;
+
+/* Defined with the rest of the GUI, below: destroy has to reach the editor
+ * teardown, and get_extension has to reach the table. */
+static void gui_destroy(const clap_plugin_t *p);
+static const clap_plugin_gui_t *guiExtension();
 
 /* Parameters. Eight macros, then the rack selector. The macros exist because a
  * host needs a fixed parameter list before it knows anything about the patch,
@@ -68,7 +82,86 @@ struct BencSynthClap {
     float macro[bs::BS_MACROS];
 
     std::string saved;          /* scratch for state save, never freed in RT */
+
+    /* ---- the editor, when there is one ---- */
+    bs::ShmMap shm;
+    void      *editorProc;
+    bool       shmOpen;
+    bool       guiCreated;
+    std::string bundleDir;      /* where this binary lives, to find the editor */
+
+    /* Sequences already consumed, so a repeat does not rebuild for nothing. */
+    uint32_t appliedEditSeq;
+    uint32_t appliedSnapSeq;
+    uint32_t appliedParamSeq;
+
+    /* Set by process() when the editor sent a structural change, which cannot
+     * be applied on the audio thread. Cleared by on_main_thread. */
+    std::atomic<uint32_t> pendingEdit;
+
+    /* The rack the editor last published in full. This, not the plugin's own
+     * serialisation, is what the host saves while an editor is open: the
+     * plugin never rebuilds for a knob turn or a module drag, so its own copy
+     * would have the right sound and the wrong layout. */
+    std::string snapshot;
+
+    /* Scratch, sized once, so nothing on the audio thread allocates. */
+    std::vector<char>  textBuf;
+    std::vector<float> paramBuf;
 };
+
+/* Publishes the plugin's current rack to the editor, which then catches up.
+ * Main thread only - it serialises, which allocates. */
+static void pushRackToEditor(BencSynthClap *s)
+{
+    if (!s->shmOpen) return;
+    const std::string t = bs_patch_to_string(&s->engine);
+    bs::bs_shm_write(&s->shm.block->host, t.c_str(), (uint32_t)t.size());
+}
+
+/* Editor -> plugin, on the audio thread. Knob values only: this writes floats
+ * into modules that already exist and never allocates. Structural changes are
+ * noticed here but handed to the main thread. */
+static void pumpEditorRealtime(BencSynthClap *s)
+{
+    if (!s->shmOpen) return;
+    bs::ShmBlock *b = s->shm.block;
+
+    /* Structure first. Until the rebuild has happened the param vector belongs
+     * to a rack this instance does not have, and applying it would write knob
+     * values into whatever module happens to occupy that slot. */
+    const uint32_t editSeq = b->edit.seq.load(std::memory_order_acquire);
+    if (!(editSeq & 1u) && editSeq != s->appliedEditSeq) {
+        s->pendingEdit.store(editSeq, std::memory_order_release);
+        if (s->host && s->host->request_callback) s->host->request_callback(s->host);
+        return;
+    }
+
+    /* Keys pressed in the editor window. They arrive with no frame offset -
+     * a keystroke has no meaningful position inside a buffer - so they land at
+     * the start of this block, which is the soonest honest answer. */
+    bs::ShmNote nv;
+    while (bs::bs_shm_pop_note(b, &nv)) {
+        switch (nv.kind) {
+        case bs::NE_NOTE_ON:  s->engine.noteOn(nv.note, nv.value, 0); break;
+        case bs::NE_NOTE_OFF: s->engine.noteOff(nv.note, 0);          break;
+        case bs::NE_ALL_OFF:  s->engine.panic();                      break;
+        case bs::NE_SUSTAIN:  s->engine.setSustain(nv.value >= 0.5f, 0); break;
+        case bs::NE_BEND:     s->engine.setBend(nv.value, 0);         break;
+        case bs::NE_MOD:      s->engine.setMod(nv.value, 0);          break;
+        default: break;
+        }
+    }
+
+    const uint32_t pseq = b->paramSeq.load(std::memory_order_acquire);
+    if (pseq == s->appliedParamSeq) return;
+    if (b->paramStructSeq.load(std::memory_order_acquire) != s->appliedEditSeq) return;
+
+    const uint32_t n = b->paramCount;
+    if (n == 0 || n > bs::BS_SHM_PARAM_MAX) return;
+    if (bs::bs_apply_params(&s->engine, b->params, n))
+        s->appliedParamSeq = pseq;
+}
 
 static BencSynthClap *self_of(const clap_plugin_t *p)
 {
@@ -246,7 +339,21 @@ static const clap_plugin_params_t EXT_PARAMS = {
 static bool st_save(const clap_plugin_t *p, const clap_ostream_t *stream)
 {
     BencSynthClap *s = self_of(p);
-    s->saved = bs_patch_to_string(&s->engine);
+
+    /* An open editor owns the layout. The plugin rebuilds only for structural
+     * changes, so its own copy has every knob right and every module in
+     * whatever position it was last rebuilt at - which is not where the person
+     * dragged it to. The snapshot is the editor's whole rack, and it is the
+     * honest thing to save. */
+    if (s->shmOpen) {
+        uint32_t len = 0;
+        if (s->textBuf.size() < bs::BS_SHM_RACK_MAX)
+            s->textBuf.resize(bs::BS_SHM_RACK_MAX);
+        const uint32_t seq = bs::bs_shm_read(&s->shm.block->snap,
+                                             s->textBuf.data(), &len);
+        if (seq && len) s->snapshot.assign(s->textBuf.data(), len);
+    }
+    s->saved = s->snapshot.empty() ? bs_patch_to_string(&s->engine) : s->snapshot;
 
     const char *b = s->saved.c_str();
     uint64_t left = s->saved.size() + 1;   /* including the terminator */
@@ -289,6 +396,8 @@ static bool st_load(const clap_plugin_t *p, const clap_istream_t *stream)
      * the truth - the host will ask for them and should be told what it just
      * restored, not what was set before. */
     for (int i = 0; i < bs::BS_MACROS; i++) s->macro[i] = s->engine.macroValue(i);
+    s->snapshot = text;
+    pushRackToEditor(s);
     return true;
 }
 
@@ -302,8 +411,15 @@ static bool pl_init(const clap_plugin_t *) { return true; }
 
 static void pl_destroy(const clap_plugin_t *p)
 {
-    delete self_of(p);
+    BencSynthClap *s = self_of(p);
+    /* A host is entitled to destroy an instance without closing the editor
+     * first, and an orphaned editor holding a mapping of freed memory is a
+     * crash with someone's session attached to it. */
+    if (s->guiCreated) gui_destroy(p);
+    delete s;
 }
+
+
 
 static bool pl_activate(const clap_plugin_t *p, double sample_rate,
                         uint32_t, uint32_t)
@@ -390,6 +506,10 @@ static clap_process_status pl_process(const clap_plugin_t *p,
     float *outR = proc->audio_outputs[0].data32[1];
     if (!outL || !outR) return CLAP_PROCESS_ERROR;
 
+    /* Anything the editor changed since the last block, applied before a
+     * sample is produced so a knob turn lands where it was made. */
+    pumpEditorRealtime(s);
+
     const uint32_t nframes = proc->frames_count;
 
     /* Events are fed in as the buffer is walked, each rebased onto the chunk
@@ -440,6 +560,32 @@ static clap_process_status pl_process(const clap_plugin_t *p,
 static void pl_on_main_thread(const clap_plugin_t *p)
 {
     BencSynthClap *s = self_of(p);
+
+    /* A structural change from the editor: a module or a cable appeared or
+     * went away, so the rack has to be rebuilt. This allocates, which is why
+     * process() only ever asked for this callback rather than doing it. */
+    const uint32_t pend = s->pendingEdit.exchange(0, std::memory_order_acq_rel);
+    if (pend && s->shmOpen) {
+        if (s->textBuf.size() < bs::BS_SHM_RACK_MAX)
+            s->textBuf.resize(bs::BS_SHM_RACK_MAX);
+        uint32_t len = 0;
+        const uint32_t seq = bs::bs_shm_read(&s->shm.block->edit,
+                                             s->textBuf.data(), &len);
+        if (seq && len) {
+            char status[192] = "";
+            if (bs_patch_from_string(&s->engine, s->textBuf.data(), status,
+                                     (int)sizeof status)) {
+                s->appliedEditSeq  = seq;
+                /* The values that arrive next belong to this structure. */
+                s->appliedParamSeq = 0;
+                s->custom          = true;
+                for (int i = 0; i < bs::BS_MACROS; i++)
+                    s->macro[i] = s->engine.macroValue(i);
+            }
+        }
+        return;
+    }
+
     const int want = s->wantPreset.load();
     if (want == s->havePreset && !s->custom) return;
     if (want < 0 || want >= bs::rackPresetCount()) return;
@@ -453,6 +599,9 @@ static void pl_on_main_thread(const clap_plugin_t *p)
     /* The new rack's MACRO knobs are at whatever the preset built them at.
      * The host's parameters are the truth, so put them back. */
     for (int i = 0; i < bs::BS_MACROS; i++) s->engine.setMacro(i, s->macro[i]);
+
+    /* The editor is showing the rack that just went away. */
+    pushRackToEditor(s);
 }
 
 static const void *pl_get_extension(const clap_plugin_t *, const char *id)
@@ -461,8 +610,181 @@ static const void *pl_get_extension(const clap_plugin_t *, const char *id)
     if (std::strcmp(id, CLAP_EXT_NOTE_PORTS)  == 0) return &EXT_NOTE_PORTS;
     if (std::strcmp(id, CLAP_EXT_PARAMS)      == 0) return &EXT_PARAMS;
     if (std::strcmp(id, CLAP_EXT_STATE)       == 0) return &EXT_STATE;
+    if (std::strcmp(id, CLAP_EXT_GUI)         == 0) return guiExtension();
     return 0;
 }
+
+/* ------------------------------------------------------------------ *
+ * GUI - a floating window, in another process
+ *
+ * The editor is the standalone binary in a mode where it makes no sound and
+ * drives a rack in shared memory instead. It has to be a separate process:
+ * raylib keeps its window and GL context in one file-scope global, so a
+ * process gets exactly one raylib window however many plugin instances are
+ * loaded. See src/plugin/bs_shm.h.
+ *
+ * Floating rather than embedded, because a raylib window is a top-level window
+ * that GLFW created and owns. Embedding means reparenting it into a handle the
+ * host supplies - SetParent on Windows, XReparentWindow on X11, and something
+ * considerably less pleasant on macOS. CLAP supports floating outright, which
+ * is why it is the first target rather than VST3.
+ * ------------------------------------------------------------------ */
+
+static bool gui_is_api_supported(const clap_plugin_t *, const char *api,
+                                 bool is_floating)
+{
+    /* Floating only, for now. Saying yes to embedded and then producing a
+     * window the host cannot place is worse than saying no. */
+    if (!is_floating) return false;
+#if defined(_WIN32)
+    return std::strcmp(api, CLAP_WINDOW_API_WIN32) == 0;
+#elif defined(__APPLE__)
+    return std::strcmp(api, CLAP_WINDOW_API_COCOA) == 0;
+#else
+    return std::strcmp(api, CLAP_WINDOW_API_X11) == 0;
+#endif
+}
+
+static bool gui_get_preferred_api(const clap_plugin_t *, const char **api,
+                                  bool *is_floating)
+{
+#if defined(_WIN32)
+    *api = CLAP_WINDOW_API_WIN32;
+#elif defined(__APPLE__)
+    *api = CLAP_WINDOW_API_COCOA;
+#else
+    *api = CLAP_WINDOW_API_X11;
+#endif
+    *is_floating = true;
+    return true;
+}
+
+static bool gui_create(const clap_plugin_t *p, const char *api, bool is_floating)
+{
+    BencSynthClap *s = self_of(p);
+    if (!gui_is_api_supported(p, api, is_floating)) return false;
+    if (s->guiCreated) return true;
+
+    /* The salt keeps two instances in one project from colliding on a name. */
+    static std::atomic<unsigned long> counter(0);
+    if (!bs::bs_shm_create(&s->shm, counter.fetch_add(1) + 1)) return false;
+    s->shmOpen = true;
+
+    s->appliedEditSeq  = 0;
+    s->appliedSnapSeq  = 0;
+    s->appliedParamSeq = 0;
+    s->pendingEdit.store(0);
+
+    /* The editor starts from what the plugin is currently playing. */
+    pushRackToEditor(s);
+
+    s->guiCreated = true;
+    return true;
+}
+
+static void gui_destroy(const clap_plugin_t *p)
+{
+    BencSynthClap *s = self_of(p);
+    if (!s->guiCreated) return;
+
+    if (s->shmOpen) {
+        /* Ask first. A window that saves nothing on the way out loses whatever
+         * was on screen, so the editor gets a moment to publish and exit. */
+        s->shm.block->quit.store(1, std::memory_order_release);
+        bs::bs_shm_wait_editor(s->editorProc, 1500);
+        s->editorProc = 0;
+
+        /* Last word from the editor before the shared block goes away. */
+        if (s->textBuf.size() < bs::BS_SHM_RACK_MAX)
+            s->textBuf.resize(bs::BS_SHM_RACK_MAX);
+        uint32_t len = 0;
+        if (bs::bs_shm_read(&s->shm.block->snap, s->textBuf.data(), &len) && len)
+            s->snapshot.assign(s->textBuf.data(), len);
+
+        bs::bs_shm_close(&s->shm);
+        s->shmOpen = false;
+    }
+    s->guiCreated = false;
+}
+
+static bool gui_set_scale(const clap_plugin_t *, double) { return false; }
+
+static bool gui_get_size(const clap_plugin_t *, uint32_t *w, uint32_t *h)
+{
+    *w = 1280; *h = 800;
+    return true;
+}
+
+static bool gui_can_resize(const clap_plugin_t *) { return true; }
+
+static bool gui_get_resize_hints(const clap_plugin_t *, clap_gui_resize_hints_t *h)
+{
+    std::memset(h, 0, sizeof *h);
+    h->can_resize_horizontally = true;
+    h->can_resize_vertically   = true;
+    return true;
+}
+
+static bool gui_adjust_size(const clap_plugin_t *, uint32_t *, uint32_t *)
+{
+    return true;
+}
+
+/* The window belongs to another process; the host cannot size or place it. */
+static bool gui_set_size(const clap_plugin_t *, uint32_t, uint32_t) { return false; }
+static bool gui_set_parent(const clap_plugin_t *, const clap_window_t *) { return false; }
+static bool gui_set_transient(const clap_plugin_t *, const clap_window_t *) { return false; }
+static void gui_suggest_title(const clap_plugin_t *, const char *) {}
+
+static bool gui_show(const clap_plugin_t *p)
+{
+    BencSynthClap *s = self_of(p);
+    if (!s->guiCreated || !s->shmOpen) return false;
+    if (s->editorProc && bs::bs_shm_editor_running(s->editorProc)) return true;
+
+    s->shm.block->quit.store(0, std::memory_order_release);
+    const char *hint = s->bundleDir.empty() ? 0 : s->bundleDir.c_str();
+    if (!bs::bs_shm_spawn_editor(hint, s->shm.name, &s->editorProc)) {
+        /* Nothing to show and no way to say why through this interface. The
+         * host will report a failed show; the message goes to stderr, which is
+         * where a person looking for it will be. */
+        std::fprintf(stderr,
+                     "BENCsynth: could not start the editor. Set BENCSYNTH_EDITOR "
+                     "to the path of the bencsynth executable.\n");
+        return false;
+    }
+    return true;
+}
+
+static bool gui_hide(const clap_plugin_t *p)
+{
+    BencSynthClap *s = self_of(p);
+    if (!s->shmOpen) return false;
+    s->shm.block->quit.store(1, std::memory_order_release);
+    bs::bs_shm_wait_editor(s->editorProc, 1500);
+    s->editorProc = 0;
+    return true;
+}
+
+static const clap_plugin_gui_t EXT_GUI = {
+    gui_is_api_supported,
+    gui_get_preferred_api,
+    gui_create,
+    gui_destroy,
+    gui_set_scale,
+    gui_get_size,
+    gui_can_resize,
+    gui_get_resize_hints,
+    gui_adjust_size,
+    gui_set_size,
+    gui_set_parent,
+    gui_set_transient,
+    gui_suggest_title,
+    gui_show,
+    gui_hide
+};
+
+static const clap_plugin_gui_t *guiExtension() { return &EXT_GUI; }
 
 /* ------------------------------------------------------------------ *
  * Descriptor and factory
@@ -494,7 +816,13 @@ static const clap_plugin_t *createPlugin(const clap_host_t *host)
     BencSynthClap *s = new (std::nothrow) BencSynthClap();
     if (!s) return 0;
 
-    s->host       = host;
+    s->host        = host;
+    s->editorProc  = 0;
+    s->shmOpen     = false;
+    s->guiCreated  = false;
+    s->appliedEditSeq = s->appliedSnapSeq = s->appliedParamSeq = 0;
+    s->pendingEdit.store(0);
+    s->bundleDir   = g_bundleDir;
     s->havePreset = 0;
     s->custom     = false;
     s->wantPreset.store(0);
@@ -537,7 +865,21 @@ static const clap_plugin_t *fa_create(const clap_plugin_factory_t *,
 
 static const clap_plugin_factory_t FACTORY = { fa_count, fa_get, fa_create };
 
-static bool entry_init(const char *) { return true; }
+static bool entry_init(const char *path)
+{
+    g_bundleDir.clear();
+    if (path && *path) {
+        g_bundleDir = path;
+        const size_t cut = g_bundleDir.find_last_of("/\\");
+        if (cut != std::string::npos) g_bundleDir.erase(cut);
+#if defined(_WIN32)
+        g_bundleDir += "\\bencsynth.exe";
+#else
+        g_bundleDir += "/bencsynth";
+#endif
+    }
+    return true;
+}
 static void entry_deinit(void) {}
 
 static const void *entry_get_factory(const char *id)

@@ -38,12 +38,20 @@ CORE_SRC := src/core/bs_patch.cpp \
 CORE_OBJ := $(CORE_SRC:.cpp=.o)
 CORE_LIB := libbencsynth.a
 
+# The editor runs in another process and talks to the plugin over shared
+# memory. Both halves need this, and the standalone IS the editor (--editor),
+# so it is linked into the program as well as into the plugins.
+PLUGIN_SRC := src/plugin/bs_shm.cpp src/plugin/bs_sync.cpp
+
 GUI_SRC  := src/gui/main.cpp \
             src/gui/bs_gui.cpp \
             src/gui/bs_rope.cpp \
             src/gui/bs_rack.cpp \
             src/gui/bs_keyboard.cpp \
             src/gui/bs_filedlg.cpp
+# The standalone is also the plugin's editor (--editor), so it carries the
+# same shared-memory half the plugin does.
+GUI_SRC  += $(PLUGIN_SRC)
 GUI_OBJ  := $(GUI_SRC:.cpp=.o)
 GUI      := bencsynth$(EXE)
 
@@ -118,7 +126,7 @@ endif
 # wants a bundle directory, which is why that branch does more.
 # ------------------------------------------------------------------
 
-CLAP_SRC     := src/clap/bencsynth_clap.cpp
+CLAP_SRC     := src/clap/bencsynth_clap.cpp $(PLUGIN_SRC)
 CLAP_VERSION := 1.2.2
 CLAP_INCLUDE ?= vendor/clap/include
 CLAP_FOUND   := $(if $(wildcard $(CLAP_INCLUDE)/clap/clap.h),yes,)
@@ -143,6 +151,7 @@ else
   CLAP_BINARY  := $(CLAP_BUNDLE)
   CLAP_SHARED  := -shared
   CLAP_LINK    :=
+  CLAP_RT      := -lrt
   CLAP_INSTALL_DIR ?= $(HOME)/.clap
 endif
 
@@ -224,7 +233,7 @@ endif
 # ------------------------------------------------------------------
 
 .PHONY: all core test clean info run render icons lv2 lv2-install lv2-validate lv2-test \
-        clap clap-test clap-install clap-fetch
+        clap clap-test clap-install clap-fetch ipc-test
 
 
 all: $(GUI)
@@ -241,9 +250,9 @@ $(CORE_LIB): $(CORE_OBJ)
 	$(AR) rcs $@ $^
 
 $(GUI): $(GUI_OBJ) $(GUI_RES) $(CORE_LIB)
-	$(CXX) $(CXXFLAGS) $(GUI_LINK) -o $@ $(GUI_OBJ) $(GUI_RES) $(CORE_LIB) $(LDLIBS_GUI)
+	$(CXX) $(CXXFLAGS) $(GUI_LINK) -o $@ $(GUI_OBJ) $(GUI_RES) $(CORE_LIB) $(LDLIBS_GUI) $(CLAP_RT)
 
-$(GUI_OBJ): CPPFLAGS += $(RL_CFLAGS) -Isrc/gui
+$(GUI_OBJ): CPPFLAGS += $(RL_CFLAGS) -Isrc/gui -Isrc/plugin
 
 test: $(TEST)
 	./$(TEST)
@@ -355,9 +364,9 @@ clap-fetch:
 $(CLAP_BINARY): $(CLAP_SRC) $(CORE_SRC) $(wildcard src/clap/Info.plist)
 	@mkdir -p $(dir $(CLAP_BINARY))
 	$(CXX) $(filter-out -MMD -MP,$(CXXFLAGS)) $(CPPFLAGS) -I$(CLAP_INCLUDE) \
-	    -fPIC -fvisibility=hidden \
+	    -Isrc/plugin -fPIC -fvisibility=hidden \
 	    $(CLAP_SHARED) $(CLAP_LINK) -o $(CLAP_BINARY) \
-	    $(CLAP_SRC) $(CORE_SRC) -lm
+	    $(CLAP_SRC) $(CORE_SRC) -lm $(CLAP_RT)
 ifeq ($(UNAME_S),Darwin)
 	cp src/clap/Info.plist $(CLAP_BUNDLE)/Contents/Info.plist
 endif
@@ -366,6 +375,17 @@ endif
 # Loads it the way a host does and plays it. Compiling proves nothing about
 # whether the event stream lands on the right frames or whether state survives
 # a round trip; this does.
+# The plugin/editor protocol, and the real editor process. Separate from
+# clap-test because it needs the standalone binary and a display.
+IPCTEST := bencsynth-ipc-test$(EXE)
+
+ipc-test: $(IPCTEST) $(GUI)
+	./$(IPCTEST) ./$(GUI)
+
+$(IPCTEST): tools/ipc_test.cpp $(PLUGIN_SRC) $(CORE_LIB)
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -Isrc/plugin -o $@ tools/ipc_test.cpp \
+	    $(PLUGIN_SRC) $(CORE_LIB) $(CLAP_RT)
+
 CLAPHOST := bencsynth-clap-host$(EXE)
 
 clap-test: clap $(CLAPHOST)
@@ -410,6 +430,6 @@ clean:
 	      $(CORE_OBJ:.o=.d) $(GUI_OBJ:.o=.d) $(TEST_OBJ:.o=.d) $(RENDER_OBJ:.o=.d) \
 	      $(CORE_LIB) $(GUI) $(TEST) $(RENDER) $(LV2HOST) src/gui/*.res.o
 	rm -rf $(LV2_BUNDLE) $(CLAP_BUNDLE)
-	rm -f $(CLAPHOST)
+	rm -f $(CLAPHOST) $(IPCTEST)
 
 -include $(CORE_OBJ:.o=.d) $(GUI_OBJ:.o=.d) $(TEST_OBJ:.o=.d) $(RENDER_OBJ:.o=.d)
