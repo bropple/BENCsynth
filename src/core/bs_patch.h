@@ -24,6 +24,22 @@ struct Cable {
     bool alive;
 };
 
+/* How many knobs a rack can hand to the host at once.
+ *
+ * Fixed, and that is the whole design. A CLAP host reads the parameter list
+ * when it loads the plugin and every automation lane refers to a parameter by
+ * id - so a list that grows and shrinks as knobs are exposed would renumber
+ * itself under lanes already pointing at it. The slots are permanent; what
+ * changes is what each one points AT, and the host is told the name changed
+ * rather than the list. */
+static const int BS_EXPOSED = 16;
+
+/* Which knob a slot drives. Both -1 when the slot is free. */
+struct Exposed {
+    int module;
+    int param;
+};
+
 class Patch {
 public:
     Patch();
@@ -51,6 +67,20 @@ public:
     /* How many times a cable displaced another at an input. Zero for anything
      * built from a preset; nonzero only when a person repatches. */
     int replaced;
+
+    /* The knobs this rack offers the host, by slot. Part of the patch rather
+     * than of the plugin, so they travel in a .bencsynth and in whatever the
+     * host saves without a second thing to serialise. */
+    Exposed exposed[BS_EXPOSED];
+
+    /* -1 if that knob is not exposed. */
+    int  exposedSlotOf(int module, int param) const;
+    /* The slot it went into, or -1 if all sixteen are taken. */
+    int  expose(int module, int param);
+    void unexpose(int slot);
+    /* A module going away takes its assignments with it, or the slot points at
+     * whatever later occupies that id. */
+    void unexposeModule(int module);
 
     const std::vector<Cable> &cableList() const { return cables; }
     Cable *cable(int id)

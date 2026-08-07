@@ -47,6 +47,11 @@ static std::string g_bundleDir;
 static void gui_destroy(const clap_plugin_t *p);
 static const clap_plugin_gui_t *guiExtension();
 
+struct BencSynthClap;
+/* Defined beside on_main_thread, but reached from state loading and from the
+ * preset rebuild, both of which happen above it. */
+static void tellHostAboutSlots(BencSynthClap *s);
+
 /* Parameters. Eight macros, then the rack selector. The macros exist because a
  * host needs a fixed parameter list before it knows anything about the patch,
  * and a modular's knobs come and go with its modules - what each one does is
@@ -54,7 +59,13 @@ static const clap_plugin_gui_t *guiExtension();
 enum {
     PARAM_MACRO_0 = 0,
     PARAM_PRESET  = bs::BS_MACROS,
-    PARAM_COUNT
+    /* Sixteen slots a rack can point at any knob it likes. Their ids never
+     * move: a host reads the parameter list once and every automation lane
+     * refers to a parameter by id, so a list that renumbered itself as knobs
+     * were exposed would leave lanes driving whatever landed in their place.
+     * The name changes and the host is told to re-read it; the id does not. */
+    PARAM_SLOT_0  = bs::BS_MACROS + 1,
+    PARAM_COUNT   = PARAM_SLOT_0 + bs::BS_EXPOSED
 };
 
 struct BencSynthClap {
@@ -100,6 +111,11 @@ struct BencSynthClap {
 #endif
     uint32_t   fbSeen;          /* last frame copied to the screen */
     float      rate;            /* the host's, told to the editor */
+
+    /* Told to re-read the parameter list when a slot changes what it points
+     * at. Names and text only - never the ids. */
+    const clap_host_params_t *hostParams;
+    unsigned    exposedRev;     /* patch revision the host was last told about */
     bool       shmOpen;
     bool       guiCreated;
     std::string bundleDir;      /* where this binary lives, to find the editor */
@@ -234,6 +250,24 @@ static void pumpEditorRealtime(BencSynthClap *s)
         s->appliedParamSeq = pseq;
 }
 
+/* The knob a slot drives, or null. */
+static bs::Param *slotParam(BencSynthClap *s, int slot)
+{
+    if (slot < 0 || slot >= bs::BS_EXPOSED) return 0;
+    const bs::Exposed &e = s->engine.patch.exposed[slot];
+    if (e.module < 0) return 0;
+    bs::Module *m = s->engine.patch.module(e.module);
+    if (!m || e.param < 0 || e.param >= m->paramCount()) return 0;
+    return &m->params[(size_t)e.param];
+}
+
+static bs::Module *slotModule(BencSynthClap *s, int slot)
+{
+    if (slot < 0 || slot >= bs::BS_EXPOSED) return 0;
+    const bs::Exposed &e = s->engine.patch.exposed[slot];
+    return e.module < 0 ? 0 : s->engine.patch.module(e.module);
+}
+
 static BencSynthClap *self_of(const clap_plugin_t *p)
 {
     return (BencSynthClap *)p->plugin_data;
@@ -294,7 +328,22 @@ static const clap_plugin_note_ports_t EXT_NOTE_PORTS = { np_count, np_get };
 
 static uint32_t pa_count(const clap_plugin_t *) { return PARAM_COUNT; }
 
-static bool pa_get_info(const clap_plugin_t *, uint32_t index,
+/* Everything the host sees is 0..1, whatever the knob underneath happens to
+ * be. A slot that reported the knob's own range would have to tell the host
+ * the range changed every time it was reassigned, and hosts vary in how well
+ * they take that; a normalised slot never changes shape. */
+static float slotToPlain(const bs::Param *p, double v)
+{
+    return p->lo + (float)v * (p->hi - p->lo);
+}
+
+static double slotToNorm(const bs::Param *p, float v)
+{
+    const float span = p->hi - p->lo;
+    return span > 1e-9f ? (double)((v - p->lo) / span) : 0.0;
+}
+
+static bool pa_get_info(const clap_plugin_t *p, uint32_t index,
                         clap_param_info_t *info)
 {
     if (index >= PARAM_COUNT) return false;
@@ -313,6 +362,27 @@ static bool pa_get_info(const clap_plugin_t *, uint32_t index,
         return true;
     }
 
+    if (index >= (uint32_t)PARAM_SLOT_0) {
+        const int slot = (int)index - PARAM_SLOT_0;
+        info->flags = CLAP_PARAM_IS_AUTOMATABLE;
+        info->min_value     = 0.0;
+        info->max_value     = 1.0;
+        info->default_value = 0.0;
+
+        /* Named for what it drives, so the host's automation lane says
+         * "VCF CUTOFF" rather than "Slot 4". This is the part that changes on
+         * reassignment, and the only part. */
+        BencSynthClap *s = self_of(p);
+        bs::Module *m = slotModule(s, slot);
+        const bs::Param *tp = slotParam(s, slot);
+        if (m && tp)
+            std::snprintf(info->name, sizeof info->name, "%s %s",
+                          m->typeId.c_str(), tp->name);
+        else
+            std::snprintf(info->name, sizeof info->name, "Slot %d", slot + 1);
+        return true;
+    }
+
     info->flags = CLAP_PARAM_IS_AUTOMATABLE;
     std::snprintf(info->name, sizeof info->name, "Macro %u", index + 1);
     info->min_value     = 0.0;
@@ -325,6 +395,11 @@ static bool pa_get_value(const clap_plugin_t *p, clap_id id, double *out)
 {
     BencSynthClap *s = self_of(p);
     if (id == PARAM_PRESET) { *out = s->wantPreset.load(); return true; }
+    if (id >= (uint32_t)PARAM_SLOT_0) {
+        const bs::Param *tp = slotParam(s, (int)id - PARAM_SLOT_0);
+        *out = tp ? slotToNorm(tp, tp->value) : 0.0;
+        return true;
+    }
     if (id >= bs::BS_MACROS) return false;
     *out = s->macro[id];
     return true;
@@ -340,6 +415,15 @@ static bool pa_value_to_text(const clap_plugin_t *p, clap_id id, double value,
             std::snprintf(out, cap, "%s (edited)", rp ? rp->name : "Custom");
         else
             std::snprintf(out, cap, "%s", rp ? rp->name : "?");
+        return true;
+    }
+    if (id >= (uint32_t)PARAM_SLOT_0) {
+        /* In the knob's own units, with the knob's own format string - so a
+         * cutoff reads "1200 Hz" in the host and not "0.37". */
+        const bs::Param *tp = slotParam(self_of(p), (int)id - PARAM_SLOT_0);
+        if (!tp) { std::snprintf(out, cap, "-"); return true; }
+        std::snprintf(out, cap, tp->fmt ? tp->fmt : "%.2f",
+                      (double)slotToPlain(tp, value));
         return true;
     }
     if (id >= bs::BS_MACROS) return false;
@@ -376,6 +460,13 @@ static void applyParam(BencSynthClap *s, clap_id id, double value)
             if (s->host && s->host->request_callback)
                 s->host->request_callback(s->host);
         }
+        return;
+    }
+    if (id >= (uint32_t)PARAM_SLOT_0) {
+        /* Straight onto the knob. No allocation, no rebuild - a knob value is
+         * a float and the graph does not care that it moved. */
+        bs::Param *tp = slotParam(s, (int)id - PARAM_SLOT_0);
+        if (tp) tp->value = slotToPlain(tp, value);
         return;
     }
     if (id < bs::BS_MACROS) {
@@ -469,6 +560,9 @@ static bool st_load(const clap_plugin_t *p, const clap_istream_t *stream)
     for (int i = 0; i < bs::BS_MACROS; i++) s->macro[i] = s->engine.macroValue(i);
     s->snapshot = text;
     pushRackToEditor(s);
+    /* A restored rack brings its own assignments, so the names the host is
+     * showing are for whatever was loaded before this one. */
+    tellHostAboutSlots(s);
     return true;
 }
 
@@ -667,6 +761,21 @@ static clap_process_status pl_process(const clap_plugin_t *p,
 }
 
 /* The main thread, where allocating is allowed. */
+/* Has the rack changed which knobs it offers? The patch bumps its revision
+ * when a slot is assigned or freed, and the editor's edits arrive here as a
+ * rebuild - so this is checked wherever the main thread has just touched the
+ * rack, and the host is asked to re-read names and text. Never the list: the
+ * ids are the same sixteen they always were. */
+static void tellHostAboutSlots(BencSynthClap *s)
+{
+    const unsigned rev = s->engine.patch.revision();
+    if (rev == s->exposedRev) return;
+    s->exposedRev = rev;
+    if (s->hostParams && s->hostParams->rescan)
+        s->hostParams->rescan(s->host,
+                              CLAP_PARAM_RESCAN_INFO | CLAP_PARAM_RESCAN_TEXT);
+}
+
 static void pl_on_main_thread(const clap_plugin_t *p)
 {
     BencSynthClap *s = self_of(p);
@@ -691,6 +800,7 @@ static void pl_on_main_thread(const clap_plugin_t *p)
                 s->custom          = true;
                 for (int i = 0; i < bs::BS_MACROS; i++)
                     s->macro[i] = s->engine.macroValue(i);
+                tellHostAboutSlots(s);
             }
         }
         return;
@@ -712,6 +822,7 @@ static void pl_on_main_thread(const clap_plugin_t *p)
 
     /* The editor is showing the rack that just went away. */
     pushRackToEditor(s);
+    tellHostAboutSlots(s);
 }
 
 static const void *pl_get_extension(const clap_plugin_t *, const char *id)
@@ -1047,6 +1158,10 @@ static const clap_plugin_t *createPlugin(const clap_host_t *host)
     if (!s) return 0;
 
     s->host        = host;
+    s->hostParams  = host && host->get_extension
+        ? (const clap_host_params_t *)host->get_extension(host, CLAP_EXT_PARAMS)
+        : 0;
+    s->exposedRev  = 0;
     s->editorProc  = 0;
     s->shmOpen     = false;
     s->guiCreated  = false;

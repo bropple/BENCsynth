@@ -10,7 +10,23 @@ using bs::Module;
 using bs::Patch;
 using bs::Cable;
 
-enum { MENU_ADD = 1, MENU_MODULE = 2, MENU_PRESET = 3 };
+enum { MENU_ADD = 1, MENU_MODULE = 2, MENU_PRESET = 3, MENU_KNOB = 4 };
+
+/* Which knob a right-click landed on, remembered until the menu is answered.
+ * The menu returns a row number and nothing else, so the target has to be put
+ * somewhere between opening it and hearing back. */
+static int knobMenuModule = -1;
+static int knobMenuParam  = -1;
+static const char *KNOB_ITEMS_FREE[]  = { "EXPOSE TO DAW" };
+static const char *KNOB_ITEMS_TAKEN[] = { "STOP EXPOSING" };
+static const char *KNOB_ITEMS_FULL[]  = { "ALL 16 SLOTS USED" };
+
+static bool anySlotFree(const bs::Patch &p)
+{
+    for (int i = 0; i < bs::BS_EXPOSED; i++)
+        if (p.exposed[i].module < 0) return true;
+    return false;
+}
 
 static const float PANEL_INSET = 5.0f;
 static const float GRID        = (float)bs::BS_HP;
@@ -375,6 +391,37 @@ void bs_rack_frame(bs_rack *r, bs_ui *ui, bs::Engine *eng, Rectangle view, float
             else                               hit = bs_knob(ui, wid, cell, p);
             if (hit && wheel != 0.0f) wheelTaken = 1;
             if (hit) r->edited = 1;
+
+            /* Right-click a knob to hand it to the host. On the knob itself
+             * rather than in the module's menu: a module can have seven of
+             * them and picking one from a list means a second level of menu
+             * for something a click already identifies. */
+            if (top == id && !r->patching && !bs_ui_blocked(ui) &&
+                IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) &&
+                CheckCollisionPointRec(wm, cell)) {
+                knobMenuModule = id;
+                knobMenuParam  = i;
+                const int held = patch.exposedSlotOf(id, i);
+                /* Asked, not attempted. An earlier version called expose() to
+                 * find out whether a slot was free, which takes one. */
+                const char **items = held >= 0 ? KNOB_ITEMS_TAKEN
+                                   : anySlotFree(patch) ? KNOB_ITEMS_FREE
+                                                        : KNOB_ITEMS_FULL;
+                bs_menu_open(ui, sm, items, 1, MENU_KNOB);
+            }
+
+            /* A small number on an exposed knob, so which ones the host can
+             * reach is visible rather than remembered. */
+            const int slot = patch.exposedSlotOf(id, i);
+            if (slot >= 0) {
+                char tag[8];
+                std::snprintf(tag, sizeof tag, "%d", slot + 1);
+                const float tw = bs_measure(ui, BS_F_TINY, tag, 0.0f);
+                Rectangle b = { cell.x + cell.width - tw - 5.0f, cell.y - 1.0f,
+                                tw + 4.0f, (float)BS_F_TINY + 2.0f };
+                DrawRectangleRec(b, BS_ACCENT);
+                bs_text(ui, BS_F_TINY, tag, b.x + 2.0f, b.y + 1.0f, BS_RACK);
+            }
         }
         ui->suppress = 0;
 
@@ -665,6 +712,19 @@ int bs_rack_menu(bs_rack *r, bs_ui *ui, bs::Engine *eng)
     int tag = 0;
     const int hit = bs_menu_take(ui, &tag);
     if (hit < 0) return 0;
+
+    if (tag == MENU_KNOB) {
+        if (knobMenuModule < 0) return 0;
+        /* The full-slots row is a statement, not a choice. */
+        if (eng->patch.exposedSlotOf(knobMenuModule, knobMenuParam) < 0 &&
+            !anySlotFree(eng->patch)) { knobMenuModule = -1; return 0; }
+        const int slot = eng->patch.exposedSlotOf(knobMenuModule, knobMenuParam);
+        if (slot >= 0) eng->patch.unexpose(slot);
+        else           eng->patch.expose(knobMenuModule, knobMenuParam);
+        knobMenuModule = -1;
+        r->edited = 1;
+        return 1;
+    }
 
     if (tag == MENU_PRESET) {
         /* The row, not the rack. The menu is sorted by name, so row three is

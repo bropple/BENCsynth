@@ -78,6 +78,15 @@ std::string bs_patch_to_string(bs::Engine *eng)
         appendf(out, "C %d %d %d %d %d\n", cs[i].src, cs[i].srcPort,
                 cs[i].dst, cs[i].dstPort, cs[i].color);
     }
+
+    /* Which knobs this rack hands to the host. Written last and read by slot,
+     * so an older file without them simply has none - and a newer file opened
+     * by an older build skips a record letter it does not know. */
+    for (int i = 0; i < bs::BS_EXPOSED; i++) {
+        const bs::Exposed &e = eng->patch.exposed[i];
+        if (e.module < 0) continue;
+        appendf(out, "E %d %d %d\n", i, e.module, e.param);
+    }
     return out;
 }
 
@@ -189,6 +198,19 @@ int bs_patch_from_string(bs::Engine *eng, const char *text,
                 if (c) c->color = col;
                 cables++;
             }
+
+        } else if (l[0] == 'E') {
+            /* Through the same remap as the cables: ids in the file are the
+             * ones it was written with, and a rack loaded into a patch that
+             * already has modules gets different ones. */
+            int slot = 0, mod = 0, par = 0;
+            if (std::sscanf(l, "E %d %d %d", &slot, &mod, &par) != 3) continue;
+            if (slot < 0 || slot >= bs::BS_EXPOSED) continue;
+            if (mod < 0 || mod >= (int)remap.size() || remap[(size_t)mod] < 0) continue;
+            const Module *m = eng->patch.module(remap[(size_t)mod]);
+            if (!m || par < 0 || par >= m->paramCount()) continue;
+            eng->patch.exposed[slot].module = remap[(size_t)mod];
+            eng->patch.exposed[slot].param  = par;
         }
     }
 

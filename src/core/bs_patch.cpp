@@ -8,7 +8,45 @@ const Signal &zeroSignal()
     return z;
 }
 
-Patch::Patch() : replaced(0), sr(48000.0f), rev(1), orderDirty(true) {}
+Patch::Patch() : replaced(0), sr(48000.0f), rev(1), orderDirty(true)
+{
+    for (int i = 0; i < BS_EXPOSED; i++) { exposed[i].module = -1; exposed[i].param = -1; }
+}
+
+int Patch::exposedSlotOf(int module, int param) const
+{
+    for (int i = 0; i < BS_EXPOSED; i++)
+        if (exposed[i].module == module && exposed[i].param == param) return i;
+    return -1;
+}
+
+int Patch::expose(int module, int param)
+{
+    const int already = exposedSlotOf(module, param);
+    if (already >= 0) return already;
+    for (int i = 0; i < BS_EXPOSED; i++)
+        if (exposed[i].module < 0) {
+            exposed[i].module = module;
+            exposed[i].param  = param;
+            rev++;
+            return i;
+        }
+    return -1;
+}
+
+void Patch::unexpose(int slot)
+{
+    if (slot < 0 || slot >= BS_EXPOSED) return;
+    exposed[slot].module = -1;
+    exposed[slot].param  = -1;
+    rev++;
+}
+
+void Patch::unexposeModule(int module)
+{
+    for (int i = 0; i < BS_EXPOSED; i++)
+        if (exposed[i].module == module) unexpose(i);
+}
 
 Patch::~Patch() { clear(); }
 
@@ -18,6 +56,7 @@ void Patch::clear()
     mods.clear();
     cables.clear();
     replaced = 0;
+    for (int i = 0; i < BS_EXPOSED; i++) { exposed[i].module = -1; exposed[i].param = -1; }
     order.clear();
     orderDirty = true;
     rev++;
@@ -50,6 +89,12 @@ void Patch::removeModule(int moduleId)
 {
     Module *m = module(moduleId);
     if (!m) return;
+
+    /* Its exposed knobs go with it. A slot left pointing at a dead id would
+     * silently attach itself to whatever module is created into that slot
+     * next, and the host would go on automating a parameter that has quietly
+     * become a different one. */
+    unexposeModule(moduleId);
 
     for (size_t i = 0; i < cables.size(); i++) {
         Cable &c = cables[i];

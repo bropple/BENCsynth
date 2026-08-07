@@ -261,7 +261,8 @@ int main(int argc, char **argv)
     }
 
     uint32_t paramCount = pa ? pa->count(p) : 0;
-    ok(paramCount == 9, "nine parameters: eight macros and the rack");
+    ok(paramCount == 25,
+       "twenty-five parameters: eight macros, the rack, and sixteen slots");
 
     /* --- activate --- */
     const uint32_t BLOCK = 512;
@@ -396,6 +397,86 @@ int main(int argc, char **argv)
     evs.note(CLAP_EVENT_NOTE_OFF, 0, 60, 0.0);
     p->process(p, &proc);
     evs.clear();
+
+    /* --- knobs handed to the host ---
+     *
+     * Sixteen slots whose ids never move and whose names follow whatever the
+     * rack has pointed them at. The ids are the contract: a host's automation
+     * lane refers to one, so renumbering as knobs are exposed would leave
+     * lanes driving something else.
+     *
+     * Assignments live in the rack, so the way to set one from out here is to
+     * load a rack that has one - which is also the thing that has to work when
+     * a DAW reopens a project. */
+    if (pa && stx) {
+        clap_param_info_t info;
+        ok(pa->get_info(p, 9, &info) && info.id == 9,
+           "the first slot exists and keeps its id");
+        ok(std::strncmp(info.name, "Slot", 4) == 0,
+           "and says it is unassigned until something assigns it");
+
+        /* Take the rack this instance already has and add one assignment to
+         * it: the first module that owns a knob, and its first knob. */
+        Stream cur;
+        clap_ostream_t os0 = { &cur, ostream_write };
+        stx->save(p, &os0);
+
+        int mod = -1, nparam = 0;
+        {
+            const char *q = cur.data.c_str();
+            while (*q) {
+                if (q[0] == 'M' && q[1] == ' ') {
+                    int id = 0, np = 0;
+                    char type[64] = "";
+                    float x = 0, y = 0;
+                    if (std::sscanf(q, "M %d %63s %f %f %d", &id, type, &x, &y, &np) == 5
+                        && np > 0) { mod = id; nparam = np; break; }
+                }
+                while (*q && *q != '\n') q++;
+                if (*q) q++;
+            }
+        }
+        ok(mod >= 0 && nparam > 0, "the rack has a module with a knob to expose");
+
+        if (mod >= 0) {
+            char line[64];
+            std::snprintf(line, sizeof line, "E 0 %d 0\n", mod);
+            Stream withSlot;
+            /* Before the terminator, not after it. State is stored with a
+             * trailing NUL and the loader parses it as a C string, so anything
+             * appended past that byte is never read - which is correct of the
+             * plugin and was wrong of this test. */
+            withSlot.data = cur.data;
+            while (!withSlot.data.empty() && withSlot.data.back() == '\0')
+                withSlot.data.pop_back();
+            withSlot.data += line;
+
+            clap_istream_t is0 = { &withSlot, istream_read };
+            ok(stx->load(p, &is0), "a rack that exposes a knob loads");
+
+            ok(pa->get_info(p, 9, &info) &&
+               std::strncmp(info.name, "Slot", 4) != 0,
+               "and the slot is now named for the knob it drives");
+
+            /* Units, not a normalised number: a cutoff should read in hertz
+             * in the host's automation lane. */
+            char text[64] = "";
+            ok(pa->value_to_text(p, 9, 0.5, text, sizeof text) && text[0] &&
+               std::strcmp(text, "-") != 0,
+               "and reports its value the way the knob does");
+
+            /* And driving it from the host moves the knob, which shows up as
+             * the value the plugin reports back. */
+            double before = 0, after = 0;
+            pa->get_value(p, 9, &before);
+            evs.clear();
+            evs.param(0, 9, before > 0.5 ? 0.1 : 0.9);
+            p->process(p, &proc);
+            pa->get_value(p, 9, &after);
+            ok(std::fabs(after - before) > 0.2,
+               "and the host writing to it actually turns the knob");
+        }
+    }
 
     /* --- the GUI, which lives in another process ---
      *
