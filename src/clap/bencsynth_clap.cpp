@@ -941,7 +941,12 @@ static bool gui_show(const clap_plugin_t *p)
     s->shm.block->embedParent.store(s->floating ? 0 : s->parentHandle,
                                     std::memory_order_release);
     const char *hint = s->bundleDir.empty() ? 0 : s->bundleDir.c_str();
-    if (!bs::bs_shm_spawn_editor(hint, s->shm.name, &s->editorProc)) {
+#if defined(__APPLE__)
+    const bool offscreen = !s->floating;
+#else
+    const bool offscreen = false;
+#endif
+    if (!bs::bs_shm_spawn_editor(hint, s->shm.name, &s->editorProc, offscreen)) {
         bs::bs_log("  the editor could not be started - see the candidates above");
         /* Nothing to show and no way to say why through this interface. The
          * host will report a failed show; the message goes to stderr, which is

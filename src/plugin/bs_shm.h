@@ -252,7 +252,12 @@ void bs_shm_close(ShmMap *m);
  * places are searched - see the implementation. Returns false if nothing could
  * be started, which the caller should report rather than hang waiting for an
  * editor that will never appear. */
-bool bs_shm_spawn_editor(const char *exePath, const char *shmName, void **procOut);
+/* `offscreen` is passed on the command line rather than read from the block,
+ * because the editor has to decide whether to create a visible window before
+ * it opens anything - and a flag whose value depends on which of two processes
+ * got there first is a flag that works on one machine and not another. */
+bool bs_shm_spawn_editor(const char *exePath, const char *shmName,
+                         void **procOut, bool offscreen = false);
 void bs_shm_wait_editor(void *proc, int millis);
 bool bs_shm_editor_running(void *proc);
 

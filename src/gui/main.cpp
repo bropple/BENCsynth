@@ -16,6 +16,7 @@
 #include "bs_patchfile.h"
 #include "bs_shm.h"
 #include "bs_embed.h"
+#include "bs_log.h"
 #include "bs_sync.h"
 #include "bs_filedlg.h"
 #include "bs_engine.h"
@@ -443,6 +444,9 @@ int main(int argc, char **argv)
      * rack lives in shared memory, the plugin makes the sound, and this window
      * is the only part of BENCsynth a DAW cannot draw for itself. */
     const char *editorShm = 0;
+    /* No window of our own: the frames go to the plugin, which draws them
+     * inside the host's. Told rather than discovered - see bs_shm_spawn_editor. */
+    int offscreen = 0;
     int openInfo = 0;
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shot = argv[++i];
@@ -455,6 +459,7 @@ int main(int argc, char **argv)
             startRack = argv[++i];
         else if (std::strcmp(argv[i], "--editor") == 0 && i + 1 < argc)
             editorShm = argv[++i];
+        else if (std::strcmp(argv[i], "--offscreen") == 0) offscreen = 1;
         else loadPath = argv[i];
     }
 
@@ -499,19 +504,20 @@ int main(int argc, char **argv)
      * The third is not a preference. An NSView cannot be handed to another
      * process, so on macOS the editor draws into a texture and the plugin
      * displays it - see src/plugin/bs_cocoa.h. */
-    unsigned fbMode = 0;
-    if (editorShm) {
-        bs::ShmMap peek2;
-        if (bs::bs_shm_open(&peek2, editorShm)) {
-            fbMode = peek2.block->fbMode.load();
-            bs::bs_shm_close(&peek2);
-        }
-    }
+    const unsigned fbMode = (unsigned)(editorShm && offscreen);
 
     SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT | FLAG_VSYNC_HINT);
     if (embedParent) SetConfigFlags(FLAG_WINDOW_UNDECORATED);
     if (fbMode)      SetConfigFlags(FLAG_WINDOW_HIDDEN);
     InitWindow(WIN_W, WIN_H, "BENCsynth");
+    /* Again, after the fact. The config flag is a hint given before the window
+     * exists and a backend is free to ignore it; this one is an instruction to
+     * a window that does. A stray top-level window here is not a cosmetic
+     * problem - it is the rack appearing outside the host, clickable, and not
+     * following it around. */
+    if (fbMode) SetWindowState(FLAG_WINDOW_HIDDEN);
+    if (editorShm)
+        bs::bs_log("editor: attached to %s, offscreen=%d", editorShm, (int)fbMode);
     SetWindowMinSize(WIN_MIN_W, WIN_MIN_H);
     SetTargetFPS(60);
     /* Escape is a panic button here, not a way out. A synthesizer that

@@ -371,14 +371,17 @@ int main(int argc, char **argv)
             const std::string sent = bs_patch_to_string(&host);
             bs::bs_shm_write(&m.block->host, sent.c_str(), (uint32_t)sent.size());
 
-            /* Ask for pixels rather than a window, at a size nothing would
-             * pick by accident. */
+            /* A size nothing would pick by accident. */
             m.block->fbMode.store(1);
             m.block->wantW.store(900);
             m.block->wantH.store(600);
 
             void *proc = 0;
-            const bool started = bs::bs_shm_spawn_editor(exe, m.name, &proc);
+            /* Offscreen is an argument, not a flag in the block: the editor
+             * has to decide whether to make a window before it opens anything,
+             * and a value that depends on which process got there first works
+             * on one machine and not the next. */
+            const bool started = bs::bs_shm_spawn_editor(exe, m.name, &proc, true);
             ok(started, "the editor starts in offscreen mode");
 
             if (started) {

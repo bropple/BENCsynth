@@ -163,7 +163,8 @@ void bs_shm_close(ShmMap *m)
     m->handle = 0;
 }
 
-bool bs_shm_spawn_editor(const char *exePath, const char *shmName, void **procOut)
+bool bs_shm_spawn_editor(const char *exePath, const char *shmName,
+                         void **procOut, bool offscreen)
 {
     char buf[512];
     for (int i = 0; i < BS_EDITOR_TRIES; i++) {
@@ -171,7 +172,8 @@ bool bs_shm_spawn_editor(const char *exePath, const char *shmName, void **procOu
         if (!exe) continue;
 
         char cmd[1024];
-        std::snprintf(cmd, sizeof cmd, "\"%s\" --editor \"%s\"", exe, shmName);
+        std::snprintf(cmd, sizeof cmd, "\"%s\" --editor \"%s\"%s", exe, shmName,
+                      offscreen ? " --offscreen" : "");
 
         STARTUPINFOA si;
         PROCESS_INFORMATION pi;
@@ -275,20 +277,24 @@ void bs_shm_close(ShmMap *m)
     m->fd = -1;
 }
 
-bool bs_shm_spawn_editor(const char *exePath, const char *shmName, void **procOut)
+bool bs_shm_spawn_editor(const char *exePath, const char *shmName,
+                         void **procOut, bool offscreen)
 {
     char buf[512];
     for (int i = 0; i < BS_EDITOR_TRIES; i++) {
         const char *exe = editorCandidates(i, exePath, buf, sizeof buf);
         if (!exe) continue;
 
-        bs_log("  trying editor: %s", exe);
+        bs_log("  trying editor: %s%s", exe, offscreen ? " --offscreen" : "");
         const pid_t pid = fork();
         if (pid < 0) continue;
         if (pid == 0) {
             /* Child. execlp searches PATH for the bare name and takes an
              * absolute path as-is, which is what the candidate list wants. */
-            execlp(exe, exe, "--editor", shmName, (char *)0);
+            if (offscreen)
+                execlp(exe, exe, "--editor", shmName, "--offscreen", (char *)0);
+            else
+                execlp(exe, exe, "--editor", shmName, (char *)0);
             _exit(127);          /* exec failed - do not run atexit handlers */
         }
 
