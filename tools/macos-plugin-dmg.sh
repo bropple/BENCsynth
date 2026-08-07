@@ -74,13 +74,29 @@ fi
 
 # The editor. The plugin opens the rack by starting this, so a plugin without
 # it shows a row of sliders and nothing else.
-if [ -d "$HERE/BENCsynth.app" ] && [ ! -d /Applications/BENCsynth.app ]; then
+#
+# Always replaced, never skipped. An earlier version of this script installed
+# it only when /Applications/BENCsynth.app was absent, which meant every
+# reinstall after the first silently kept the old editor - and an old editor
+# given a flag it does not know opens a window of its own instead of drawing
+# into the host's. The plugin and the editor are one program in two files and
+# they have to be updated together.
+if [ -d "$HERE/BENCsynth.app" ]; then
+    rm -rf /Applications/BENCsynth.app
     cp -R "$HERE/BENCsynth.app" /Applications/ 2>/dev/null || true
-fi
-[ -d /Applications/BENCsynth.app ] && {
     xattr -dr com.apple.quarantine /Applications/BENCsynth.app 2>/dev/null || true
     installed="$installed\n  editor-> /Applications/BENCsynth.app"
-}
+
+    # A copy sitting beside the plugin is searched before /Applications, so a
+    # stale one there wins over whatever was just installed. Replace it rather
+    # than delete it: somebody put it there on purpose.
+    if [ -d "$CLAPDIR/BENCsynth.app" ]; then
+        rm -rf "$CLAPDIR/BENCsynth.app"
+        cp -R "$HERE/BENCsynth.app" "$CLAPDIR/"
+        xattr -dr com.apple.quarantine "$CLAPDIR/BENCsynth.app" 2>/dev/null || true
+        installed="$installed\n  editor-> $CLAPDIR/BENCsynth.app (replaced)"
+    fi
+fi
 
 printf 'installed:%b\n\nRestart your DAW - it scans for plugins at startup.\n' "$installed"
 INSTALL

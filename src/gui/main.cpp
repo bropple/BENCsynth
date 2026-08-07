@@ -460,6 +460,13 @@ int main(int argc, char **argv)
         else if (std::strcmp(argv[i], "--editor") == 0 && i + 1 < argc)
             editorShm = argv[++i];
         else if (std::strcmp(argv[i], "--offscreen") == 0) offscreen = 1;
+        else if (argv[i][0] == '-' && argv[i][1] == '-') {
+            /* Not a file. Treating it as one is how an editor that predates a
+             * flag ends up opening a window instead of refusing to start,
+             * which is a great deal harder to diagnose than this line. */
+            std::fprintf(stderr, "bencsynth: unknown option %s\n", argv[i]);
+            return 2;
+        }
         else loadPath = argv[i];
     }
 
@@ -517,7 +524,8 @@ int main(int argc, char **argv)
      * following it around. */
     if (fbMode) SetWindowState(FLAG_WINDOW_HIDDEN);
     if (editorShm)
-        bs::bs_log("editor: attached to %s, offscreen=%d", editorShm, (int)fbMode);
+        bs::bs_log("editor: attached to %s, offscreen=%d, built %s %s",
+                   editorShm, (int)fbMode, __DATE__, __TIME__);
     SetWindowMinSize(WIN_MIN_W, WIN_MIN_H);
     SetTargetFPS(60);
     /* Escape is a panic button here, not a way out. A synthesizer that
