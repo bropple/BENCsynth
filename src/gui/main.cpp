@@ -884,8 +884,12 @@ int main(int argc, char **argv)
                 const int w = (int)b->wantW.load(std::memory_order_acquire);
                 const int h = (int)b->wantH.load(std::memory_order_acquire);
                 if (w > 0 && h > 0 &&
-                    (w != GetScreenWidth() || h != GetScreenHeight()))
+                    (w != GetScreenWidth() || h != GetScreenHeight())) {
                     SetWindowSize(w, h);
+                    /* And the window itself, which on X11 is a child of the
+                     * host's and does not follow GLFW's idea of its size. */
+                    bs::bs_embed_resize(GetWindowHandle(), w, h);
+                }
             }
 
             bs::NoteEvent ne;

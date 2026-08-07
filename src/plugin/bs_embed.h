@@ -14,10 +14,15 @@
 
 namespace bs {
 
-/* `child` is what raylib's GetWindowHandle() returned - an HWND on Windows.
- * `parent` is the host's handle from clap gui.set_parent. Does nothing where
- * embedding is not implemented, which is every platform but Windows so far. */
+/* `child` is what raylib's GetWindowHandle() returned. That is an HWND on
+ * Windows and - despite the name - a GLFWwindow* on Linux, where raylib's own
+ * X11 branch is commented out with a TODO. `parent` is the host's handle from
+ * gui.set_parent. Does nothing on macOS, where pixels cross the process
+ * boundary instead; see bs_cocoa.h. */
 void bs_embed_window(void *child, uint64_t parent, int w, int h);
+
+/* The host resized its container. Windows and X11 only. */
+void bs_embed_resize(void *child, int w, int h);
 
 } /* namespace bs */
 

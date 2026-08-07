@@ -33,6 +33,9 @@
 #  include <time.h>
 #  include <unistd.h>
 #endif
+#if defined(__linux__)
+#  include <X11/Xlib.h>
+#endif
 
 static int checks = 0, failures = 0;
 
@@ -514,6 +517,62 @@ int main(int argc, char **argv)
             bs::bs_shm_close(&m);
         }
     }
+
+    /* ================================================================
+     * Part 4 - embedding, on the one platform where it can be checked
+     *
+     * X11 reparents across processes because a Window is a server-side object
+     * with an id rather than a pointer into somebody's address space. Which
+     * means the X server can be asked who the editor's parent is, and its
+     * answer does not depend on what either process believes.
+     * ================================================================ */
+#if defined(__linux__)
+    if (haveDisplay) {
+        std::printf("\nembedding\n");
+        Display *dpy = XOpenDisplay(0);
+        ok(dpy != 0, "a display is available");
+        if (dpy) {
+            const Window host = XCreateSimpleWindow(dpy, DefaultRootWindow(dpy),
+                                                    0, 0, 800, 500, 0, 0, 0x101810);
+            XMapWindow(dpy, host);
+            XFlush(dpy);
+
+            bs::ShmMap m;
+            if (!bs::bs_shm_create(&m, 31337)) {
+                ok(false, "a shared block is created for the embed test");
+            } else {
+                bs::Engine h; h.init(48000.0f); h.buildPreset(0);
+                const std::string t = bs_patch_to_string(&h);
+                bs::bs_shm_write(&m.block->host, t.c_str(), (uint32_t)t.size());
+                m.block->wantW.store(800);
+                m.block->wantH.store(500);
+                m.block->embedParent.store((uint64_t)host);
+
+                void *proc = 0;
+                const bool started = bs::bs_shm_spawn_editor(exe, m.name, &proc, false);
+                ok(started, "the editor starts with a parent window to join");
+
+                if (started) {
+                    bool child = false;
+                    for (int i = 0; i < 100 && !child; i++) {
+                        nap(100);
+                        Window r = 0, parent = 0, *kids = 0;
+                        unsigned n = 0;
+                        if (XQueryTree(dpy, host, &r, &parent, &kids, &n) && n > 0)
+                            child = true;
+                        if (kids) XFree(kids);
+                    }
+                    ok(child, "and the X server reports it as a child of that window");
+                    m.block->quit.store(1);
+                    bs::bs_shm_wait_editor(proc, 3000);
+                }
+                bs::bs_shm_close(&m);
+            }
+            XDestroyWindow(dpy, host);
+            XCloseDisplay(dpy);
+        }
+    }
+#endif
 
     std::printf("\n%d checks, %d failed\n", checks, failures);
     return failures ? 1 : 0;

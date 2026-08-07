@@ -41,13 +41,24 @@ CORE_LIB := libbencsynth.a
 # The editor runs in another process and talks to the plugin over shared
 # memory. Both halves need this, and the standalone IS the editor (--editor),
 # so it is linked into the program as well as into the plugins.
-PLUGIN_SRC := src/plugin/bs_shm.cpp src/plugin/bs_sync.cpp src/plugin/bs_embed.cpp \
-              src/plugin/bs_log.cpp
+# Shared by the plugin and the editor.
+PLUGIN_SRC := src/plugin/bs_shm.cpp src/plugin/bs_sync.cpp src/plugin/bs_log.cpp
+
+# The editor's alone. bs_embed reaches into GLFW for the window id raylib will
+# not hand over, so it can only be linked where raylib is - and the plugin has
+# no raylib at all. Building it into the plugin left glfwGetX11Window undefined
+# in the .clap, which a shared object accepts at link time and a host discovers
+# at load time, or worse resolves against its own GLFW.
+EDITOR_SRC := src/plugin/bs_embed.cpp
 # Listed as prerequisites everywhere PLUGIN_SRC is used. These describe a
 # struct that lives in shared memory and is read by two separate binaries: if
 # one is rebuilt against a new layout and the other is not, they map the same
 # bytes and disagree about what is in them, which looks exactly like an editor
 # that attaches and then does nothing.
+ifeq ($(UNAME_S),Linux)
+  IPC_X11 := -lX11
+endif
+
 PLUGIN_HDR := src/plugin/bs_shm.h src/plugin/bs_sync.h src/plugin/bs_embed.h \
               src/plugin/bs_log.h src/plugin/bs_cocoa.h
 
@@ -60,7 +71,7 @@ GUI_SRC  := src/gui/main.cpp \
             src/gui/bs_input.cpp
 # The standalone is also the plugin's editor (--editor), so it carries the
 # same shared-memory half the plugin does.
-GUI_SRC  += $(PLUGIN_SRC)
+GUI_SRC  += $(PLUGIN_SRC) $(EDITOR_SRC)
 GUI_OBJ  := $(GUI_SRC:.cpp=.o)
 GUI      := bencsynth$(EXE)
 
@@ -170,7 +181,7 @@ else
   CLAP_BINARY  := $(CLAP_BUNDLE)
   CLAP_SHARED  := -shared
   CLAP_LINK    :=
-  CLAP_RT      := -lrt
+  CLAP_RT      := -lrt -lX11
   CLAP_INSTALL_DIR ?= $(HOME)/.clap
 endif
 
@@ -337,7 +348,12 @@ else
 	@false
 endif
 
-$(LV2_BUNDLE): $(LV2_SRC) $(CORE_SRC) src/lv2/bencsynth.ttl src/lv2/manifest.ttl.in
+LV2GEN := bencsynth-gen-racks$(EXE)
+
+$(LV2GEN): tools/gen_lv2_racks.cpp $(CORE_LIB)
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ $< $(CORE_LIB)
+
+$(LV2_BUNDLE): $(LV2_SRC) $(CORE_SRC) src/lv2/bencsynth.ttl.in src/lv2/manifest.ttl.in $(LV2GEN)
 	@mkdir -p $(LV2_BUNDLE)
 	# -MMD is filtered out: it is for incremental builds, and here it would
 	# just leave a .d file sitting inside the bundle a host is meant to read.
@@ -349,7 +365,9 @@ ifeq ($(UNAME_S),Darwin)
 	@$(MAKE) --no-print-directory mac-sign SIGN=$(LV2_BUNDLE)/bencsynth$(LV2_LIB_EXT)
 endif
 	sed 's|@LIB_EXT@|$(LV2_LIB_EXT)|' src/lv2/manifest.ttl.in > $(LV2_BUNDLE)/manifest.ttl
-	cp src/lv2/bencsynth.ttl $(LV2_BUNDLE)/bencsynth.ttl
+	./$(LV2GEN) > /tmp/bs-rack-port.ttl
+	awk '/@RACK_PORT@/ { while ((getline line < "/tmp/bs-rack-port.ttl") > 0) print line; next } { print }' \
+	    src/lv2/bencsynth.ttl.in > $(LV2_BUNDLE)/bencsynth.ttl
 	@echo "built $(LV2_BUNDLE)"
 
 # The Turtle has to describe the ports the C actually connects, and nothing in
@@ -436,7 +454,7 @@ ipc-test: $(IPCTEST) $(GUI)
 
 $(IPCTEST): tools/ipc_test.cpp $(PLUGIN_SRC) $(PLUGIN_HDR) $(CORE_LIB)
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -Isrc/plugin -o $@ tools/ipc_test.cpp \
-	    $(PLUGIN_SRC) $(CORE_LIB) $(CLAP_RT)
+	    $(PLUGIN_SRC) $(CORE_LIB) $(CLAP_RT) $(IPC_X11)
 
 CLAPHOST := bencsynth-clap-host$(EXE)
 
@@ -558,6 +576,6 @@ clean:
 	      $(CORE_OBJ:.o=.d) $(GUI_OBJ:.o=.d) $(TEST_OBJ:.o=.d) $(RENDER_OBJ:.o=.d) \
 	      $(CORE_LIB) $(GUI) $(TEST) $(RENDER) $(LV2HOST) src/gui/*.res.o
 	rm -rf $(LV2_BUNDLE) $(CLAP_BUNDLE) $(VST3_BUNDLE) $(VST3_BUILD)
-	rm -f $(CLAPHOST) $(IPCTEST)
+	rm -f $(CLAPHOST) $(IPCTEST) $(LV2GEN)
 
 -include $(CORE_OBJ:.o=.d) $(GUI_OBJ:.o=.d) $(TEST_OBJ:.o=.d) $(RENDER_OBJ:.o=.d)

@@ -76,9 +76,20 @@ jobs:
           # they ask the library a host actually loads plugins with.
           sudo apt-get install -y sordi || sudo apt-get install -y sord-utils || true
       - name: Build the bundle
-        run: make lv2
+        run: |
+          make lv2
+          make render      # to count the racks the TTL is meant to list
       - name: It describes itself correctly
         run: make lv2-validate
+      # Generated from the preset table rather than written out, so the check
+      # is that the two agree - a Turtle file listing 30 racks for a build with
+      # 37 is a menu that is quietly missing the last seven.
+      - name: The rack port lists every rack
+        run: |
+          N=$(./bencsynth-render 2>&1 | grep -c '^  ')
+          T=$(grep -c 'lv2:scalePoint' build/bencsynth.lv2/bencsynth.ttl)
+          echo "presets $N, scale points $T"
+          test "$N" = "$T"
 
       # Stronger than validating the Turtle in isolation: this asks lilv to go
       # looking for plugins the way a host does and checks that ours is one of
@@ -170,6 +181,20 @@ jobs:
           BENCSYNTH_EDITOR=./bencsynth xvfb-run -a \
             --server-args="-screen 0 1400x900x24" \
             ./bencsynth-clap-host build/bencsynth.clap
+      # The plugin and the editor are separate programs that happen to share a
+      # repository. The editor links raylib; the plugin must not, and must not
+      # depend on anything it provides. A shared object accepts undefined
+      # symbols at link time and the host discovers them at load - or worse,
+      # resolves them against its own copy. bs_embed.cpp being in the wrong
+      # source list left glfwGetX11Window undefined here exactly once.
+      - name: The plugin needs nothing from raylib or GLFW
+        run: |
+          if nm -D --undefined-only build/bencsynth.clap | grep -iE 'glfw|raylib'; then
+            echo "the plugin depends on a symbol only the editor has"
+            exit 1
+          fi
+          echo "self-contained"
+
       - name: clap_entry survives -fvisibility=hidden
         run: |
           # CLAP_EXPORT has to beat the hidden default, or a host opens the

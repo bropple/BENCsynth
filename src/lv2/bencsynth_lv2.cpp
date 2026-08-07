@@ -28,6 +28,7 @@
 #include <lv2/midi/midi.h>
 #include <lv2/urid/urid.h>
 #include <lv2/state/state.h>
+#include <lv2/worker/worker.h>
 
 #include <cstdlib>
 #include <cstring>
@@ -44,8 +45,9 @@ enum {
     PORT_MIDI = 0,
     PORT_OUT_L,
     PORT_OUT_R,
-    PORT_MACRO_0
+    PORT_MACRO_0,
     /* ... BS_MACROS of them ... */
+    PORT_RACK = PORT_MACRO_0 + bs::BS_MACROS
 };
 
 struct BencSynth {
@@ -55,6 +57,15 @@ struct BencSynth {
     float *outL;
     float *outR;
     const float *macro[bs::BS_MACROS];
+
+    const float *rack;          /* which preset, as an enumerated control */
+    int          rackApplied;
+
+    /* Rebuilding a rack allocates, and run() is the audio thread. LV2's answer
+     * is the worker: ask here, do it on the host's own non-realtime thread.
+     * LMMS declares support for this, which is the whole reason the rack
+     * selector can exist there at all. */
+    LV2_Worker_Schedule *schedule;
 
     LV2_URID_Map *map;
     LV2_URID      uridMidiEvent;
@@ -101,6 +112,12 @@ static LV2_Handle instantiate(const LV2_Descriptor *descriptor,
     self->uridAtomString = map->map(map->handle, LV2_ATOM__String);
 
     self->midi = 0;
+    self->rack = 0;
+    self->rackApplied = 0;
+    self->schedule = 0;
+    for (int i = 0; features && features[i]; i++)
+        if (std::strcmp(features[i]->URI, LV2_WORKER__schedule) == 0)
+            self->schedule = (LV2_Worker_Schedule *)features[i]->data;
     self->outL = self->outR = 0;
     for (int i = 0; i < bs::BS_MACROS; i++) {
         self->macro[i] = 0;
@@ -120,6 +137,7 @@ static void connect_port(LV2_Handle instance, uint32_t port, void *data)
     case PORT_MIDI:  self->midi = (const LV2_Atom_Sequence *)data; break;
     case PORT_OUT_L: self->outL = (float *)data; break;
     case PORT_OUT_R: self->outR = (float *)data; break;
+    case PORT_RACK:  self->rack = (const float *)data; break;
     default:
         if (port >= PORT_MACRO_0 && port < PORT_MACRO_0 + bs::BS_MACROS)
             self->macro[port - PORT_MACRO_0] = (const float *)data;
@@ -157,6 +175,21 @@ static void run(LV2_Handle instance, uint32_t nframes)
         if (v == self->macroSeen[i]) continue;
         self->macroSeen[i] = v;
         self->engine.setMacro(i, v);
+    }
+
+    /* The rack, if it changed. Handed to the worker rather than done here:
+     * building one allocates, and a host without the worker feature simply
+     * keeps the rack it has rather than being given a dropout. */
+    if (self->rack) {
+        const int want = (int)(*self->rack + 0.5f);
+        if (want != self->rackApplied &&
+            want >= 0 && want < bs::rackPresetCount() && self->schedule) {
+            const int32_t msg = want;
+            if (self->schedule->schedule_work(self->schedule->handle,
+                                              sizeof msg, &msg) ==
+                LV2_WORKER_SUCCESS)
+                self->rackApplied = want;
+        }
     }
 
     /* MIDI and audio, interleaved chunk by chunk.
@@ -297,10 +330,46 @@ static LV2_State_Status restore(LV2_Handle instance,
     return LV2_STATE_SUCCESS;
 }
 
+/* ------------------------------------------------------------------ *
+ * Worker - where allocating is allowed
+ * ------------------------------------------------------------------ */
+
+static LV2_Worker_Status work(LV2_Handle instance,
+                              LV2_Worker_Respond_Function respond,
+                              LV2_Worker_Respond_Handle handle,
+                              uint32_t size, const void *data)
+{
+    (void)respond;
+    (void)handle;
+    BencSynth *self = (BencSynth *)instance;
+    if (size != sizeof(int32_t) || !data) return LV2_WORKER_ERR_UNKNOWN;
+
+    const int which = *(const int32_t *)data;
+    if (which < 0 || which >= bs::rackPresetCount()) return LV2_WORKER_ERR_UNKNOWN;
+
+    /* Engine::clear takes the graph lock, so a render already in flight
+     * finishes first and the next one waits - the same arrangement the
+     * standalone uses when its own menu loads a rack. */
+    self->engine.buildPreset(which);
+
+    /* The macro ports still hold whatever the host has them at, and they
+     * belong to this rack now. */
+    for (int i = 0; i < bs::BS_MACROS; i++) self->macroSeen[i] = -1.0f;
+    return LV2_WORKER_SUCCESS;
+}
+
+static LV2_Worker_Status work_response(LV2_Handle, uint32_t, const void *)
+{
+    /* Nothing to hand back: the rack is already in place. */
+    return LV2_WORKER_SUCCESS;
+}
+
 static const void *extension_data(const char *uri)
 {
     static const LV2_State_Interface iface = { save, restore };
+    static const LV2_Worker_Interface worker = { work, work_response, 0 };
     if (std::strcmp(uri, LV2_STATE__interface) == 0) return &iface;
+    if (std::strcmp(uri, LV2_WORKER__interface) == 0) return &worker;
     return 0;
 }
 

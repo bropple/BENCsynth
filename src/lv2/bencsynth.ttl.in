@@ -4,9 +4,11 @@
 @prefix foaf:  <http://xmlns.com/foaf/0.1/> .
 @prefix lv2:   <http://lv2plug.in/ns/lv2core#> .
 @prefix midi:  <http://lv2plug.in/ns/ext/midi#> .
+@prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 @prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix state: <http://lv2plug.in/ns/ext/state#> .
 @prefix urid:  <http://lv2plug.in/ns/ext/urid#> .
+@prefix work:  <http://lv2plug.in/ns/ext/worker#> .
 
 <https://github.com/bropple>
 	a foaf:Person ;
@@ -23,8 +25,9 @@
 	rdfs:comment "A polyphonic virtual modular synthesizer. Build a rack in the standalone, save a .bencsynth, and load it here." ;
 
 	lv2:requiredFeature urid:map ;
-	lv2:optionalFeature lv2:hardRTCapable , bufsz:boundedBlockLength ;
-	lv2:extensionData state:interface ;
+	lv2:optionalFeature lv2:hardRTCapable , bufsz:boundedBlockLength ,
+	                    work:schedule ;
+	lv2:extensionData state:interface , work:interface ;
 
 	# The whole rack travels as one string inside the host's project file.
 	# There is no sensible way to express a modular patch as a port list, and
@@ -100,4 +103,13 @@
 		lv2:symbol "macro8" ;
 		lv2:name "Macro 8" ;
 		lv2:default 0.0 ; lv2:minimum 0.0 ; lv2:maximum 1.0
+	] , [
+		# Every rack, by name. Generated from the preset table by
+		# tools/gen_lv2_racks.cpp, because these names live in C and a second
+		# hand-written copy would drift.
+		#
+		# This is what the LV2 can offer LMMS and the CLAP already offers
+		# everyone else: without it the plugin is one hardcoded patch, since
+		# LMMS implements no state extension and there is no editor to reach.
+@RACK_PORT@
 	] .

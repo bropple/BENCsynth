@@ -23,6 +23,7 @@
 #include <lv2/midi/midi.h>
 #include <lv2/urid/urid.h>
 #include <lv2/state/state.h>
+#include <lv2/worker/worker.h>
 
 #include <dlfcn.h>
 
@@ -305,6 +306,24 @@ int main(int argc, char **argv)
 
             d->cleanup(hb);
             d->cleanup(hc);
+        }
+    }
+
+    /* The rack selector, which is the only thing the LV2 can offer LMMS that
+     * it did not have: without it the plugin is one hardcoded patch, since
+     * LMMS implements no state extension and never shows a plugin's editor. */
+    {
+        const LV2_Worker_Interface *w =
+            (const LV2_Worker_Interface *)d->extension_data(LV2_WORKER__interface);
+        ok(w != 0, "it offers the worker interface");
+        if (w) {
+            /* The host calls work() on its own thread; here this thread is it. */
+            const int32_t which = 3;
+            ok(w->work(h, 0, 0, sizeof which, &which) == LV2_WORKER_SUCCESS,
+               "the worker builds a rack when asked");
+            const int32_t bad = 9999;
+            ok(w->work(h, 0, 0, sizeof bad, &bad) != LV2_WORKER_SUCCESS,
+               "and refuses one that does not exist");
         }
     }
 

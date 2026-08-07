@@ -765,7 +765,12 @@ static bool gui_is_api_supported(const clap_plugin_t *, const char *api,
     return std::strcmp(api, CLAP_WINDOW_API_COCOA) == 0;
 #else
     if (std::strcmp(api, CLAP_WINDOW_API_X11) != 0) return false;
-    return is_floating;
+    /* Both, and embedded preferred - same as Windows, for the same reason:
+     * every host built around an FX rack embeds and never asks for floating.
+     * An X11 Window is a server-side object with an id, so it reparents across
+     * processes exactly as an HWND does. */
+    (void)is_floating;
+    return true;
 #endif
 }
 
@@ -781,7 +786,7 @@ static bool gui_get_preferred_api(const clap_plugin_t *, const char **api,
     *is_floating = false;
 #else
     *api = CLAP_WINDOW_API_X11;
-    *is_floating = true;
+    *is_floating = false;
 #endif
     return true;
 }
@@ -924,7 +929,8 @@ static bool gui_set_parent(const clap_plugin_t *p, const clap_window_t *window)
     bs::bs_cocoa_start_pump(s->cocoaView, pumpFrame, s, 60.0);
     s->parentHandle = (uint64_t)(uintptr_t)window->cocoa;
 #else
-    return false;
+    if (std::strcmp(window->api, CLAP_WINDOW_API_X11) != 0) return false;
+    s->parentHandle = (uint64_t)window->x11;
 #endif
     if (s->shmOpen)
         s->shm.block->embedParent.store(s->parentHandle, std::memory_order_release);

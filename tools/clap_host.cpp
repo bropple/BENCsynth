@@ -422,23 +422,14 @@ int main(int argc, char **argv)
             ok(g->get_preferred_api(p, &pref, &floating),
                "it states a preferred windowing mode");
 
-#if defined(_WIN32) || defined(__APPLE__)
-            /* Hosts built around an FX rack embed and never ask for floating.
-             * REAPER's only question on both platforms is
-             * is_api_supported(<api>, floating=0); answering no ends the
-             * conversation and leaves a plugin with no window. */
+            /* Every platform now embeds, because every host built around an
+             * FX rack does. Windows reparents an HWND, X11 reparents a Window,
+             * and macOS - which cannot reparent anything across a process
+             * boundary - ships pixels into a layer instead. Floating stays
+             * available for hosts that would rather have it. */
             ok(g->is_api_supported(p, api, false), "embedding is supported");
             ok(g->is_api_supported(p, api, true), "floating is supported too");
-            ok(!floating, "embedded is preferred, which is what hosts here do");
-#else
-            ok(g->is_api_supported(p, api, true), "a floating window is supported");
-            /* Refused rather than half-promised: embedding on X11 and Cocoa
-             * needs machinery this does not have yet, and claiming it would
-             * produce a window the host cannot place. */
-            ok(!g->is_api_supported(p, api, false),
-               "embedding is refused rather than half-promised");
-            ok(floating, "floating is the preferred mode here");
-#endif
+            ok(!floating, "embedded is preferred, which is what hosts do");
 
             uint32_t w = 0, h = 0;
             ok(g->get_size(p, &w, &h) && w > 0 && h > 0, "it reports a size");
