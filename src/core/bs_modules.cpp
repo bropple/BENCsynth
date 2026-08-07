@@ -628,7 +628,7 @@ public:
         configure("STRING", "STRING", 6, 3);
         addKnob("OCT",    -4.0f, 4.0f, 0.0f, "%+.0f", PC_LIN, 1.0f);
         addKnob("FINE",  -50.0f, 50.0f, 0.0f, "%+.0f c");
-        addKnob("DECAY",   0.0f, 1.0f, 0.86f, "%.2f");
+        addKnob("DECAY",   0.0f, 1.0f, 0.60f, "%.2f");   /* about four seconds */
         addKnob("BRIGHT",  0.0f, 1.0f, 0.55f, "%.2f");
         /* The stiffness. Zero is an ideal string - a guitar harmonic. Up is a
          * thicker, shorter, more tightly wound one, which is what the bass of
@@ -663,7 +663,8 @@ public:
                 damp[c][k].reset();
                 for (int a = 0; a < AP; a++) ap1[c][k][a] = ap2[c][k][a] = 0.0f;
             }
-            last[c] = 0.0f; burst[c] = 0; vel[c] = 0.0f; nz[c] = 12345 + c * 7919;
+            last[c] = 0.0f; burst[c] = 0; burstLen[c] = 1;
+            vel[c] = 0.0f; nz[c] = 12345 + c * 7919;
         }
     }
 
@@ -679,6 +680,15 @@ public:
         /* Negative: high partials round the loop sooner and land sharp. */
         const float a = -0.72f * inh;
 
+        /* Loop gain from a decay time, not from a number that felt about
+         * right. Losing g per round trip with f0 trips a second puts the level
+         * 60 dB down after t = -3 / (f0 * log10 g); inverting that makes the
+         * knob mean seconds. The old mapping was linear in gain, which crammed
+         * every musically useful value into the top two percent of its travel
+         * and gave a grand a three-second decay - measured at -46 dB over
+         * three seconds, which is a guitar. */
+        const float t60 = 0.15f * std::pow(240.0f, clampf(decay, 0.0f, 1.0f));
+
         /* The coefficient, not the filter. Assigning a whole OnePole over each
          * string's would carry the template's z with it and wipe out the state
          * of a note that is still ringing. */
@@ -690,11 +700,24 @@ public:
             for (int i = 0; i < BS_BLOCK; i++) {
                 const float g = in(1).get(c, i);
                 if (g > 1.0f && last[c] <= 1.0f) {
-                    burst[c] = (int)(sr * 0.004f);       /* 4 ms of hammer */
-                    vel[c]   = clampf(g * 0.1f, 0.05f, 1.0f);
-                    /* Felt stiffens under load, so the burst that a hard blow
-                     * puts into the string is brighter and not just louder. */
-                    hammer[c].setCutoff(600.0f + vel[c] * vel[c] * 7000.0f, sr);
+                    vel[c] = clampf(g * 0.1f, 0.05f, 1.0f);
+                    /* How long the felt stays in contact, which is the most
+                     * important number in a hammer.
+                     *
+                     * Contact time is a lowpass: a partial whose period is
+                     * shorter than the contact receives almost no energy. Hard
+                     * playing compresses the felt and shortens the contact,
+                     * which is why loud is also bright; a long contact on a
+                     * thick string is why the bottom of a piano is so much
+                     * darker than the top. About 1 ms in the treble to 4 ms
+                     * low down, shortened by force. */
+                    const float fh = clampf(261.6256f *
+                        std::exp2(in(0).get(c, i) + pv(0)), 20.0f, 4000.0f);
+                    const float contact = clampf(
+                        0.0035f * (1.0f - 0.55f * vel[c]) *
+                        std::sqrt(261.6256f / fh), 0.0004f, 0.010f);
+                    burstLen[c] = (int)(sr * contact) + 2;
+                    burst[c]    = burstLen[c];
                 }
                 last[c] = g;
 
@@ -725,6 +748,15 @@ public:
 
                 const float apDelay = -(lpPhase + apPhase) / w;
 
+                /* The second string rings half again as long. Strings in a
+                 * course are coupled through the bridge and trade energy,
+                 * which is what produces the piano's double decay: a quick
+                 * initial fall, then a quiet aftersound that outlasts it. */
+                float loopGain[2];
+                for (int k = 0; k < 2; k++)
+                    loopGain[k] = clampf(std::pow(10.0f,
+                        -3.0f / (f0 * t60 * (k ? 2.2f : 0.45f))), 0.5f, 0.99999f);
+
                 float sum = 0.0f;
                 for (int k = 0; k < 2; k++) {
                     const float det = (k == 0 ? -0.5f : 0.5f) * spread / 1200.0f;
@@ -748,21 +780,27 @@ public:
 
                     damp[c][k].a = dampA;
                     x = damp[c][k].lp(x);
-                    x *= 0.9f + 0.0999f * decay;
+                    x *= loopGain[k];
 
                     float e = in(2).get(c, i) * 0.2f;
                     if (burst[c] > 0) {
+                        /* A raised cosine, not noise.
+                         *
+                         * The first version excited the string with filtered
+                         * noise, and noise is what a scraped or plucked string
+                         * sounds like - measured, 62% of the energy landed
+                         * BETWEEN the partials rather than on them, which the
+                         * ear reads as a guitar. A hammer applies a smooth
+                         * force with a beginning and an end, and the spectrum
+                         * that puts into a string is the transform of that
+                         * shape: partials, and no hiss between them.
+                         *
+                         * A little noise stays, because felt is not silent. */
+                        const float t = 1.0f - (float)burst[c] / (float)burstLen[c];
+                        const float w = 0.5f - 0.5f * std::cos(6.2831853f * t);
                         nz[c] = nz[c] * 1103515245u + 12345u;
                         const float r = (float)((int)(nz[c] >> 9) & 0x7fff) / 16384.0f - 1.0f;
-                        /* Harder means brighter: the hammer's felt stiffens
-                         * under load, so a loud note starts with more high
-                         * end and not merely more of everything. */
-                        /* Three, by measurement: at unity the string came out
-                         * a seventh of the level of everything else in the
-                         * rack, because four milliseconds of noise is not much
-                         * energy to give a resonator that then throws most of
-                         * it away through the damping filter. */
-                        e += hammer[c].lp(r * vel[c]) * (0.4f + 0.6f * vel[c]) * 3.0f;
+                        e += (w + 0.035f * r * w) * vel[c] * 0.55f;
                     }
 
                     line[c][k].write(x + e);
@@ -791,7 +829,7 @@ private:
     OnePole damp[BS_MAX_POLY][2], hammer[BS_MAX_POLY];
     float   ap1[BS_MAX_POLY][2][AP], ap2[BS_MAX_POLY][2][AP];
     float   last[BS_MAX_POLY], vel[BS_MAX_POLY];
-    int     burst[BS_MAX_POLY];
+    int     burst[BS_MAX_POLY], burstLen[BS_MAX_POLY];
     unsigned nz[BS_MAX_POLY];
 };
 

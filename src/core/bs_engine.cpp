@@ -748,7 +748,7 @@ void presetGrand(Builder &b)
     b.set(hit, VCA_CV,   1.0f);
     b.set(hit, VCA_RESP, 0.0f);
 
-    b.set(str, 2, 0.93f);        /* DECAY  - long, this is a grand           */
+    b.set(str, 2, 0.72f);        /* DECAY  - about seven seconds             */
     b.set(str, 3, 0.60f);        /* BRIGHT                                    */
     b.set(str, 4, 0.50f);        /* INHARM - measured at B = 1.2e-4           */
     b.set(str, 5, 0.13f);        /* STRIKE - an eighth along, as a piano is   */
@@ -769,9 +769,14 @@ void presetGrand(Builder &b)
     b.set(envA, ADSR_VEL, 0.25f);
     b.set(vca, VCA_RESP, 0.0f);
 
-    b.set(cho, 0, 0.35f); b.set(cho, 1, 0.22f); b.set(cho, 4, 0.22f);
-    b.set(rvb, RVB_SIZE, 0.52f); b.set(rvb, RVB_DAMP, 0.62f);
-    b.set(rvb, RVB_MIX, 0.20f);
+    /* Both kept well back. The string now produces its own beating from the
+     * two courses and its own decay, and a wet room on top of that fills the
+     * gaps between the partials and flattens the attack - measured, the patch
+     * fell 1 dB in its first half second where the bare string falls 11, which
+     * is a pad rather than a piano. */
+    b.set(cho, 0, 0.30f); b.set(cho, 1, 0.18f); b.set(cho, 4, 0.10f);
+    b.set(rvb, RVB_SIZE, 0.44f); b.set(rvb, RVB_DAMP, 0.66f);
+    b.set(rvb, RVB_MIX, 0.12f);
     b.set(out, OUT_LEVEL, 0.80f);
 }
 
@@ -899,7 +904,10 @@ void presetBell(Builder &b)
     /* Stiffness at the top of its range: the partials go so far sharp that
      * they stop being a harmonic series at all, which is what a struck metal
      * bar is. */
-    b.set(str, 2, 0.97f);
+    /* Twelve seconds, not thirty. A bell should outlast the phrase, but a
+     * decay long enough that six of them overlap is a rack that only gets
+     * louder - it measured at 0.72 RMS against a comfortable 0.1. */
+    b.set(str, 2, 0.80f);
     b.set(str, 3, 0.80f);
     b.set(str, 4, 1.00f);
     b.set(str, 5, 0.28f);
@@ -907,8 +915,8 @@ void presetBell(Builder &b)
     b.set(crs, 0, 11.0f); b.set(crs, 1, 16000.0f); b.set(crs, 2, 0.30f);
     b.set(cho, 0, 0.18f); b.set(cho, 1, 0.35f); b.set(cho, 4, 0.35f);
     b.set(rvb, RVB_SIZE, 0.86f); b.set(rvb, RVB_DAMP, 0.35f);
-    b.set(rvb, RVB_MIX, 0.42f);
-    b.set(out, OUT_LEVEL, 0.6f);
+    b.set(rvb, RVB_MIX, 0.34f);
+    b.set(out, OUT_LEVEL, 0.32f);
 }
 
 void presetPluck(Builder &b)
@@ -2262,7 +2270,7 @@ const PresetEntry PRESETS[] = {
     { { "PIANO",        "struck string - decays while held, brightness first", 0,
       "PIANO\n\nSubtractive synthesis cannot make a real piano: a struck string's partials are stretched sharp of the harmonic series and nothing here can be inharmonic. What it can copy is the three things the ear actually identifies a piano by, none of which are the waveform.\n\nOne: it decays while you hold it. Two: the brightness dies far faster than the loudness, so a note a second old is nearly a sine. Three: both scale with how hard you hit it and how high you play.\n\nSo the sound is in three envelopes, not the oscillators. Two saws a few cents apart are the strings, the pulse is the hollow midrange, and the 22 ms noise burst is the hammer.\n\nTRY: pull the NOISE mixer channel (IN4) to zero. The hammer disappears and it turns into an organ - that one twentieth of a second is most of the instrument. Then put it back and raise the amplifier envelope's S: it stops being a piano the moment it stops decaying." }, presetPiano },
     { { "GRAND",        "a modelled string - stretched partials, felt hammer", 0,
-      "GRAND\n\nA piano the way a piano works, rather than an imitation of one.\n\nPIANO next door is subtractive, and gets remarkably close on gesture: it decays while held, its brightness dies faster than its loudness, and both scale with velocity. What it cannot do is INHARMONICITY. A real string is stiff, so wave speed depends on frequency and the partials are stretched sharp of the harmonic series - f(n) = n f0 sqrt(1 + B n^2). Every oscillator in this rack is exactly harmonic and no filter introduces stretch. That is the whole difference.\n\nThis is a modelled string: a delay line whose length is the pitch, with allpasses in the loop making the delay depend on frequency. That is the stiffness. The hammer is a noise burst that gets brighter when struck harder, because felt stiffens under load - so velocity changes the spectrum, not just the level.\n\nTRY: turn INHARM to 0 and play. It becomes a guitar harmonic - the partials are where the maths says they should be and it sounds wrong for a piano. Put it back to 0.5, which measures at B = 1.2e-4, about a real piano midrange. Then take it to 1.0 for a bell.\n\nAlso: DECAY is how long the note rings, STRIKE is where the hammer hits along the string, and SPREAD is how far apart the two strings per note are." }, presetGrand },
+      "GRAND\n\nA piano the way a piano works, rather than an imitation of one.\n\nPIANO next door is subtractive, and gets remarkably close on gesture: it decays while held, its brightness dies faster than its loudness, and both scale with velocity. What it cannot do is INHARMONICITY. A real string is stiff, so wave speed depends on frequency and the partials are stretched sharp of the harmonic series - f(n) = n f0 sqrt(1 + B n^2). Every oscillator in this rack is exactly harmonic and no filter introduces stretch. That is the whole difference.\n\nThis is a modelled string: a delay line whose length is the pitch, with allpasses in the loop making the delay depend on frequency. That is the stiffness. The hammer is a smooth force pulse a few milliseconds long, and its length is the point: a partial whose period is shorter than the contact gets almost no energy, so contact time is a lowpass. Hard playing compresses the felt and shortens it, which is why loud is also bright. An earlier version used a noise burst instead and the whole thing sounded like a guitar - 62 percent of the energy was landing between the partials rather than on them.\n\nTRY: turn INHARM to 0 and play. It becomes a guitar harmonic - the partials are where the maths says they should be and it sounds wrong for a piano. Put it back to 0.5, which measures at B = 1.2e-4, about a real piano midrange. Then take it to 1.0 for a bell.\n\nAlso: DECAY is how long the note rings in seconds rather than an arbitrary number - the two strings per note are given different decay times, which is what produces a piano's double decay, a quick fall then a quiet aftersound underneath. STRIKE is where along the string the hammer lands, and a string cannot sound a partial with a node there. SPREAD is how far apart the two strings are, in cents." }, presetGrand },
     { { "WEST COAST",   "a sine, folded - no filter anywhere", 0,
       "WEST COAST\n\nThe other tradition. Subtractive synthesis starts with a rich wave and removes parts of it; this starts with a SINE - the poorest wave there is - and makes it complicated by folding it back on itself every time it passes a limit.\n\nThere is no filter in this rack at all. The envelope drives the FOLD's depth instead of a cutoff, so playing harder does not open a filter, it folds more times. The harmonics that appear are a different set each fold, which is why the movement does not sound like a sweep.\n\nTRY: turn FOLD's GAIN down to 1.00. It collapses back to the sine it always was. Then raise the LFO rate and hear the tremolo the VCA is doing underneath." }, presetWestCoast },
     { { "ORACLE",       "sequenced, quantised, and plays itself", 1,
