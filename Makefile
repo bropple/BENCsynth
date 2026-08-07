@@ -181,7 +181,9 @@ else
   CLAP_BINARY  := $(CLAP_BUNDLE)
   CLAP_SHARED  := -shared
   CLAP_LINK    :=
-  CLAP_RT      := -lrt -lX11
+  # No -lX11: the plugin does not touch X11 at all. The editor does, and it
+  # links it through the GUI's own flags.
+  CLAP_RT      := -lrt
   CLAP_INSTALL_DIR ?= $(HOME)/.clap
 endif
 

@@ -24,8 +24,17 @@ int main(void)
     std::printf("\t\tlv2:portProperty lv2:integer , lv2:enumeration ;\n");
     for (int i = 0; i < n; i++) {
         const bs::RackPreset *rp = bs::rackPresetAt(i);
-        std::printf("\t\tlv2:scalePoint [ rdfs:label \"%s\" ; rdf:value %d ]%s\n",
-                    rp ? rp->name : "?", i, (i + 1 < n) ? " ," : "");
+        /* The predicate is repeated on every line and they are separated by
+         * semicolons. A comma continues the SAME predicate with another
+         * object, so "lv2:scalePoint [...] , lv2:scalePoint [...]" is a
+         * predicate where an object belongs - which is a parse error, and the
+         * validator then reports the cascade rather than the cause. */
+        /* Typed explicitly. lv2:scalePoint's range is lv2:ScalePoint, and a
+         * bare blank node with a label and a value satisfies a parser but not
+         * a validator checking ranges. */
+        std::printf("\t\tlv2:scalePoint [ a lv2:ScalePoint ; "
+                    "rdfs:label \"%s\" ; rdf:value %d ] ;\n",
+                    rp ? rp->name : "?", i);
     }
     return 0;
 }
