@@ -29,6 +29,7 @@ jobs:
 
   windows:
     runs-on: windows-latest
+    timeout-minutes: 30
     defaults:
       run:
         shell: msys2 {0}
@@ -111,6 +112,7 @@ jobs:
   # wrapper finds bencsynth.clap at runtime.
   windows-vst3:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       # Explicitly rather than through the Makefile: this runner has Git Bash,
@@ -150,6 +152,7 @@ jobs:
   publish:
     needs: [windows, windows-vst3]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4

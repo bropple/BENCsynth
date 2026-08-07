@@ -27,6 +27,7 @@ jobs:
   core:
     name: core (no raylib)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Build the core and run the tests
@@ -57,6 +58,7 @@ jobs:
   lv2:
     name: lv2 plugin (linux)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: LV2 headers and tools
@@ -135,6 +137,7 @@ jobs:
   clap:
     name: clap plugin (linux)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: CLAP headers
@@ -189,6 +192,7 @@ jobs:
   clap-windows:
     name: clap plugin (windows)
     runs-on: windows-latest
+    timeout-minutes: 30
     defaults:
       run:
         shell: msys2 {0}
@@ -241,6 +245,7 @@ jobs:
   clap-macos:
     name: clap plugin (macos)
     runs-on: macos-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: CLAP headers
@@ -294,6 +299,7 @@ jobs:
   vst3:
     name: vst3 wrapper (linux)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: CLAP headers, clap-wrapper and the VST3 SDK
@@ -332,6 +338,7 @@ jobs:
   vst3-windows:
     name: vst3 wrapper (windows)
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       # MSVC, not MSYS2. The VST3 SDK expects it on Windows, and nothing of
@@ -392,6 +399,7 @@ jobs:
   lv2-windows:
     name: lv2 plugin (windows)
     runs-on: windows-latest
+    timeout-minutes: 30
     defaults:
       run:
         shell: msys2 {0}
@@ -468,6 +476,7 @@ jobs:
   lv2-macos:
     name: lv2 plugin (macos)
     runs-on: macos-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: LV2 headers
@@ -509,6 +518,7 @@ jobs:
   linux:
     name: linux
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -595,6 +605,7 @@ jobs:
   macos:
     name: macos
     runs-on: macos-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -752,7 +763,7 @@ jobs:
       - name: It carries the plugin, the editor and the installer
         run: |
           mkdir -p /tmp/pdmg
-          hdiutil attach -nobrowse -readonly -mountpoint /tmp/pdmg "$PLUGDMG"
+          hdiutil attach -nobrowse -readonly -noverify -noautoopen -mountpoint /tmp/pdmg "$PLUGDMG"
           ls -la /tmp/pdmg
           test -d /tmp/pdmg/bencsynth.clap
           test -d /tmp/pdmg/BENCsynth.app
@@ -774,6 +785,7 @@ jobs:
   windows:
     name: windows
     runs-on: windows-latest
+    timeout-minutes: 30
     defaults:
       run:
         shell: msys2 {0}
