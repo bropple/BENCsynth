@@ -28,6 +28,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <string>
+#include "bs_input.h"   /* must come after raylib.h - see the header */
 
 enum {
     /* One size for every buffer that holds a path, so that copying one into
@@ -607,6 +608,9 @@ int main(int argc, char **argv)
             return 1;
         }
         editing = true;
+        /* Offscreen there is no window to receive a click, so the interface
+         * reads the events the host forwarded instead. */
+        if (fbMode) bs_input_attach(shm.block, 0, 0);
         shmText.resize(bs::BS_SHM_RACK_MAX);
         flat.resize(bs::BS_SHM_PARAM_MAX);
         say(&app, "editing a plugin - the host is making the sound");
@@ -655,6 +659,9 @@ int main(int argc, char **argv)
 
     int frame = 0;
     while (!WindowShouldClose()) {
+        /* Before anything asks. Turns the events that arrived since the last
+         * frame into the held-and-edge state the interface expects. */
+        bs_input_frame();
         /* ---- editor: take whatever the plugin changed ---------------- */
         if (editing) {
             bs::ShmBlock *b = shm.block;

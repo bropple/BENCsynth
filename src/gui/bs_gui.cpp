@@ -10,6 +10,7 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include "bs_input.h"   /* must come after raylib.h - see the header */
 
 Color BS_BG        = { 0x06, 0x0a, 0x05, 255 };
 Color BS_RACK      = { 0x0c, 0x14, 0x08, 255 };

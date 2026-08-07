@@ -13,6 +13,12 @@
 
 namespace bs {
 
+typedef void (*BsInputSink)(void *ctx, int kind, int button, int x, int y, float value);
+
+/* Mirrors bs::ShmInputKind. Kept as plain ints across this boundary so the
+ * Objective-C++ side does not need the shared block's header. */
+enum { K_DOWN = 0, K_UP, K_MOVE, K_WHEEL, K_KEYDOWN, K_KEYUP, K_TEXT };
+
 struct CocoaView {
     NSView       *view;
     CALayer      *content;      /* shows the surface */
@@ -20,6 +26,8 @@ struct CocoaView {
     IOSurfaceRef  surface;
     int           w, h;
     void         *timer;        /* NSTimer, retained */
+    BsInputSink   sink;
+    void         *sinkCtx;
 };
 
 static void makeSurface(CocoaView *c, int w, int h)
@@ -59,7 +67,9 @@ CocoaView *bs_cocoa_attach(void *parentNSView, int w, int h)
     CocoaView *c = (CocoaView *)std::calloc(1, sizeof(CocoaView));
     if (!c) return 0;
 
-    c->view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, w, h)];
+    BsInputView *iv = [[BsInputView alloc] initWithFrame:NSMakeRect(0, 0, w, h)];
+    iv->owner = c;
+    c->view = iv;
     [c->view setWantsLayer:YES];
     [c->view setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
 
@@ -97,7 +107,79 @@ CocoaView *bs_cocoa_attach(void *parentNSView, int w, int h)
     return c;
 }
 
-} /* namespace bs - the pump needs an Objective-C class at file scope */
+} /* namespace bs - the classes below have to be at file scope */
+
+/* The view that actually receives the pointer.
+ *
+ * isFlipped is the important one: Cocoa's origin is bottom-left and every
+ * interface in this project counts from the top, so flipping here means the
+ * coordinates arriving in the editor need no correction and no one has to
+ * remember which way up they are.
+ *
+ * acceptsFirstMouse matters in a DAW specifically - an FX window is often not
+ * the frontmost window, and without this the click that focuses it is eaten
+ * rather than delivered, so the first grab of a cable does nothing. */
+@interface BsInputView : NSView
+{
+@public
+    bs::CocoaView *owner;
+}
+@end
+
+@implementation BsInputView
+
+- (BOOL)isFlipped                          { return YES; }
+- (BOOL)acceptsFirstResponder              { return YES; }
+- (BOOL)acceptsFirstMouse:(NSEvent *)e     { (void)e; return YES; }
+
+- (void)send:(int)kind button:(int)b event:(NSEvent *)e value:(float)v
+{
+    if (!owner || !owner->sink) return;
+    const NSPoint p = [self convertPoint:[e locationInWindow] fromView:nil];
+    owner->sink(owner->sinkCtx, kind, b, (int)p.x, (int)p.y, v);
+}
+
+- (void)mouseDown:(NSEvent *)e        { [self send:K_DOWN button:0 event:e value:0]; }
+- (void)mouseUp:(NSEvent *)e          { [self send:K_UP   button:0 event:e value:0]; }
+- (void)rightMouseDown:(NSEvent *)e   { [self send:K_DOWN button:1 event:e value:0]; }
+- (void)rightMouseUp:(NSEvent *)e     { [self send:K_UP   button:1 event:e value:0]; }
+- (void)otherMouseDown:(NSEvent *)e   { [self send:K_DOWN button:2 event:e value:0]; }
+- (void)otherMouseUp:(NSEvent *)e     { [self send:K_UP   button:2 event:e value:0]; }
+
+- (void)mouseMoved:(NSEvent *)e       { [self send:K_MOVE button:0 event:e value:0]; }
+- (void)mouseDragged:(NSEvent *)e     { [self send:K_MOVE button:0 event:e value:0]; }
+- (void)rightMouseDragged:(NSEvent *)e{ [self send:K_MOVE button:1 event:e value:0]; }
+- (void)otherMouseDragged:(NSEvent *)e{ [self send:K_MOVE button:2 event:e value:0]; }
+
+- (void)scrollWheel:(NSEvent *)e
+{
+    /* Trackpads report in points and a mouse wheel in lines; raylib's callers
+     * expect something around one per notch, so the two are brought together
+     * rather than one of them being twenty times the other. */
+    CGFloat d = [e scrollingDeltaY];
+    if ([e hasPreciseScrollingDeltas]) d /= 10.0;
+    [self send:K_WHEEL button:0 event:e value:(float)d];
+}
+
+/* Tracking, or mouseMoved never arrives - Cocoa only sends it to a view that
+ * asked, and a knob that only responds while a button is held is not obviously
+ * a missing tracking area. */
+- (void)updateTrackingAreas
+{
+    for (NSTrackingArea *a in [self trackingAreas]) [self removeTrackingArea:a];
+    NSTrackingArea *t =
+        [[NSTrackingArea alloc] initWithRect:[self bounds]
+                                     options:(NSTrackingMouseMoved |
+                                              NSTrackingActiveInKeyWindow |
+                                              NSTrackingInVisibleRect)
+                                       owner:self
+                                    userInfo:nil];
+    [self addTrackingArea:t];
+    [t release];
+    [super updateTrackingAreas];
+}
+
+@end
 
 /* A timer needs a target, and a target needs a class. This is the whole of it:
  * fire, call back into C, return. */
@@ -119,6 +201,13 @@ CocoaView *bs_cocoa_attach(void *parentNSView, int w, int h)
 @end
 
 namespace bs {
+
+void bs_cocoa_set_input_sink(CocoaView *c, BsInputSink fn, void *ctx)
+{
+    if (!c) return;
+    c->sink = fn;
+    c->sinkCtx = ctx;
+}
 
 void bs_cocoa_start_pump(CocoaView *c, void (*fn)(void *), void *ctx, double hz)
 {

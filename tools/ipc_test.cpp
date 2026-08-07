@@ -417,6 +417,52 @@ int main(int argc, char **argv)
                 }
                 ok(seenB != seenA, "and it keeps publishing");
 
+                /* ---- input, end to end ----
+                 *
+                 * The strongest thing this can prove without a screen: send a
+                 * click the way a host would, aimed at the on-screen keyboard,
+                 * and watch a note come back out the other side. That is the
+                 * whole chain - host event, shared ring, the interface's own
+                 * hit testing, the engine, and the note ring back to the
+                 * plugin - and any break in it shows up as silence. */
+                const int H = 600, W = 900;
+                const int KEYS_H = 132;
+                const int cy = H - KEYS_H / 2;    /* into the white keys */
+                const int cx = W / 2;
+
+                /* Drain anything the editor has already sent. */
+                bs::ShmNote junk;
+                while (bs::bs_shm_pop_note(m.block, &junk)) {}
+
+                bs::ShmInput ev;
+                std::memset(&ev, 0, sizeof ev);
+                ev.kind = bs::SI_MOUSE_MOVE; ev.x = cx; ev.y = cy;
+                bs::bs_shm_push_input(m.block, ev);
+                ev.kind = bs::SI_MOUSE_DOWN; ev.button = 0;
+                bs::bs_shm_push_input(m.block, ev);
+
+                bool sounded = false;
+                for (int i = 0; i < 60 && !sounded; i++) {
+                    nap(50);
+                    bs::ShmNote n;
+                    while (bs::bs_shm_pop_note(m.block, &n))
+                        if (n.kind == bs::NE_NOTE_ON) sounded = true;
+                }
+                ok(sounded, "a forwarded click on the keyboard plays a note");
+
+                std::memset(&ev, 0, sizeof ev);
+                ev.kind = bs::SI_MOUSE_UP; ev.x = cx; ev.y = cy;
+                bs::bs_shm_push_input(m.block, ev);
+
+                bool released = false;
+                for (int i = 0; i < 40 && !released; i++) {
+                    nap(50);
+                    bs::ShmNote n;
+                    while (bs::bs_shm_pop_note(m.block, &n))
+                        if (n.kind == bs::NE_NOTE_OFF) released = true;
+                }
+                ok(released, "and releasing it stops the note");
+
                 m.block->quit.store(1);
                 bs::bs_shm_wait_editor(proc, 3000);
             }

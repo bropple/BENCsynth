@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include "bs_input.h"   /* must come after raylib.h - see the header */
 
 using bs::Module;
 using bs::Patch;

@@ -58,6 +58,13 @@ void bs_cocoa_test_pattern(CocoaView *v);
 
 #endif
 
+/* Where forwarded input goes. The view calls this for every event it gets;
+ * the plugin hands it straight to the shared block. */
+void bs_cocoa_set_input_sink(CocoaView *v,
+                             void (*fn)(void *ctx, int kind, int button,
+                                        int x, int y, float value),
+                             void *ctx);
+
 /* ---- the pump ----------------------------------------------------------
  *
  * Nothing in CLAP drives a plugin's drawing: the host calls gui.* when things

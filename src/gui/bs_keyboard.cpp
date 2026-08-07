@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include "bs_input.h"   /* must come after raylib.h - see the header */
 
 /* Four octaves and the C on top. Wider than that and the keys get too narrow
  * to hit; narrower and the typing layout runs off the end of what is drawn,

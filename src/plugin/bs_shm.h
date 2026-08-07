@@ -59,6 +59,32 @@ static const uint32_t BS_SHM_FB_MAX_W = 2048u;
 static const uint32_t BS_SHM_FB_MAX_H = 1280u;
 static const uint32_t BS_SHM_FB_BYTES = BS_SHM_FB_MAX_W * BS_SHM_FB_MAX_H * 4u;
 
+/* Input, travelling the opposite way to everything else on this channel: the
+ * host's window has the pointer and the keyboard, and the editor - which has
+ * no window at all when it is drawing offscreen - has the interface those
+ * belong to. Every click on a cable arrives this way.
+ *
+ * Coordinates are in the editor's pixels, top-left origin, already converted
+ * from Cocoa's bottom-left by the view that received them. */
+enum ShmInputKind {
+    SI_MOUSE_DOWN = 0,
+    SI_MOUSE_UP,
+    SI_MOUSE_MOVE,
+    SI_WHEEL,
+    SI_KEY_DOWN,
+    SI_KEY_UP,
+    SI_TEXT           /* a character, already through the keyboard layout */
+};
+
+struct ShmInput {
+    uint8_t kind;
+    uint8_t button;   /* 0 left, 1 right, 2 middle */
+    int16_t x, y;
+    float   value;    /* wheel delta, or a key code, or a character */
+};
+
+static const uint32_t BS_SHM_INPUT_MAX = 512u;   /* power of two */
+
 /* A key pressed in the editor window. The editor makes no sound - it has no
  * audio device - so the only way its on-screen keyboard and musical typing can
  * be heard is to hand the events to the plugin, which does. Without this they
@@ -137,6 +163,13 @@ struct ShmBlock {
     std::atomic<uint32_t> fbSeq;
     uint32_t              fbW, fbH, fbStride;
     unsigned char         fb[BS_SHM_FB_BYTES];
+
+    /* Pointer and keyboard, host -> editor. Same ring discipline as the
+     * notes, and generously sized: a fast drag produces a lot of move events
+     * and dropping them mid-gesture is a cable that sticks to the pointer. */
+    std::atomic<uint32_t> inHead;    /* written by the plugin */
+    std::atomic<uint32_t> inTail;    /* written by the editor */
+    ShmInput              in[BS_SHM_INPUT_MAX];
 
     /* The editor bumps this every frame. The plugin uses it to notice an
      * editor that died without saying goodbye. */
@@ -229,6 +262,25 @@ inline bool bs_shm_pop_host_note(ShmBlock *b, ShmNote *out)
     if (tail == b->hostNoteHead.load(std::memory_order_acquire)) return false;
     *out = b->hostNotes[tail & (BS_SHM_NOTE_MAX - 1)];
     b->hostNoteTail.store(tail + 1, std::memory_order_release);
+    return true;
+}
+
+inline bool bs_shm_push_input(ShmBlock *b, const ShmInput &e)
+{
+    const uint32_t head = b->inHead.load(std::memory_order_relaxed);
+    const uint32_t tail = b->inTail.load(std::memory_order_acquire);
+    if (head - tail >= BS_SHM_INPUT_MAX) return false;
+    b->in[head & (BS_SHM_INPUT_MAX - 1)] = e;
+    b->inHead.store(head + 1, std::memory_order_release);
+    return true;
+}
+
+inline bool bs_shm_pop_input(ShmBlock *b, ShmInput *out)
+{
+    const uint32_t tail = b->inTail.load(std::memory_order_relaxed);
+    if (tail == b->inHead.load(std::memory_order_acquire)) return false;
+    *out = b->in[tail & (BS_SHM_INPUT_MAX - 1)];
+    b->inTail.store(tail + 1, std::memory_order_release);
     return true;
 }
 

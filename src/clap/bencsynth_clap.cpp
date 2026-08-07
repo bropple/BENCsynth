@@ -125,6 +125,22 @@ struct BencSynthClap {
 };
 
 #if defined(__APPLE__)
+/* Every click, drag and scroll the host's view received, straight into the
+ * block. Main thread, and nothing here can block: an input path that waits is
+ * a pointer that stutters. */
+static void sinkInput(void *ctx, int kind, int button, int x, int y, float value)
+{
+    BencSynthClap *s = (BencSynthClap *)ctx;
+    if (!s->shmOpen) return;
+    bs::ShmInput e;
+    e.kind   = (uint8_t)kind;
+    e.button = (uint8_t)button;
+    e.x      = (int16_t)x;
+    e.y      = (int16_t)y;
+    e.value  = value;
+    bs::bs_shm_push_input(s->shm.block, e);
+}
+
 /* One frame, from the editor's shared buffer into the surface the host is
  * showing. Main thread, on a timer, because nothing in CLAP drives drawing and
  * a CALayer may not be touched anywhere else. */
@@ -904,6 +920,7 @@ static bool gui_set_parent(const clap_plugin_t *p, const clap_window_t *window)
         s->shm.block->wantW.store(s->guiW, std::memory_order_release);
         s->shm.block->wantH.store(s->guiH, std::memory_order_release);
     }
+    bs::bs_cocoa_set_input_sink(s->cocoaView, sinkInput, s);
     bs::bs_cocoa_start_pump(s->cocoaView, pumpFrame, s, 60.0);
     s->parentHandle = (uint64_t)(uintptr_t)window->cocoa;
 #else
