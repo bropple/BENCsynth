@@ -31,6 +31,7 @@
 #include <cstdio>
 #include <vector>
 #include <cstring>
+#include <mutex>
 #include <new>
 #include <string>
 
@@ -213,6 +214,17 @@ static void pumpEditorRealtime(BencSynthClap *s)
 {
     if (!s->shmOpen) return;
     bs::ShmBlock *b = s->shm.block;
+
+    /* Under the graph lock, because this walks the module list.
+     *
+     * Engine::render takes the same lock, but everything else the audio thread
+     * does to the patch was going in unguarded - and the main thread rebuilds
+     * the patch on a preset change or a state load, which deletes modules and
+     * reallocates the vector holding them. Automating the rack parameter while
+     * the editor streams knob values was a use-after-free waiting for a busy
+     * enough session. The lock is already on this thread's critical path once
+     * per block; these traversals are shorter than a render. */
+    std::lock_guard<std::mutex> guard(s->engine.graphLock());
 
     /* Structure first. Until the rebuild has happened the param vector belongs
      * to a rack this instance does not have, and applying it would write knob
@@ -451,6 +463,9 @@ static bool pa_text_to_value(const clap_plugin_t *, clap_id id,
  * take effect anyway. */
 static void applyParam(BencSynthClap *s, clap_id id, double value)
 {
+    /* Same reasoning as pumpEditorRealtime: setMacro walks every module, and
+     * a slot dereferences one by id. */
+    std::lock_guard<std::mutex> guard(s->engine.graphLock());
     if (id == PARAM_PRESET) {
         const int want = (int)(value + 0.5);
         if (want != s->wantPreset.load()) {
@@ -590,11 +605,29 @@ static bool pl_activate(const clap_plugin_t *p, double sample_rate,
                         uint32_t, uint32_t)
 {
     BencSynthClap *s = self_of(p);
-    s->engine.init((float)sample_rate);
+
+    /* setSampleRate, not init.
+     *
+     * Engine::init clears the patch. Activation happens AFTER the host has
+     * loaded its project state in most hosts, so initialising here threw away
+     * the rack that had just been restored and rebuilt nothing in its place -
+     * the project reopened silent, and state.save afterwards still returned
+     * the rack, so the file looked intact. The same happened on any sample
+     * rate change or freeze/unfreeze, permanently.
+     *
+     * The plugin's own test missed it by activating before loading, which is
+     * the one order that works. */
     s->rate = (float)sample_rate;
     if (s->shmOpen)
         s->shm.block->sampleRate.store(s->rate, std::memory_order_relaxed);
-    if (!s->custom) s->engine.buildPreset(s->havePreset);
+
+    if (s->engine.patch.slotCount() == 0) {
+        /* Nothing loaded yet - a fresh instance the host has not restored. */
+        s->engine.init((float)sample_rate);
+        s->engine.buildPreset(s->havePreset);
+    } else {
+        s->engine.setSampleRate((float)sample_rate);
+    }
     return true;
 }
 

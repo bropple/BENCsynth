@@ -218,8 +218,11 @@ bool bs_shm_create(ShmMap *m, unsigned long salt)
     std::snprintf(m->name, sizeof m->name, "/bencsynth-%ld-%lu",
                   (long)getpid(), salt);
 
-    /* O_EXCL so a stale segment with the same name is an error rather than a
-     * silent share with somebody else's plugin. */
+    /* Unlinked first: a segment with this name can only be a leftover from a
+     * crash, since the name carries our own pid. O_EXCL below therefore never
+     * fires in practice - it is there so that if the name ever stops being
+     * unique, the failure is an error rather than two plugins quietly sharing
+     * one block. */
     shm_unlink(m->name);
     int fd = shm_open(m->name, O_CREAT | O_EXCL | O_RDWR, 0600);
     if (fd < 0) return false;

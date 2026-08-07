@@ -411,7 +411,17 @@ public:
                  * so a full envelope opens the VCA fully. */
                 float g = g0 + cvA * in(1).get(c, i) * 0.1f;
                 g = clampf(g, 0.0f, 1.5f);
-                if (resp == 1) g = (std::exp(4.0f * g) - 1.0f) * (1.0f / 53.598150f);
+                if (resp == 1) {
+                    /* Exponential, and then held to the same ceiling as the
+                     * linear response. The curve is normalised so 1 maps to 1,
+                     * which means the headroom above it does not map to 1.5 -
+                     * it maps to 7.5, a seventeen decibel jump on a knob that
+                     * looks like it does the same thing as the one next to it.
+                     * No factory rack reaches it, because they all leave GAIN
+                     * at zero, so this only ever bit somebody riding it. */
+                    g = (std::exp(4.0f * g) - 1.0f) * (1.0f / 53.598150f);
+                    if (g > 1.5f) g = 1.5f;
+                }
                 outs[0].v[c][i] = in(0).get(c, i) * g;
             }
         }
@@ -966,14 +976,18 @@ public:
             }
             if (tick) count++;
 
-            /* The pulse width applies to the fastest output; the divisions
-             * stay high for their whole half-period, which is what a divided
-             * clock looks like on hardware. */
+            /* Every output is the master pulse, gated by whether this tick is
+             * one the division lands on. Shifting before masking was the bug:
+             * (count >> 1) & 3 is zero for counts 0 and 1 and then not again
+             * until 8, so /4 fired twice and rested six - measured gaps of
+             * 1,7,1,7 rather than 4,4,4,4. /8 was worse: four hits and then
+             * twenty-eight beats off. Every rhythm built on these jacks was
+             * wrong, including the ones the preset notes teach. */
             const int high1 = external ? (ext > 1.0f) : (run && ph < pw);
             outs[0].v[0][i] = high1 ? 10.0f : 0.0f;
-            outs[1].v[0][i] = ((count >> 0) & 1) == 0 && high1 ? 10.0f : 0.0f;
-            outs[2].v[0][i] = ((count >> 1) & 3) == 0 && high1 ? 10.0f : 0.0f;
-            outs[3].v[0][i] = ((count >> 2) & 7) == 0 && high1 ? 10.0f : 0.0f;
+            outs[1].v[0][i] = ((count & 1u) == 0) && high1 ? 10.0f : 0.0f;
+            outs[2].v[0][i] = ((count & 3u) == 0) && high1 ? 10.0f : 0.0f;
+            outs[3].v[0][i] = ((count & 7u) == 0) && high1 ? 10.0f : 0.0f;
         }
     }
 
@@ -1005,7 +1019,7 @@ public:
         addOutput("EOC");
     }
 
-    void reset() { step = 0; last = 0.0f; lastRst = 0.0f; gate = 0.0f; eoc = 0.0f; cv = 0.0f; }
+    void reset() { step = 0; last = 0.0f; lastRst = 0.0f; eoc = 0.0f; cv = 0.0f; }
 
     void process()
     {
@@ -1022,11 +1036,9 @@ public:
             if (c > 1.0f && last <= 1.0f) {
                 step++;
                 if (step >= (len < 1 ? 1 : len)) { step = 0; eoc = sr * 0.002f; }
-                gate = sr * 0.01f;
             }
             last = c;
 
-            if (gate > 0.0f) gate -= 1.0f;
             if (eoc > 0.0f) eoc -= 1.0f;
 
             const float target = pv(step & 7);
@@ -1044,7 +1056,7 @@ public:
 
 private:
     int   step;
-    float last, lastRst, gate, eoc, cv;
+    float last, lastRst, eoc, cv;
 };
 
 /* ================================================================== *
@@ -1261,7 +1273,7 @@ public:
     }
 
     void onSampleRate() { for (int k = 0; k < 2; k++) line[k].alloc((int)(sr * 0.09f) + 8); }
-    void reset() { for (int k = 0; k < 2; k++) { line[k].clear(); fb[k] = 0.0f; } ph = 0.0f; }
+    void reset() { for (int k = 0; k < 2; k++) line[k].clear(); ph = 0.0f; }
 
     void process()
     {
@@ -1289,7 +1301,7 @@ public:
 
 private:
     Delay line[2];
-    float fb[2], ph;
+    float ph;
 };
 
 /* ================================================================== *
@@ -1460,7 +1472,7 @@ public:
         const int ch = polyIn();
         setAllOutputChannels(ch);
 
-        const float rise = pv(0), fall = pv(1);
+        const float riseK = pv(0), fallK = pv(1);
         const float shape = clampf(pv(2), 0.0f, 1.0f);
         const float level = pv(3);
         const int mode  = (int)(pv(4) + 0.5f);   /* 0 env, 1 cycle, 2 slew */
@@ -1476,6 +1488,23 @@ public:
 
                 if (eoc[c] > 0.0f) eoc[c] -= 1.0f;
 
+                /* IN sets the timing unless the mode is SLEW, where it is the
+                 * signal being followed instead. A couple of volts roughly
+                 * doubles both times, which is what lets a function generator
+                 * clocked by its own end-of-cycle wander rather than tick.
+                 *
+                 * The jack did nothing at all in CYCLE mode before, so KRELL -
+                 * whose entire premise is a sampled voltage choosing the next
+                 * interval - ran metronomic while its panel explained a
+                 * mechanism that was not connected to anything. */
+                float rise = riseK, fall = fallK;
+                if (mode != 2) {
+                    const float cv = std::exp2(clampf(in(1).get(c, i) * 0.2f,
+                                                      -4.0f, 4.0f));
+                    rise = clampf(riseK * cv, 0.0002f, 30.0f);
+                    fall = clampf(fallK * cv, 0.0002f, 30.0f);
+                }
+
                 /* Shape leans the curve by moving the target past the
                  * destination: chasing 1.2 and stopping at 1.0 is a straight
                  * line, chasing exactly 1.0 is the usual exponential crawl. */
@@ -1486,10 +1515,16 @@ public:
                     if (v[c] >= 1.0f) { v[c] = 1.0f; rising[c] = 0; }
                 } else {
                     const float k = 1.0f - std::exp(-1.0f / (fall * sr + 1.0f));
+                    const float was = v[c];
                     v[c] += ((1.0f - lean) - v[c]) * k;
                     if (v[c] <= 0.0f) {
                         v[c] = 0.0f;
-                        eoc[c] = sr * 0.002f;      /* a 2 ms trigger */
+                        /* Only on the sample it CROSSES zero. Testing the
+                         * value rather than the crossing re-armed the trigger
+                         * every sample at rest, so EOC sat at 10 V forever
+                         * between notes and anything gate-driven downstream
+                         * was held permanently open. */
+                        if (was > 0.0f) eoc[c] = sr * 0.002f;
                     }
                 }
 

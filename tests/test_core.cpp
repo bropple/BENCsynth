@@ -618,6 +618,126 @@ static void test_presets()
     }
 }
 
+/* A divider that does not divide, and an end-of-cycle that never ends.
+ *
+ * Both of these shipped. Neither was visible in any preset check, because a
+ * preset is asked whether it makes a noise and both of these make a noise -
+ * the wrong one. */
+static void test_clock_and_func()
+{
+    std::printf("clock and function generator\n");
+
+    /* CLK's divisions. The masks were shifted before being applied, so /4
+     * fired twice and rested six, and /8 fired four times and rested
+     * twenty-eight. Every rhythm patched from those jacks was wrong. */
+    {
+        Engine e;
+        e.init(48000.0f);
+        e.clear();
+        const int clk = e.addModule("CLK", 20.0f, 20.0f);
+        const int out = e.addModule("OUT", 400.0f, 20.0f);
+        e.connect(clk, 0, out, 0);
+        Module *m = e.patch.module(clk);
+        m->params[0].value = 600.0f;          /* fast, so a short run is enough */
+
+        std::vector<float> buf(64);
+        int ticks = 0;
+        float last[4] = { 0, 0, 0, 0 };
+        int lastAt[4] = { -1, -1, -1, -1 };
+        int gapMin[4] = { 9999, 9999, 9999, 9999 };
+        int gapMax[4] = { 0, 0, 0, 0 };
+
+        for (int n = 0; n < 48000 * 2; n += 32) {
+            e.render(&buf[0], 32);
+            for (int i = 0; i < 32; i++) {
+                if (m->outs[0].v[0][i] > 1.0f && last[0] <= 1.0f) ticks++;
+                last[0] = m->outs[0].v[0][i];
+                for (int k = 1; k < 4; k++) {
+                    const float v = m->outs[k].v[0][i];
+                    if (v > 1.0f && last[k] <= 1.0f) {
+                        if (lastAt[k] >= 0) {
+                            const int g = ticks - lastAt[k];
+                            if (g < gapMin[k]) gapMin[k] = g;
+                            if (g > gapMax[k]) gapMax[k] = g;
+                        }
+                        lastAt[k] = ticks;
+                    }
+                    last[k] = v;
+                }
+            }
+        }
+        const char *name[4] = { "", "/2", "/4", "/8" };
+        for (int k = 1; k < 4; k++) {
+            const int want = 1 << k;
+            char msg[128];
+            std::snprintf(msg, sizeof msg,
+                          "CLK %s fires every %d ticks, evenly (saw %%.0f to %%.0f)",
+                          name[k], want);
+            okf(gapMin[k] == want && gapMax[k] == want, msg,
+                (double)gapMin[k], (double)gapMax[k]);
+        }
+    }
+
+    /* FUNC's EOC re-armed itself every sample while the envelope sat at zero,
+     * so it was a gate held permanently open rather than a trigger. */
+    {
+        Engine e;
+        e.init(48000.0f);
+        e.clear();
+        const int f = e.addModule("FUNC", 20.0f, 20.0f);
+        const int out = e.addModule("OUT", 400.0f, 20.0f);
+        e.connect(f, 0, out, 0);
+        Module *m = e.patch.module(f);
+
+        std::vector<float> buf(64);
+        int high = 0, total = 0;
+        for (int n = 0; n < 48000; n += 32) {
+            e.render(&buf[0], 32);
+            for (int i = 0; i < 32; i++) {
+                total++;
+                if (m->outs[1].v[0][i] > 1.0f) high++;
+            }
+        }
+        okf(high == 0, "FUNC EOC is silent until something triggers it "
+                       "(%.0f of %.0f samples high)", (double)high, (double)total);
+    }
+
+    /* And IN has to change the timing in CYCLE mode, which is the whole of
+     * KRELL's mechanism and did nothing at all. */
+    {
+        int cycles[2] = { 0, 0 };
+        for (int volts = 0; volts < 2; volts++) {
+            Engine e;
+            e.init(48000.0f);
+            e.clear();
+            const int f = e.addModule("FUNC", 20.0f, 20.0f);
+            const int a = e.addModule("ATT", 20.0f, 300.0f);
+            const int out = e.addModule("OUT", 400.0f, 20.0f);
+            e.connect(f, 0, out, 0);
+            e.connect(a, 0, f, 1);
+            Module *m = e.patch.module(f);
+            m->params[0].value = 0.05f;
+            m->params[1].value = 0.15f;
+            m->params[4].value = 1.0f;                 /* CYCLE */
+            e.patch.module(a)->params[1].value = volts ? 5.0f : 0.0f;
+
+            std::vector<float> buf(64);
+            float last = 0.0f;
+            for (int n = 0; n < 48000 * 3; n += 32) {
+                e.render(&buf[0], 32);
+                for (int i = 0; i < 32; i++) {
+                    const float v = m->outs[1].v[0][i];
+                    if (v > 1.0f && last <= 1.0f) cycles[volts]++;
+                    last = v;
+                }
+            }
+        }
+        okf(cycles[1] > 0 && cycles[1] < cycles[0] * 3 / 4,
+            "a voltage on FUNC's IN slows it down (%.0f cycles against %.0f)",
+            (double)cycles[1], (double)cycles[0]);
+    }
+}
+
 /* GRAND TOUR exists to be the answer to "what can this do", and the answer is
  * only true while it actually uses everything. A module added to the registry
  * and left out of it makes the claim quietly false, which is exactly the kind
@@ -816,6 +936,7 @@ int main()
     test_presets();
     test_event_offsets();
     test_arp();
+    test_clock_and_func();
     test_grand_tour();
     test_sample_rates();
     test_patchfile();

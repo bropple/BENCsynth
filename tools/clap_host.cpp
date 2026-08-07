@@ -572,6 +572,64 @@ int main(int argc, char **argv)
         ok(qstx && qstx->save(q, &os2), "the restored instance saves again");
         ok(again.data == saved.data, "the round trip is byte-identical");
 
+        /* The order a host actually uses when it opens a project: create the
+         * instance, restore its state, THEN activate. Testing it the other way
+         * round - which this file did - hides an activate that throws the
+         * restored rack away. */
+        const clap_plugin_t *r2 = factory->create_plugin(factory, &HOST, desc->id);
+        if (r2) {
+            r2->init(r2);
+            Stream again2;
+            again2.data = saved.data;
+            clap_istream_t is2 = { &again2, istream_read };
+            const clap_plugin_state_t *rs =
+                (const clap_plugin_state_t *)r2->get_extension(r2, CLAP_EXT_STATE);
+            ok(rs && rs->load(r2, &is2), "state loads before activation");
+            r2->activate(r2, 48000.0, 1, BLOCK);
+            r2->start_processing(r2);
+
+            Stream after;
+            clap_ostream_t os3 = { &after, ostream_write };
+            rs->save(r2, &os3);
+            ok(after.data == saved.data,
+               "and activating afterwards does not throw the rack away");
+
+            /* And it still makes a sound, which is what the person notices. */
+            std::vector<float> L2(BLOCK), R2(BLOCK);
+            float *ch2[2] = { L2.data(), R2.data() };
+            clap_audio_buffer_t out2;
+            std::memset(&out2, 0, sizeof out2);
+            out2.data32 = ch2; out2.channel_count = 2;
+            clap_process_t pr2 = proc;
+            pr2.audio_outputs = &out2;
+            EventList e2;
+            clap_input_events_t in2 = { &e2, ev_size, ev_get };
+            pr2.in_events = &in2;
+            e2.note(CLAP_EVENT_NOTE_ON, 0, 60, 0.9);
+            float loud = 0;
+            for (int i = 0; i < 12; i++) {
+                std::fill(L2.begin(), L2.end(), 0.0f);
+                r2->process(r2, &pr2);
+                e2.clear();
+                const float pk = peak(L2.data(), BLOCK);
+                if (pk > loud) loud = pk;
+            }
+            ok(loud > 0.001f, "and a restored rack still sounds after activation");
+
+            r2->stop_processing(r2);
+            r2->deactivate(r2);
+
+            /* A sample rate change must not wipe it either. */
+            r2->activate(r2, 44100.0, 1, BLOCK);
+            Stream after2;
+            clap_ostream_t os4 = { &after2, ostream_write };
+            rs->save(r2, &os4);
+            ok(after2.data == saved.data,
+               "nor does re-activating at a different sample rate");
+            r2->deactivate(r2);
+            r2->destroy(r2);
+        }
+
         q->stop_processing(q);
         q->deactivate(q);
         q->destroy(q);

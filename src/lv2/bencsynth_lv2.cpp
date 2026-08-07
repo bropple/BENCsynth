@@ -32,6 +32,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <new>
 #include <string>
 
@@ -169,12 +170,17 @@ static void run(LV2_Handle instance, uint32_t nframes)
      * port every run whether or not the value changed, so pushing all eight
      * unconditionally would overwrite a knob the moment anyone touched it in
      * an editor. */
-    for (int i = 0; i < bs::BS_MACROS; i++) {
-        if (!self->macro[i]) continue;
-        const float v = *self->macro[i];
-        if (v == self->macroSeen[i]) continue;
-        self->macroSeen[i] = v;
-        self->engine.setMacro(i, v);
+    {
+        /* Under the graph lock: setMacro walks every module, and the worker
+         * thread rebuilds the patch out from under it on a rack change. */
+        std::lock_guard<std::mutex> guard(self->engine.graphLock());
+        for (int i = 0; i < bs::BS_MACROS; i++) {
+            if (!self->macro[i]) continue;
+            const float v = *self->macro[i];
+            if (v == self->macroSeen[i]) continue;
+            self->macroSeen[i] = v;
+            self->engine.setMacro(i, v);
+        }
     }
 
     /* The rack, if it changed. Handed to the worker rather than done here:
