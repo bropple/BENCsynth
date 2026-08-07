@@ -361,6 +361,7 @@ static void app_open(bs_app *app, bs::Engine *eng, bs_rack *rack, bs_keyboard *k
     if (bs_patch_load(eng, chosen, app->status, (int)sizeof app->status))
         std::snprintf(app->path, sizeof app->path, "%s", chosen);
     bs_rack_patch_replaced(rack);
+    bs_rack_restore_view(rack, eng->patch);
     app->statusAge = 0.0f;
     app_retitle(app);
 }
@@ -585,6 +586,7 @@ int main(int argc, char **argv)
         else
             g_engine.buildDefaultPatch();
         bs_rack_patch_replaced(&rack);
+        bs_rack_restore_view(&rack, g_engine.patch);
     } else if (startRack) {
         /* By name or by index, the same spelling the offline renderer takes. */
         int which = -1;
@@ -692,6 +694,7 @@ int main(int argc, char **argv)
                 if (bs_patch_from_string(&g_engine, shmText.data(), status,
                                          (int)sizeof status)) {
                     bs_rack_patch_replaced(&rack);
+                    bs_rack_restore_view(&rack, g_engine.patch);
                     lastSig = 0;               /* republish, structure and all */
                     lastParams.clear();
                 }

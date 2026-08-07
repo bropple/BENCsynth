@@ -8,7 +8,8 @@ const Signal &zeroSignal()
     return z;
 }
 
-Patch::Patch() : replaced(0), sr(48000.0f), rev(1), orderDirty(true)
+Patch::Patch() : replaced(0), viewX(0.0f), viewY(0.0f), viewZoom(0.0f),
+                 sr(48000.0f), rev(1), orderDirty(true)
 {
     for (int i = 0; i < BS_EXPOSED; i++) { exposed[i].module = -1; exposed[i].param = -1; }
 }
@@ -56,6 +57,8 @@ void Patch::clear()
     mods.clear();
     cables.clear();
     replaced = 0;
+    viewX = viewY = 0.0f;
+    viewZoom = 0.0f;
     for (int i = 0; i < BS_EXPOSED; i++) { exposed[i].module = -1; exposed[i].param = -1; }
     order.clear();
     orderDirty = true;

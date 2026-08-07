@@ -93,6 +93,10 @@ void bs_rack_home(bs_rack *r);
  * the rack under it is not the one that was being looked at. */
 void bs_rack_patch_replaced(bs_rack *r);
 
+/* Put the view back where the rack was saved with it. After
+ * bs_rack_patch_replaced, which resets it to a fit. */
+void bs_rack_restore_view(bs_rack *r, const bs::Patch &p);
+
 /* Menu results, handled after the frame so a module can be deleted without
  * the draw loop noticing it has gone. Returns nonzero if it did something. */
 int  bs_rack_menu(bs_rack *r, bs_ui *ui, bs::Engine *eng);

@@ -79,6 +79,11 @@ std::string bs_patch_to_string(bs::Engine *eng)
                 cs[i].dst, cs[i].dstPort, cs[i].color);
     }
 
+    /* Where it was being looked at, if anyone has looked at it. */
+    if (eng->patch.viewZoom > 0.0f)
+        appendf(out, "V %.2f %.2f %.4f\n", (double)eng->patch.viewX,
+                (double)eng->patch.viewY, (double)eng->patch.viewZoom);
+
     /* Which knobs this rack hands to the host. Written last and read by slot,
      * so an older file without them simply has none - and a newer file opened
      * by an older build skips a record letter it does not know. */
@@ -197,6 +202,15 @@ int bs_patch_from_string(bs::Engine *eng, const char *text,
                 Cable *c = eng->patch.cable(cid);
                 if (c) c->color = col;
                 cables++;
+            }
+
+        } else if (l[0] == 'V') {
+            float vx = 0.0f, vy = 0.0f, vz = 0.0f;
+            if (std::sscanf(l, "V %f %f %f", &vx, &vy, &vz) != 3) continue;
+            if (vz > 0.02f && vz < 50.0f) {
+                eng->patch.viewX = vx;
+                eng->patch.viewY = vy;
+                eng->patch.viewZoom = vz;
             }
 
         } else if (l[0] == 'E') {

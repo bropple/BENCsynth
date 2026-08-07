@@ -225,6 +225,17 @@ void bs_rack_home(bs_rack *r)
     r->zoom    = 1.0f;
 }
 
+/* The view a rack was saved with, if it has one. Called after a patch is
+ * loaded, once the modules exist - bs_rack_home() needs them to know what it
+ * is fitting. */
+void bs_rack_restore_view(bs_rack *r, const bs::Patch &p)
+{
+    if (p.viewZoom <= 0.0f) return;      /* older file, or never looked at */
+    r->scrollX = p.viewX;
+    r->scrollY = p.viewY;
+    r->zoom    = p.viewZoom;
+}
+
 void bs_rack_patch_replaced(bs_rack *r)
 {
     r->ropes.clear();
@@ -259,6 +270,13 @@ void bs_rack_preset_menu(bs_rack *r, bs_ui *ui, Vector2 screenAt)
 void bs_rack_frame(bs_rack *r, bs_ui *ui, bs::Engine *eng, Rectangle view, float dt)
 {
     Patch &patch = eng->patch;
+
+    /* Kept current every frame rather than captured at save time, so it does
+     * not matter which of the several paths to a save is taken - the file, the
+     * plugin's state, the snapshot the editor publishes. */
+    patch.viewX    = r->scrollX;
+    patch.viewY    = r->scrollY;
+    patch.viewZoom = r->zoom;
 
     /* Two pointers, and keeping them straight is most of what this function
      * has to get right. `sm` is where the mouse is on the screen and is what

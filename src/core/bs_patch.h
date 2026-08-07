@@ -68,6 +68,13 @@ public:
      * built from a preset; nonzero only when a person repatches. */
     int replaced;
 
+    /* Where the rack was last looked at. Carried here for the same reason a
+     * module's x and y are: the core never reads them, but they are part of
+     * what a rack IS to the person who arranged it, and the patch file is the
+     * only thing that outlives the window. Zoom of zero means a file written
+     * before this existed - the view falls back to fitting the rack. */
+    float viewX, viewY, viewZoom;
+
     /* The knobs this rack offers the host, by slot. Part of the patch rather
      * than of the plugin, so they travel in a .bencsynth and in whatever the
      * host saves without a second thing to serialise. */
