@@ -768,7 +768,16 @@ void bs_menu_open(bs_ui *ui, Vector2 at, const char **items, int count, int tag)
         const float t = bs_measure(ui, BS_F_SMALL, items[i], 1.0f) + 24.0f;
         if (t > w) w = t;
     }
-    const float h = (float)(count * MENU_ROW) + 8.0f;
+    /* However many rows fit on screen, and no more. The rack list outgrew the
+     * window - nudging a 37-row menu back inside the screen just moves the
+     * overflow to the other end, so past a point it has to scroll instead. */
+    int rows = count;
+    const int fits = (int)(((float)GetScreenHeight() - 16.0f) / (float)MENU_ROW);
+    if (rows > fits) rows = fits < 4 ? 4 : fits;
+    const int scrolls = (rows < count);
+    if (scrolls) w += 10.0f;                    /* room for the bar */
+
+    const float h = (float)(rows * MENU_ROW) + 8.0f;
 
     /* Nudged back inside the window rather than clipped, so a right-click near
      * the bottom edge does not open a menu you cannot read. */
@@ -785,6 +794,8 @@ void bs_menu_open(bs_ui *ui, Vector2 at, const char **items, int count, int tag)
     ui->menuTag    = tag;
     ui->menuHover  = -1;
     ui->menuAnchor = at;
+    ui->menuTop    = 0;
+    ui->menuRows   = rows;
     ui->menuRect   = (Rectangle){ x, y, w, h };
 }
 
@@ -802,9 +813,22 @@ int bs_menu_take(bs_ui *ui, int *tag)
      * is how a right-click that opened a menu at the pointer ended up
      * selecting the item under the pointer's own corner. */
     const float rel = m.y - ui->menuRect.y - 4.0f;
-    if (rel >= 0.0f && CheckCollisionPointRec(m, ui->menuRect)) {
-        const int row = (int)(rel / (float)MENU_ROW);
-        if (row < ui->menuCount) ui->menuHover = row;
+    const int over = CheckCollisionPointRec(m, ui->menuRect);
+    if (rel >= 0.0f && over) {
+        const int row = (int)(rel / (float)MENU_ROW) + ui->menuTop;
+        if (row < ui->menuCount && row - ui->menuTop < ui->menuRows)
+            ui->menuHover = row;
+    }
+
+    /* The wheel scrolls the list rather than whatever is behind it. */
+    if (over && ui->menuRows < ui->menuCount) {
+        const float wheel = GetMouseWheelMove();
+        if (wheel != 0.0f) {
+            ui->menuTop -= (int)(wheel * 3.0f);
+            const int maxTop = ui->menuCount - ui->menuRows;
+            if (ui->menuTop > maxTop) ui->menuTop = maxTop;
+            if (ui->menuTop < 0) ui->menuTop = 0;
+        }
     }
 
     /* A press is true for the whole frame it happens on, and the menus opened
@@ -835,13 +859,31 @@ void bs_ui_overlay(bs_ui *ui)
                   (Color){ 0, 0, 0, 110 });
     bs_panel(r, BS_PANEL, BS_ACCENT);
 
-    for (int i = 0; i < ui->menuCount; i++) {
-        Rectangle row = { r.x + 2.0f, r.y + 4.0f + (float)(i * MENU_ROW),
-                          r.width - 4.0f, (float)MENU_ROW };
+    const int scrolls = ui->menuRows < ui->menuCount;
+    const float barW = scrolls ? 8.0f : 0.0f;
+
+    for (int v = 0; v < ui->menuRows; v++) {
+        const int i = v + ui->menuTop;
+        if (i >= ui->menuCount) break;
+        Rectangle row = { r.x + 2.0f, r.y + 4.0f + (float)(v * MENU_ROW),
+                          r.width - 4.0f - barW, (float)MENU_ROW };
         if (i == ui->menuHover) DrawRectangleRec(row, BS_EDGE);
         bs_text_spaced(ui, BS_F_SMALL, ui->menuItems[i], row.x + 8.0f,
                        row.y + (MENU_ROW - BS_F_SMALL) * 0.5f,
                        i == ui->menuHover ? BS_TEXT : BS_DIM);
+    }
+
+    if (scrolls) {
+        Rectangle bar = { r.x + r.width - barW - 2.0f, r.y + 4.0f,
+                          barW, r.height - 8.0f };
+        DrawRectangleRec(bar, BS_BG);
+        const float frac = (float)ui->menuRows / (float)ui->menuCount;
+        const float span = bar.height * frac;
+        const float t = (float)ui->menuTop /
+                        (float)(ui->menuCount - ui->menuRows);
+        Rectangle thumb = { bar.x, bar.y + (bar.height - span) * t,
+                            bar.width, span };
+        DrawRectangleRec(thumb, BS_ACCENT);
     }
 }
 

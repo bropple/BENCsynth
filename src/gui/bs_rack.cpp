@@ -139,14 +139,38 @@ static void buildAddMenu()
 
 static const char *MODULE_ITEMS[] = { "UNPATCH", "RESET KNOBS", "REMOVE" };
 
-static const char *presetItems[32];
+/* Room for every rack there is, with headroom. The old array held 32 and the
+ * loop that filled it stopped there too, so once there were 37 racks the last
+ * five simply could not be chosen - a menu that is quietly incomplete rather
+ * than visibly full. */
+static const char *presetItems[128];
 static int         presetCount = 0;
+/* Alphabetical, and an index back to the preset each row means: the menu
+ * returns a row number, and after sorting that is no longer the preset's own
+ * index. Getting this wrong loads the wrong rack, which is a confusing bug to
+ * be on the wrong end of. */
+static int         presetOrder[128];
 
 static void buildPresetMenu()
 {
     if (presetCount) return;
-    for (int i = 0; i < bs::rackPresetCount() && i < 32; i++)
-        presetItems[presetCount++] = bs::rackPresetAt(i)->name;
+    const int n = bs::rackPresetCount();
+    const int cap = (int)(sizeof presetOrder / sizeof presetOrder[0]);
+    for (int i = 0; i < n && i < cap; i++) presetOrder[presetCount++] = i;
+
+    /* Insertion sort: this runs once, over a few dozen strings. */
+    for (int i = 1; i < presetCount; i++) {
+        const int v = presetOrder[i];
+        int j = i - 1;
+        while (j >= 0 && std::strcmp(bs::rackPresetAt(presetOrder[j])->name,
+                                     bs::rackPresetAt(v)->name) > 0) {
+            presetOrder[j + 1] = presetOrder[j];
+            j--;
+        }
+        presetOrder[j + 1] = v;
+    }
+    for (int i = 0; i < presetCount; i++)
+        presetItems[i] = bs::rackPresetAt(presetOrder[i])->name;
 }
 
 /* ------------------------------------------------------------------ */
@@ -643,13 +667,17 @@ int bs_rack_menu(bs_rack *r, bs_ui *ui, bs::Engine *eng)
     if (hit < 0) return 0;
 
     if (tag == MENU_PRESET) {
-        if (hit < 0 || hit >= bs::rackPresetCount()) return 0;
-        eng->buildPreset(hit);
+        /* The row, not the rack. The menu is sorted by name, so row three is
+         * whatever comes third alphabetically and not preset three. */
+        if (hit < 0 || hit >= presetCount) return 0;
+        const int which = presetOrder[hit];
+        if (which < 0 || which >= bs::rackPresetCount()) return 0;
+        eng->buildPreset(which);
         /* Everything the rack knew about the old patch - cable geometry,
          * scroll, zoom, what was being dragged - refers to modules that no
          * longer exist. */
         bs_rack_patch_replaced(r);
-        r->presetLoaded = hit;
+        r->presetLoaded = which;
         r->edited = 1;
         return 1;
     }

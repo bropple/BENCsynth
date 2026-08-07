@@ -94,6 +94,10 @@ typedef struct bs_ui {
      * otherwise be chosen from by that same press, which is still "pressed"
      * for the rest of the frame - see bs_menu_take. */
     int       menuFresh;
+    /* Scrolling, for a list longer than the window. First visible row and how
+     * many fit; zero and count for everything that fits at once. */
+    int       menuTop;
+    int       menuRows;
 
     /* Set for one frame when a control changed, so the caller can mark the
      * patch dirty without every widget returning a tuple. */
