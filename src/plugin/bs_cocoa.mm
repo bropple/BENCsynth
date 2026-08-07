@@ -11,13 +11,13 @@
 /* No ARC. The ownership here is small enough to state outright: alloc gives
  * +1, addSubview retains, detach removes and releases our one. */
 
-namespace bs {
-
 typedef void (*BsInputSink)(void *ctx, int kind, int button, int x, int y, float value);
 
 /* Mirrors bs::ShmInputKind. Kept as plain ints across this boundary so the
  * Objective-C++ side does not need the shared block's header. */
 enum { K_DOWN = 0, K_UP, K_MOVE, K_WHEEL, K_KEYDOWN, K_KEYUP, K_TEXT };
+
+namespace bs {
 
 struct CocoaView {
     NSView       *view;
