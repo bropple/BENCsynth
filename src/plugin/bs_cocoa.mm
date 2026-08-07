@@ -19,6 +19,7 @@ struct CocoaView {
     CATextLayer  *status;
     IOSurfaceRef  surface;
     int           w, h;
+    void         *timer;        /* NSTimer, retained */
 };
 
 static void makeSurface(CocoaView *c, int w, int h)
@@ -96,9 +97,66 @@ CocoaView *bs_cocoa_attach(void *parentNSView, int w, int h)
     return c;
 }
 
+} /* namespace bs - the pump needs an Objective-C class at file scope */
+
+/* A timer needs a target, and a target needs a class. This is the whole of it:
+ * fire, call back into C, return. */
+@interface BsPump : NSObject
+{
+@public
+    void (*fn)(void *);
+    void  *ctx;
+}
+- (void)tick:(NSTimer *)t;
+@end
+
+@implementation BsPump
+- (void)tick:(NSTimer *)t
+{
+    (void)t;
+    if (fn) fn(ctx);
+}
+@end
+
+namespace bs {
+
+void bs_cocoa_start_pump(CocoaView *c, void (*fn)(void *), void *ctx, double hz)
+{
+    if (!c || ![NSThread isMainThread]) return;
+    bs_cocoa_stop_pump(c);
+    if (hz <= 0.0) return;
+
+    BsPump *p = [[BsPump alloc] init];
+    p->fn = fn;
+    p->ctx = ctx;
+
+    NSTimer *t = [NSTimer timerWithTimeInterval:(1.0 / hz)
+                                         target:p
+                                       selector:@selector(tick:)
+                                       userInfo:nil
+                                        repeats:YES];
+    /* Common modes, or the picture freezes the moment somebody holds a menu
+     * open or drags the window - the default run loop mode stops during
+     * tracking, and a synthesizer that stops redrawing while you use it looks
+     * broken in a way that is hard to describe in a bug report. */
+    [[NSRunLoop mainRunLoop] addTimer:t forMode:NSRunLoopCommonModes];
+    [p release];                 /* the timer retains its target */
+    c->timer = [t retain];
+}
+
+void bs_cocoa_stop_pump(CocoaView *c)
+{
+    if (!c || !c->timer) return;
+    NSTimer *t = (NSTimer *)c->timer;
+    [t invalidate];
+    [t release];
+    c->timer = 0;
+}
+
 void bs_cocoa_detach(CocoaView *c)
 {
     if (!c) return;
+    bs_cocoa_stop_pump(c);
     if ([NSThread isMainThread]) {
         [c->view removeFromSuperview];
         [c->view release];

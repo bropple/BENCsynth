@@ -57,3 +57,14 @@ void bs_cocoa_test_pattern(CocoaView *v);
 } /* namespace bs */
 
 #endif
+
+/* ---- the pump ----------------------------------------------------------
+ *
+ * Nothing in CLAP drives a plugin's drawing: the host calls gui.* when things
+ * change and never again. So a repeating main-thread timer asks for the latest
+ * frame, which is also the only place a CALayer may legally be touched.
+ */
+namespace bs {
+void bs_cocoa_start_pump(CocoaView *v, void (*fn)(void *), void *ctx, double hz);
+void bs_cocoa_stop_pump(CocoaView *v);
+}

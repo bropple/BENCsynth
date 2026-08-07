@@ -350,6 +350,77 @@ int main(int argc, char **argv)
         }
     }
 
+    /* ================================================================
+     * Part 3 - offscreen rendering
+     *
+     * macOS cannot reparent a window between processes, so the editor draws
+     * into a texture and ships the pixels instead. The Cocoa end of that is
+     * only testable on a Mac, but everything before it - hidden window, render
+     * target, readback, format conversion, the seqlock - is the same code on
+     * every platform, and it is where the mistakes are.
+     * ================================================================ */
+    if (haveDisplay) {
+        std::printf("\noffscreen rendering\n");
+        bs::ShmMap m;
+        if (!bs::bs_shm_create(&m, 5150)) {
+            ok(false, "a shared block is created for offscreen rendering");
+        } else {
+            bs::Engine host;
+            host.init(48000.0f);
+            host.buildPreset(0);
+            const std::string sent = bs_patch_to_string(&host);
+            bs::bs_shm_write(&m.block->host, sent.c_str(), (uint32_t)sent.size());
+
+            /* Ask for pixels rather than a window, at a size nothing would
+             * pick by accident. */
+            m.block->fbMode.store(1);
+            m.block->wantW.store(900);
+            m.block->wantH.store(600);
+
+            void *proc = 0;
+            const bool started = bs::bs_shm_spawn_editor(exe, m.name, &proc);
+            ok(started, "the editor starts in offscreen mode");
+
+            if (started) {
+                uint32_t seenA = 0;
+                for (int i = 0; i < 200; i++) {
+                    nap(50);
+                    const uint32_t q = m.block->fbSeq.load();
+                    if (q && !(q & 1u)) { seenA = q; break; }
+                }
+                ok(seenA != 0, "it publishes a frame");
+                ok(m.block->fbW == 900 && m.block->fbH == 600,
+                   "at the size it was asked for");
+
+                /* Not a black rectangle. A hidden window that never actually
+                 * rendered would publish one and look like success. */
+                bool ink = false;
+                const uint32_t px = m.block->fbW * m.block->fbH;
+                for (uint32_t i = 0; i < px && !ink; i++)
+                    if (m.block->fb[i * 4 + 0] | m.block->fb[i * 4 + 1] |
+                        m.block->fb[i * 4 + 2]) ink = true;
+                ok(ink, "with something actually drawn in it");
+
+                /* Opaque: the surface is composited, and alpha zero is an
+                 * invisible rack that looks exactly like a broken one. */
+                ok(m.block->fb[3] == 255, "and opaque");
+
+                /* Still moving. One frame could be a fluke of startup. */
+                uint32_t seenB = seenA;
+                for (int i = 0; i < 100 && seenB == seenA; i++) {
+                    nap(50);
+                    const uint32_t q = m.block->fbSeq.load();
+                    if (!(q & 1u)) seenB = q;
+                }
+                ok(seenB != seenA, "and it keeps publishing");
+
+                m.block->quit.store(1);
+                bs::bs_shm_wait_editor(proc, 3000);
+            }
+            bs::bs_shm_close(&m);
+        }
+    }
+
     std::printf("\n%d checks, %d failed\n", checks, failures);
     return failures ? 1 : 0;
 }

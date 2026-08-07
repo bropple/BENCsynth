@@ -98,6 +98,7 @@ struct BencSynthClap {
 #else
     void      *cocoaView;
 #endif
+    uint32_t   fbSeen;          /* last frame copied to the screen */
     float      rate;            /* the host's, told to the editor */
     bool       shmOpen;
     bool       guiCreated;
@@ -122,6 +123,47 @@ struct BencSynthClap {
     std::vector<char>  textBuf;
     std::vector<float> paramBuf;
 };
+
+#if defined(__APPLE__)
+/* One frame, from the editor's shared buffer into the surface the host is
+ * showing. Main thread, on a timer, because nothing in CLAP drives drawing and
+ * a CALayer may not be touched anywhere else. */
+static void pumpFrame(void *ctx)
+{
+    BencSynthClap *s = (BencSynthClap *)ctx;
+    if (!s->shmOpen || !s->cocoaView) return;
+    bs::ShmBlock *b = s->shm.block;
+
+    const uint32_t seq = b->fbSeq.load(std::memory_order_acquire);
+    if (seq & 1u) return;                    /* a frame is going in */
+    if (seq == s->fbSeen) return;            /* nothing new */
+    std::atomic_thread_fence(std::memory_order_acquire);
+
+    const uint32_t w = b->fbW, h = b->fbH, srcStride = b->fbStride;
+    if (!w || !h || w > bs::BS_SHM_FB_MAX_W || h > bs::BS_SHM_FB_MAX_H) return;
+
+    int sw = 0, sh = 0, dstStride = 0;
+    uint8_t *dst = bs::bs_cocoa_lock(s->cocoaView, &sw, &sh, &dstStride);
+    if (!dst) return;
+
+    /* The surface is whatever size the host last asked for and the frame is
+     * whatever the editor last managed; during a resize they disagree for a
+     * frame or two. Copy the overlap rather than refusing - a stale corner for
+     * one frame is invisible, and a black flash is not. */
+    const uint32_t rows = (h < (uint32_t)sh) ? h : (uint32_t)sh;
+    const uint32_t cols = (w < (uint32_t)sw) ? w : (uint32_t)sw;
+    for (uint32_t y = 0; y < rows; y++)
+        std::memcpy(dst + (size_t)y * (size_t)dstStride,
+                    b->fb + (size_t)y * (size_t)srcStride,
+                    (size_t)cols * 4u);
+
+    bs::bs_cocoa_unlock(s->cocoaView);
+
+    /* Re-read: if the editor started another frame while we copied, this one
+     * is torn and the next tick will replace it anyway. */
+    if (b->fbSeq.load(std::memory_order_acquire) == seq) s->fbSeen = seq;
+}
+#endif
 
 /* Publishes the plugin's current rack to the editor, which then catches up.
  * Main thread only - it serialises, which allocates. */
@@ -767,7 +809,11 @@ static void gui_destroy(const clap_plugin_t *p)
     if (!s->guiCreated) return;
 
 #if defined(__APPLE__)
-    if (s->cocoaView) { bs::bs_cocoa_detach(s->cocoaView); s->cocoaView = 0; }
+    if (s->cocoaView) {
+        bs::bs_cocoa_stop_pump(s->cocoaView);
+        bs::bs_cocoa_detach(s->cocoaView);
+        s->cocoaView = 0;
+    }
 #endif
     if (s->shmOpen) {
         /* Ask first. A window that saves nothing on the way out loses whatever
@@ -850,11 +896,15 @@ static bool gui_set_parent(const clap_plugin_t *p, const clap_window_t *window)
     if (s->cocoaView) bs::bs_cocoa_detach(s->cocoaView);
     s->cocoaView = bs::bs_cocoa_attach(window->cocoa, (int)s->guiW, (int)s->guiH);
     if (!s->cocoaView) return false;
-    /* Stage 2a: prove the display path before asking anything to feed it. If
-     * this pattern appears, an IOSurface reaches the screen with the right
-     * channel order and the right way up, and what remains is transport. */
-    bs::bs_cocoa_test_pattern(s->cocoaView);
-    bs::bs_cocoa_set_status(s->cocoaView, "BENCsynth - display path test");
+    bs::bs_cocoa_set_status(s->cocoaView, "BENCsynth - starting the rack");
+    /* Pixels, not a window: the editor has no way to put a view in this
+     * process, so it renders offscreen and we show what it produced. */
+    if (s->shmOpen) {
+        s->shm.block->fbMode.store(1, std::memory_order_release);
+        s->shm.block->wantW.store(s->guiW, std::memory_order_release);
+        s->shm.block->wantH.store(s->guiH, std::memory_order_release);
+    }
+    bs::bs_cocoa_start_pump(s->cocoaView, pumpFrame, s, 60.0);
     s->parentHandle = (uint64_t)(uintptr_t)window->cocoa;
 #else
     return false;
@@ -870,12 +920,12 @@ static bool gui_show(const clap_plugin_t *p)
 {
     BencSynthClap *s = self_of(p);
 #if defined(__APPLE__)
-    /* Stage 1: the view exists and says so, but nothing renders into it. The
-     * editor process is not started, because a floating window alongside an
-     * embedded panel is two half-answers rather than one. */
-    if (!s->floating) {
-        bs::bs_log("gui.show  (macOS embedded - view only, no editor yet)");
-        return s->cocoaView != 0;
+    /* Embedded here means the editor draws offscreen and its frames are
+     * copied into the surface behind the host's view. It still has to be
+     * started, and it still has to be found - the rest of show() does both. */
+    if (!s->floating && !s->cocoaView) {
+        bs::bs_log("gui.show  (macOS: no view to draw into)");
+        return false;
     }
 #endif
     bs::bs_log("gui.show  (created=%d shm=%d editorDir=%s)",
@@ -902,6 +952,9 @@ static bool gui_show(const clap_plugin_t *p)
         return false;
     }
     bs::bs_log("  editor started");
+#if defined(__APPLE__)
+    if (s->cocoaView) bs::bs_cocoa_set_status(s->cocoaView, "");
+#endif
     return true;
 }
 
@@ -975,6 +1028,7 @@ static const clap_plugin_t *createPlugin(const clap_host_t *host)
     s->guiW = 1280;
     s->guiH = 800;
     s->cocoaView = 0;
+    s->fbSeen    = 0;
     s->rate = 48000.0f;
     s->pendingEdit.store(0);
     s->bundleDir   = g_bundleDir;

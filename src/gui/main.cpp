@@ -490,8 +490,27 @@ int main(int argc, char **argv)
         }
     }
 
+    /* Three ways this window can exist:
+     *
+     *   the program        a normal window
+     *   embedded (Win/X11) undecorated, reparented into the host's
+     *   offscreen (macOS)  hidden, and the frames are shipped as pixels
+     *
+     * The third is not a preference. An NSView cannot be handed to another
+     * process, so on macOS the editor draws into a texture and the plugin
+     * displays it - see src/plugin/bs_cocoa.h. */
+    unsigned fbMode = 0;
+    if (editorShm) {
+        bs::ShmMap peek2;
+        if (bs::bs_shm_open(&peek2, editorShm)) {
+            fbMode = peek2.block->fbMode.load();
+            bs::bs_shm_close(&peek2);
+        }
+    }
+
     SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT | FLAG_VSYNC_HINT);
     if (embedParent) SetConfigFlags(FLAG_WINDOW_UNDECORATED);
+    if (fbMode)      SetConfigFlags(FLAG_WINDOW_HIDDEN);
     InitWindow(WIN_W, WIN_H, "BENCsynth");
     SetWindowMinSize(WIN_MIN_W, WIN_MIN_H);
     SetTargetFPS(60);
@@ -614,6 +633,12 @@ int main(int argc, char **argv)
         g_engine.noteOn(67, 0.75f);
     }
 
+    /* Offscreen: everything is drawn into this and read back, rather than
+     * being swapped to a window nobody can see. */
+    RenderTexture2D fbTarget = { 0 };
+    int fbW = 0, fbH = 0;
+    std::vector<unsigned char> fbScratch;
+
     int frame = 0;
     while (!WindowShouldClose()) {
         /* ---- editor: take whatever the plugin changed ---------------- */
@@ -684,6 +709,7 @@ int main(int argc, char **argv)
         bs_keyboard_typing(&kb, &g_engine, !app.about && ui.focus == 0);
 
         BeginDrawing();
+        if (fbMode && fbTarget.id != 0) BeginTextureMode(fbTarget);
         ClearBackground(BS_BG);
 
         /* A mouse release is true for the whole frame it happens on, and the
@@ -719,7 +745,46 @@ int main(int argc, char **argv)
         }
         bs_ui_overlay(&ui);
 
+        if (fbMode && fbTarget.id != 0) EndTextureMode();
         EndDrawing();
+
+        /* Read the frame back and hand it over.
+         *
+         * raylib stores a render texture the way OpenGL does, bottom row
+         * first, and it is RGBA. The surface on the other side wants BGRA with
+         * the top row first. Both corrections happen here rather than there:
+         * the plugin's copy runs on the host's main thread, where a per-pixel
+         * loop over a million pixels is somebody's dropped audio buffer. */
+        if (fbMode && fbTarget.id != 0 && editing) {
+            Image img = LoadImageFromTexture(fbTarget.texture);
+            if (img.data && img.format == PIXELFORMAT_UNCOMPRESSED_R8G8B8A8) {
+                bs::ShmBlock *b = shm.block;
+                const int w = img.width, h = img.height;
+                const unsigned char *src = (const unsigned char *)img.data;
+
+                const uint32_t sq = b->fbSeq.load(std::memory_order_relaxed);
+                b->fbSeq.store(sq + 1, std::memory_order_release);
+                std::atomic_thread_fence(std::memory_order_release);
+
+                b->fbW = (uint32_t)w;
+                b->fbH = (uint32_t)h;
+                b->fbStride = (uint32_t)w * 4u;
+                for (int y = 0; y < h; y++) {
+                    const unsigned char *s = src + (size_t)(h - 1 - y) * (size_t)w * 4;
+                    unsigned char *d = b->fb + (size_t)y * (size_t)w * 4;
+                    for (int x = 0; x < w; x++) {
+                        d[x * 4 + 0] = s[x * 4 + 2];   /* B */
+                        d[x * 4 + 1] = s[x * 4 + 1];   /* G */
+                        d[x * 4 + 2] = s[x * 4 + 0];   /* R */
+                        d[x * 4 + 3] = 255;
+                    }
+                }
+
+                std::atomic_thread_fence(std::memory_order_release);
+                b->fbSeq.store(sq + 2, std::memory_order_release);
+            }
+            UnloadImage(img);
+        }
 
         /* ---- editor: publish whatever changed ------------------------ *
          *
@@ -740,6 +805,27 @@ int main(int argc, char **argv)
              * audio device. Draining is not optional: in editor mode nothing
              * calls render(), so anything left in this queue would sit there
              * until it filled and then be silently dropped forever. */
+            /* Offscreen: the host's size arrives the same way, but there is
+             * no window to resize - the render target is what has to match. */
+            if (fbMode) {
+                int w = (int)b->wantW.load(std::memory_order_acquire);
+                int h = (int)b->wantH.load(std::memory_order_acquire);
+                if (w < 320) w = 320;
+                if (h < 240) h = 240;
+                if (w > (int)bs::BS_SHM_FB_MAX_W) w = (int)bs::BS_SHM_FB_MAX_W;
+                if (h > (int)bs::BS_SHM_FB_MAX_H) h = (int)bs::BS_SHM_FB_MAX_H;
+                if (w != fbW || h != fbH) {
+                    if (fbTarget.id != 0) UnloadRenderTexture(fbTarget);
+                    fbTarget = LoadRenderTexture(w, h);
+                    fbW = w; fbH = h;
+                    fbScratch.assign((size_t)w * (size_t)h * 4, 0);
+                    /* The interface lays itself out from the window size, so
+                     * the hidden window has to agree with the target or the
+                     * keyboard ends up off the bottom of the picture. */
+                    SetWindowSize(w, h);
+                }
+            }
+
             /* The host owns the geometry when embedded, and it resizes its
              * own window, not ours - so the size arrives here instead. */
             if (embedParent) {

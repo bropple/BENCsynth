@@ -51,6 +51,14 @@ static const uint32_t BS_SHM_RACK_MAX  = 192u * 1024u;  /* a rack as text     */
 static const uint32_t BS_SHM_PARAM_MAX = 4096u;         /* knobs in one rack  */
 static const uint32_t BS_SHM_NOTE_MAX  = 256u;          /* must be a power of 2 */
 
+/* The framebuffer, for platforms where embedding means shipping pixels rather
+ * than reparenting a window - which is macOS, and only macOS. Big enough for a
+ * rack window somebody has dragged large, and no bigger: this is committed per
+ * open editor, and the pages are only touched as they are used. */
+static const uint32_t BS_SHM_FB_MAX_W = 2048u;
+static const uint32_t BS_SHM_FB_MAX_H = 1280u;
+static const uint32_t BS_SHM_FB_BYTES = BS_SHM_FB_MAX_W * BS_SHM_FB_MAX_H * 4u;
+
 /* A key pressed in the editor window. The editor makes no sound - it has no
  * audio device - so the only way its on-screen keyboard and musical typing can
  * be heard is to hand the events to the plugin, which does. Without this they
@@ -115,6 +123,20 @@ struct ShmBlock {
     std::atomic<uint64_t> embedParent;
     std::atomic<uint32_t> wantW;
     std::atomic<uint32_t> wantH;
+
+    /* Pixels, when the editor cannot simply be reparented into the host's
+     * window. Written by the editor, read by the plugin, BGRA and top row
+     * first - already in the order CoreAnimation wants, so the plugin's copy
+     * into the IOSurface is a memcpy per row rather than a per-pixel loop on
+     * the main thread.
+     *
+     * A seqlock like the others: odd while a frame is going in. A reader that
+     * arrives mid-write shows the previous frame again, which at sixty frames
+     * a second nobody can see. */
+    std::atomic<uint32_t> fbMode;    /* editor renders offscreen when nonzero */
+    std::atomic<uint32_t> fbSeq;
+    uint32_t              fbW, fbH, fbStride;
+    unsigned char         fb[BS_SHM_FB_BYTES];
 
     /* The editor bumps this every frame. The plugin uses it to notice an
      * editor that died without saying goodbye. */
