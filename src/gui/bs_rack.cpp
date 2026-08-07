@@ -370,6 +370,12 @@ void bs_rack_frame(bs_rack *r, bs_ui *ui, bs::Engine *eng, Rectangle view, float
                 ui->suppress = (top != id) || r->patching;
                 if (bs_textarea(ui, 30000 + id, er, t->text,
                                 &r->edits[(size_t)id], 1)) r->edited = 1;
+                /* The text area already scrolls itself on the wheel. Claiming
+                 * it here is what stops the rack ALSO zooming underneath -
+                 * without this a scroll over a scratchpad does both, which
+                 * reads as the text jumping while the world moves. */
+                if (wheel != 0.0f && top == id && !r->patching &&
+                    CheckCollisionPointRec(bs_mouse(), er)) wheelTaken = 1;
                 ui->suppress = 0;
             } else if (mod->typeId == "OUT") {
                 bs::ModuleOut *o = static_cast<bs::ModuleOut *>(mod);

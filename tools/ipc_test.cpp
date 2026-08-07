@@ -434,7 +434,18 @@ int main(int argc, char **argv)
                 bs::ShmNote junk;
                 while (bs::bs_shm_pop_note(m.block, &junk)) {}
 
+                /* The on-screen keys start hidden inside a host, which is what
+                 * an editor is - so ask for them the way a person would. */
                 bs::ShmInput ev;
+                std::memset(&ev, 0, sizeof ev);
+                ev.kind = bs::SI_KEY_DOWN; ev.value = 291;   /* KEY_F2 */
+                bs::bs_shm_push_input(m.block, ev);
+                nap(200);
+                std::memset(&ev, 0, sizeof ev);
+                ev.kind = bs::SI_KEY_UP; ev.value = 291;
+                bs::bs_shm_push_input(m.block, ev);
+                nap(200);
+
                 std::memset(&ev, 0, sizeof ev);
                 ev.kind = bs::SI_MOUSE_MOVE; ev.x = cx; ev.y = cy;
                 bs::bs_shm_push_input(m.block, ev);
@@ -462,6 +473,40 @@ int main(int argc, char **argv)
                         if (n.kind == bs::NE_NOTE_OFF) released = true;
                 }
                 ok(released, "and releasing it stops the note");
+
+                /* ---- musical typing, the same way ----
+                 *
+                 * A forwarded key, not a click. Z is the bottom of the typing
+                 * keyboard's octave, and this also proves the interface still
+                 * plays notes with the on-screen keys hidden - which they are
+                 * inside a host. */
+                while (bs::bs_shm_pop_note(m.block, &junk)) {}
+
+                std::memset(&ev, 0, sizeof ev);
+                ev.kind = bs::SI_KEY_DOWN; ev.value = 'Z';
+                bs::bs_shm_push_input(m.block, ev);
+
+                bool typed = false;
+                for (int i = 0; i < 60 && !typed; i++) {
+                    nap(50);
+                    bs::ShmNote n;
+                    while (bs::bs_shm_pop_note(m.block, &n))
+                        if (n.kind == bs::NE_NOTE_ON) typed = true;
+                }
+                ok(typed, "a forwarded keypress plays a note");
+
+                std::memset(&ev, 0, sizeof ev);
+                ev.kind = bs::SI_KEY_UP; ev.value = 'Z';
+                bs::bs_shm_push_input(m.block, ev);
+
+                bool lifted = false;
+                for (int i = 0; i < 40 && !lifted; i++) {
+                    nap(50);
+                    bs::ShmNote n;
+                    while (bs::bs_shm_pop_note(m.block, &n))
+                        if (n.kind == bs::NE_NOTE_OFF) lifted = true;
+                }
+                ok(lifted, "and letting go stops it");
 
                 m.block->quit.store(1);
                 bs::bs_shm_wait_editor(proc, 3000);

@@ -7,6 +7,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <ctype.h>
 
 /* No ARC. The ownership here is small enough to state outright: alloc gives
  * +1, addSubview retains, detach removes and releases our one. */
@@ -42,10 +43,70 @@ struct CocoaView {
  * acceptsFirstMouse matters in a DAW specifically - an FX window is often not
  * the frontmost window, and without this the click that focuses it is eaten
  * rather than delivered, so the first grab of a cable does nothing. */
+/* raylib's key numbers, restated.
+ *
+ * This file is the plugin's, and the plugin does not link raylib - the editor
+ * does. Rather than pull the whole header in for twenty-six integers, the ones
+ * that cross the boundary are written out. They are part of the protocol
+ * between the two processes now, so a change in raylib would have to be
+ * matched here deliberately, which is the honest situation either way. */
+enum {
+    KEY_SPACE_ = 32,   KEY_ESCAPE_ = 256, KEY_ENTER_ = 257, KEY_TAB_ = 258,
+    KEY_BACKSPACE_ = 259, KEY_DELETE_ = 261,
+    KEY_RIGHT_ = 262,  KEY_LEFT_ = 263,   KEY_DOWN_ = 264,  KEY_UP_ = 265,
+    KEY_PAGE_UP_ = 266, KEY_PAGE_DOWN_ = 267, KEY_HOME_ = 268, KEY_END_ = 269,
+    KEY_F1_ = 290, KEY_F2_ = 291, KEY_F3_ = 292, KEY_F4_ = 293,
+    KEY_F5_ = 294, KEY_F6_ = 295, KEY_F7_ = 296, KEY_F8_ = 297,
+    KEY_LSHIFT_ = 340, KEY_LCTRL_ = 341, KEY_LALT_ = 342, KEY_LSUPER_ = 343
+};
+
+/* macOS virtual key codes to raylib's key numbers.
+ *
+ * Two halves, because the two kinds of key are identified differently. Letters
+ * and digits come from the characters the event produced, uppercased - raylib
+ * numbers those as ASCII, so 'Z' is KEY_Z and musical typing works whatever
+ * the layout says the key in that position is. Everything else is a physical
+ * key with no character, and those are looked up by virtual code.
+ *
+ * Doing letters by character rather than by position is deliberate: someone on
+ * AZERTY pressing the key marked Z should get Z. */
+static int bsKeyFromVirtual(unsigned short vk)
+{
+    switch (vk) {
+    case 53:  return KEY_ESCAPE_;
+    case 36:  return KEY_ENTER_;
+    case 76:  return KEY_ENTER_;        /* keypad enter */
+    case 48:  return KEY_TAB_;
+    case 51:  return KEY_BACKSPACE_;
+    case 117: return KEY_DELETE_;
+    case 49:  return KEY_SPACE_;
+    case 123: return KEY_LEFT_;
+    case 124: return KEY_RIGHT_;
+    case 125: return KEY_DOWN_;
+    case 126: return KEY_UP_;
+    case 115: return KEY_HOME_;
+    case 119: return KEY_END_;
+    case 116: return KEY_PAGE_UP_;
+    case 121: return KEY_PAGE_DOWN_;
+    case 122: return KEY_F1_;
+    case 120: return KEY_F2_;
+    case 99:  return KEY_F3_;
+    case 118: return KEY_F4_;
+    case 96:  return KEY_F5_;
+    case 97:  return KEY_F6_;
+    case 98:  return KEY_F7_;
+    case 100: return KEY_F8_;
+    case 27:  return '-';               /* octave down, as the rack marks it */
+    case 24:  return '=';               /* octave up */
+    default:  return 0;
+    }
+}
+
 @interface BsInputView : NSView
 {
 @public
-    bs::CocoaView *owner;
+    bs::CocoaView       *owner;
+    NSEventModifierFlags lastFlags;
 }
 @end
 
@@ -62,7 +123,12 @@ struct CocoaView {
     owner->sink(owner->sinkCtx, kind, b, (int)p.x, (int)p.y, v);
 }
 
-- (void)mouseDown:(NSEvent *)e        { [self send:K_DOWN button:0 event:e value:0]; }
+- (void)mouseDown:(NSEvent *)e
+{
+    /* Ask for the keyboard. AppKit will not offer it. */
+    [[self window] makeFirstResponder:self];
+    [self send:K_DOWN button:0 event:e value:0];
+}
 - (void)mouseUp:(NSEvent *)e          { [self send:K_UP   button:0 event:e value:0]; }
 - (void)rightMouseDown:(NSEvent *)e   { [self send:K_DOWN button:1 event:e value:0]; }
 - (void)rightMouseUp:(NSEvent *)e     { [self send:K_UP   button:1 event:e value:0]; }
@@ -87,6 +153,84 @@ struct CocoaView {
 /* Tracking, or mouseMoved never arrives - Cocoa only sends it to a view that
  * asked, and a knob that only responds while a button is held is not obviously
  * a missing tracking area. */
+/* ---- keys ----
+ *
+ * The view has to be first responder to receive any of this, and AppKit does
+ * not hand that over on a click by itself - so mouseDown asks. Inside a DAW
+ * that means the rack takes the keyboard while you are working in it, which is
+ * what you want when typing into a scratchpad and what every plugin with a
+ * text field does. */
+- (void)sendKey:(int)kind code:(int)code
+{
+    if (!owner || !owner->sink || code <= 0) return;
+    owner->sink(owner->sinkCtx, kind, 0, 0, 0, (float)code);
+}
+
+- (void)keyDown:(NSEvent *)e
+{
+    const int vk = bsKeyFromVirtual([e keyCode]);
+    if (vk) [self sendKey:K_KEYDOWN code:vk];
+
+    NSString *bare = [e charactersIgnoringModifiers];
+    if ([bare length] > 0) {
+        const unichar c = [bare characterAtIndex:0];
+        if (c < 128 && (isalnum((int)c) || c == '-' || c == '=' ||
+                        c == ',' || c == '.' || c == '/' || c == ';' ||
+                        c == '\'' || c == '[' || c == ']' || c == '\\')) {
+            /* raylib numbers letters and digits by their uppercase ASCII. */
+            const int up = (c >= 'a' && c <= 'z') ? c - 'a' + 'A' : (int)c;
+            [self sendKey:K_KEYDOWN code:up];
+        }
+    }
+
+    /* Text is separate from keys: a scratchpad wants what the layout produced,
+     * with shift and dead keys already applied, and not while a command
+     * shortcut is being pressed. */
+    if (!([e modifierFlags] & NSEventModifierFlagCommand)) {
+        NSString *typed = [e characters];
+        for (NSUInteger i = 0; i < [typed length]; i++) {
+            const unichar c = [typed characterAtIndex:i];
+            if (c >= 32 && c != 127 && owner && owner->sink)
+                owner->sink(owner->sinkCtx, K_TEXT, 0, 0, 0, (float)c);
+        }
+    }
+}
+
+- (void)keyUp:(NSEvent *)e
+{
+    const int vk = bsKeyFromVirtual([e keyCode]);
+    if (vk) [self sendKey:K_KEYUP code:vk];
+
+    NSString *bare = [e charactersIgnoringModifiers];
+    if ([bare length] > 0) {
+        const unichar c = [bare characterAtIndex:0];
+        if (c < 128 && isalnum((int)c)) {
+            const int up = (c >= 'a' && c <= 'z') ? c - 'a' + 'A' : (int)c;
+            [self sendKey:K_KEYUP code:up];
+        }
+    }
+}
+
+/* Modifiers arrive as a change of state rather than as key events, so the
+ * edges have to be worked out from what changed. Ctrl-S in a rack depends on
+ * this. */
+- (void)flagsChanged:(NSEvent *)e
+{
+    const NSEventModifierFlags f = [e modifierFlags];
+    struct { NSEventModifierFlags bit; int key; } M[] = {
+        { NSEventModifierFlagShift,   KEY_LSHIFT_ },
+        { NSEventModifierFlagControl, KEY_LCTRL_  },
+        { NSEventModifierFlagOption,  KEY_LALT_   },
+        { NSEventModifierFlagCommand, KEY_LSUPER_ },
+    };
+    for (int i = 0; i < 4; i++) {
+        const bool now = (f & M[i].bit) != 0;
+        const bool was = (lastFlags & M[i].bit) != 0;
+        if (now != was) [self sendKey:(now ? K_KEYDOWN : K_KEYUP) code:M[i].key];
+    }
+    lastFlags = f;
+}
+
 - (void)updateTrackingAreas
 {
     for (NSTrackingArea *a in [self trackingAreas]) [self removeTrackingArea:a];

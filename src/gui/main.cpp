@@ -250,6 +250,11 @@ typedef struct {
     char  status[192];
     float statusAge;
     int   about;
+    /* The keyboard at the bottom. On by default in the program and off inside
+     * a host, where the DAW already has one and the rack is the part you came
+     * for - but only defaulted, not removed, because clicking a key to hear
+     * what a patch does is worth keeping either way. */
+    int   showKeys;
 } bs_app;
 
 /* The name shown in the title bar and on the SAVE button's tooltip-in-spirit.
@@ -394,6 +399,14 @@ static void draw_toolbar(bs_app *app, bs_ui *ui, bs_rack *rack, bs_keyboard *kb,
         bs_rack_preset_menu(rack, ui, (Vector2){ b.x, b.y + h });
     }
     x += 80.0f;
+
+    b = (Rectangle){ x, y, 62.0f, h };
+    if (bs_button(ui, 8010, b, app->showKeys ? "KEYS \xE2\x96\xBC" : "KEYS \xE2\x96\xB2", 1)) {
+        bs_keyboard_release_all(kb, eng);
+        app->showKeys = !app->showKeys;
+        say(app, app->showKeys ? "keyboard shown" : "keyboard hidden - the rack gets the room");
+    }
+    x += 68.0f;
 
     b = (Rectangle){ x, y, 62.0f, h };
     if (bs_button(ui, 8007, b, "CLEAR", 1)) {
@@ -564,6 +577,7 @@ int main(int argc, char **argv)
     bs_app app;
     std::memset(&app, 0, sizeof app);
     app.about = openInfo;
+    app.showKeys = 1;          /* lowered below when this is a plugin's editor */
 
     g_engine.init((float)SAMPLE_RATE);
     if (loadPath) {
@@ -608,6 +622,7 @@ int main(int argc, char **argv)
             return 1;
         }
         editing = true;
+        app.showKeys = 0;      /* the host has a keyboard; the rack wants the room */
         /* Offscreen there is no window to receive a click, so the interface
          * reads the events the host forwarded instead. */
         if (fbMode) bs_input_attach(shm.block, 0, 0);
@@ -693,12 +708,22 @@ int main(int argc, char **argv)
 
         Rectangle header  = { 0, 0, W, (float)HEADER_H };
         Rectangle toolbar = { 0, (float)HEADER_H, W, (float)TOOLBAR_H };
-        Rectangle keys    = { 0, H - (float)KEYS_H, W, (float)KEYS_H };
+        const float keysH = app.showKeys ? (float)KEYS_H : 0.0f;
+        Rectangle keys    = { 0, H - keysH, W, keysH };
         Rectangle rview   = { 0, (float)(HEADER_H + TOOLBAR_H), W,
-                              H - (float)(HEADER_H + TOOLBAR_H + KEYS_H) };
+                              H - ((float)(HEADER_H + TOOLBAR_H) + keysH) };
         if (rview.height < 80.0f) rview.height = 80.0f;
 
         if (IsKeyPressed(KEY_F1)) app.about = !app.about;
+        /* F2 for the keyboard, next to F1 for the help. It starts hidden
+         * inside a host, and a shortcut is how you get it back without going
+         * to the toolbar - the same route the toolbar button takes. */
+        if (IsKeyPressed(KEY_F2) && ui.focus == 0) {
+            bs_keyboard_release_all(&kb, &g_engine);
+            app.showKeys = !app.showKeys;
+            say(&app, app.showKeys ? "keyboard shown (F2)"
+                                   : "keyboard hidden (F2) - the rack gets the room");
+        }
 
         /* Ctrl-S and Ctrl-O, because everything else does. Not while a
          * scratchpad has the keyboard, where Ctrl-S is somebody's muscle
@@ -748,7 +773,7 @@ int main(int argc, char **argv)
         ui.suppress = app.about;
         draw_toolbar(&app, &ui, &rack, &kb, &g_engine, toolbar, rview);
         bs_rack_frame(&rack, &ui, &g_engine, rview, dt);
-        bs_keyboard_frame(&kb, &ui, &g_engine, keys);
+        if (app.showKeys) bs_keyboard_frame(&kb, &ui, &g_engine, keys);
         ui.suppress = 0;
 
         if (app.about) {
