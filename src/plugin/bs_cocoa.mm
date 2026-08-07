@@ -30,84 +30,7 @@ struct CocoaView {
     void         *sinkCtx;
 };
 
-static void makeSurface(CocoaView *c, int w, int h)
-{
-    if (c->surface) { CFRelease(c->surface); c->surface = 0; }
-    if (w <= 0 || h <= 0) return;
-
-    /* BGRA because that is what CoreAnimation composites without converting,
-     * and a format it has to convert costs a pass over every pixel of every
-     * frame for nothing. */
-    const int bpe = 4;
-    NSDictionary *props = @{
-        (id)kIOSurfaceWidth:           @(w),
-        (id)kIOSurfaceHeight:          @(h),
-        (id)kIOSurfaceBytesPerElement: @(bpe),
-        (id)kIOSurfacePixelFormat:     @((unsigned)'BGRA')
-    };
-    c->surface = IOSurfaceCreate((CFDictionaryRef)props);
-    c->w = w;
-    c->h = h;
-
-    if (!c->surface) { bs_log("  cocoa: IOSurfaceCreate failed at %dx%d", w, h); return; }
-    bs_log("  cocoa: surface %dx%d, stride %zu", w, h,
-           (size_t)IOSurfaceGetBytesPerRow(c->surface));
-}
-
-CocoaView *bs_cocoa_attach(void *parentNSView, int w, int h)
-{
-    if (!parentNSView) { bs_log("  cocoa: no parent view"); return 0; }
-    if (![NSThread isMainThread]) {
-        /* AppKit is main-thread-only, and a violation here crashes the host
-         * rather than us - a bad way to be remembered. */
-        bs_log("  cocoa: attach off the main thread, refusing");
-        return 0;
-    }
-
-    CocoaView *c = (CocoaView *)std::calloc(1, sizeof(CocoaView));
-    if (!c) return 0;
-
-    BsInputView *iv = [[BsInputView alloc] initWithFrame:NSMakeRect(0, 0, w, h)];
-    iv->owner = c;
-    c->view = iv;
-    [c->view setWantsLayer:YES];
-    [c->view setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
-
-    CALayer *root = [c->view layer];
-    CGColorRef bg = CGColorCreateGenericRGB(0.043, 0.063, 0.043, 1.0);
-    [root setBackgroundColor:bg];
-    CGColorRelease(bg);
-
-    /* The surface goes in its own layer rather than on the root, so the status
-     * text can sit above it and the background stays visible behind a surface
-     * that has not been written to yet. */
-    c->content = [CALayer layer];
-    [c->content setFrame:CGRectMake(0, 0, w, h)];
-    [c->content setAutoresizingMask:(kCALayerWidthSizable | kCALayerHeightSizable)];
-    /* Resize rather than stretch-to-fill: the rack has a fixed aspect only by
-     * habit, and letterboxing a synthesizer looks like a bug. */
-    [c->content setContentsGravity:kCAGravityResize];
-    [c->content setContentsScale:[[NSScreen mainScreen] backingScaleFactor]];
-    [root addSublayer:c->content];
-
-    c->status = [CATextLayer layer];
-    [c->status setString:@"BENCsynth"];
-    [c->status setFontSize:13.0];
-    [c->status setForegroundColor:CGColorGetConstantColor(kCGColorWhite)];
-    [c->status setAlignmentMode:kCAAlignmentCenter];
-    [c->status setContentsScale:[[NSScreen mainScreen] backingScaleFactor]];
-    [c->status setFrame:CGRectMake(0, (CGFloat)h * 0.5 - 12.0, (CGFloat)w, 24.0)];
-    [root addSublayer:c->status];
-
-    makeSurface(c, w, h);
-
-    NSView *host = (NSView *)parentNSView;
-    [host addSubview:c->view];
-    bs_log("  cocoa: attached a %dx%d view to the host's", w, h);
-    return c;
-}
-
-} /* namespace bs - the classes below have to be at file scope */
+} /* namespace bs - an Objective-C class cannot be declared inside one */
 
 /* The view that actually receives the pointer.
  *
@@ -201,6 +124,83 @@ CocoaView *bs_cocoa_attach(void *parentNSView, int w, int h)
 @end
 
 namespace bs {
+
+static void makeSurface(CocoaView *c, int w, int h)
+{
+    if (c->surface) { CFRelease(c->surface); c->surface = 0; }
+    if (w <= 0 || h <= 0) return;
+
+    /* BGRA because that is what CoreAnimation composites without converting,
+     * and a format it has to convert costs a pass over every pixel of every
+     * frame for nothing. */
+    const int bpe = 4;
+    NSDictionary *props = @{
+        (id)kIOSurfaceWidth:           @(w),
+        (id)kIOSurfaceHeight:          @(h),
+        (id)kIOSurfaceBytesPerElement: @(bpe),
+        (id)kIOSurfacePixelFormat:     @((unsigned)'BGRA')
+    };
+    c->surface = IOSurfaceCreate((CFDictionaryRef)props);
+    c->w = w;
+    c->h = h;
+
+    if (!c->surface) { bs_log("  cocoa: IOSurfaceCreate failed at %dx%d", w, h); return; }
+    bs_log("  cocoa: surface %dx%d, stride %zu", w, h,
+           (size_t)IOSurfaceGetBytesPerRow(c->surface));
+}
+
+CocoaView *bs_cocoa_attach(void *parentNSView, int w, int h)
+{
+    if (!parentNSView) { bs_log("  cocoa: no parent view"); return 0; }
+    if (![NSThread isMainThread]) {
+        /* AppKit is main-thread-only, and a violation here crashes the host
+         * rather than us - a bad way to be remembered. */
+        bs_log("  cocoa: attach off the main thread, refusing");
+        return 0;
+    }
+
+    CocoaView *c = (CocoaView *)std::calloc(1, sizeof(CocoaView));
+    if (!c) return 0;
+
+    BsInputView *iv = [[BsInputView alloc] initWithFrame:NSMakeRect(0, 0, w, h)];
+    iv->owner = c;
+    c->view = iv;
+    [c->view setWantsLayer:YES];
+    [c->view setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
+
+    CALayer *root = [c->view layer];
+    CGColorRef bg = CGColorCreateGenericRGB(0.043, 0.063, 0.043, 1.0);
+    [root setBackgroundColor:bg];
+    CGColorRelease(bg);
+
+    /* The surface goes in its own layer rather than on the root, so the status
+     * text can sit above it and the background stays visible behind a surface
+     * that has not been written to yet. */
+    c->content = [CALayer layer];
+    [c->content setFrame:CGRectMake(0, 0, w, h)];
+    [c->content setAutoresizingMask:(kCALayerWidthSizable | kCALayerHeightSizable)];
+    /* Resize rather than stretch-to-fill: the rack has a fixed aspect only by
+     * habit, and letterboxing a synthesizer looks like a bug. */
+    [c->content setContentsGravity:kCAGravityResize];
+    [c->content setContentsScale:[[NSScreen mainScreen] backingScaleFactor]];
+    [root addSublayer:c->content];
+
+    c->status = [CATextLayer layer];
+    [c->status setString:@"BENCsynth"];
+    [c->status setFontSize:13.0];
+    [c->status setForegroundColor:CGColorGetConstantColor(kCGColorWhite)];
+    [c->status setAlignmentMode:kCAAlignmentCenter];
+    [c->status setContentsScale:[[NSScreen mainScreen] backingScaleFactor]];
+    [c->status setFrame:CGRectMake(0, (CGFloat)h * 0.5 - 12.0, (CGFloat)w, 24.0)];
+    [root addSublayer:c->status];
+
+    makeSurface(c, w, h);
+
+    NSView *host = (NSView *)parentNSView;
+    [host addSubview:c->view];
+    bs_log("  cocoa: attached a %dx%d view to the host's", w, h);
+    return c;
+}
 
 void bs_cocoa_set_input_sink(CocoaView *c, BsInputSink fn, void *ctx)
 {
