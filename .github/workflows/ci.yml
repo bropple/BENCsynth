@@ -112,10 +112,11 @@ jobs:
           export LV2_PATH="$PWD/build:/usr/lib/lv2"
           lv2info 'https://github.com/bropple/BENCsynth' | tee /tmp/info.txt
           grep -qi 'Instrument' /tmp/info.txt
-          # Eleven: MIDI in, two audio out, eight macros. This is the seam an
-          # LV2 plugin has no compiler to guard - the Turtle and the port enum
-          # in the C have to agree, and nothing makes them.
-          test "$(grep -cE '^	Port [0-9]+:' /tmp/info.txt)" = 11
+          # Twelve: MIDI in, two audio out, eight macros, and the rack. This is
+          # the seam an LV2 plugin has no compiler to guard - the Turtle and the
+          # port enum in the C have to agree, and nothing makes them. Adding the
+          # rack port without touching this is what caught it.
+          test "$(grep -cE '^	Port [0-9]+:' /tmp/info.txt)" = 12
           grep -q 'state#interface' /tmp/info.txt
       - name: It loads, plays and restores its state
         run: make lv2-test
