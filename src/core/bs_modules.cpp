@@ -588,6 +588,903 @@ public:
 };
 
 /* ================================================================== *
+ * STRING - a struck or plucked string, by physical modelling
+ *
+ * Everything else in this rack is an oscillator with exactly harmonic
+ * partials, and no amount of filtering makes one inharmonic. A real string is
+ * stiff, so wave speed depends on frequency and its partials are stretched
+ * sharp of the harmonic series:
+ *
+ *     f(n) = n * f0 * sqrt(1 + B * n^2)
+ *
+ * By the sixteenth partial that is tens of cents. It is the single thing that
+ * separates a piano from an organ with a good envelope, and it cannot be
+ * reached by subtraction at all.
+ *
+ * A waveguide gets it honestly. A delay line is the string; the length is the
+ * pitch. In the loop:
+ *
+ *   - a cascade of first-order allpasses, which makes the loop delay depend on
+ *     frequency. That IS the stiffness. The coefficient is negative, so high
+ *     partials come round sooner and land sharp - positive would flatten them,
+ *     which is a physical impossibility that sounds like a bell.
+ *   - a lowpass, so high partials die first, as they do on anything real.
+ *   - a gain below one, which is how long the note rings.
+ *
+ * Two strings per voice a few cents apart, because a piano has two or three
+ * per note and their coupling is what produces the characteristic two-stage
+ * decay: a fast initial fall and a long quiet aftersound underneath it.
+ *
+ * The exciter is a short burst of filtered noise whose brightness rises with
+ * velocity - a hammer's felt compresses harder when struck harder, so playing
+ * loudly changes the spectrum and not only the level. That relationship is
+ * physics here rather than a filter envelope dialled in by hand.
+ * ================================================================== */
+
+class ModuleString : public Module {
+public:
+    ModuleString()
+    {
+        configure("STRING", "STRING", 6, 3);
+        addKnob("OCT",    -4.0f, 4.0f, 0.0f, "%+.0f", PC_LIN, 1.0f);
+        addKnob("FINE",  -50.0f, 50.0f, 0.0f, "%+.0f c");
+        addKnob("DECAY",   0.0f, 1.0f, 0.86f, "%.2f");
+        addKnob("BRIGHT",  0.0f, 1.0f, 0.55f, "%.2f");
+        /* The stiffness. Zero is an ideal string - a guitar harmonic. Up is a
+         * thicker, shorter, more tightly wound one, which is what the bass of
+         * a piano is and why those notes sound almost like bells. */
+        addKnob("INHARM",  0.0f, 1.0f, 0.45f, "%.2f");
+        addKnob("STRIKE",  0.02f, 0.5f, 0.13f, "%.2f");
+        addKnob("SPREAD",  0.0f, 12.0f, 2.2f, "%.1f c");
+
+        addInput("V/OCT");
+        addInput("TRIG");
+        addInput("IN");        /* excite it with anything at all */
+        addOutput("OUT");
+    }
+
+    void onSampleRate()
+    {
+        /* Down to about 20 Hz, which is below the bottom of a piano. */
+        const int n = (int)(sr / 20.0f) + 8;
+        for (int c = 0; c < BS_MAX_POLY; c++) {
+            for (int k = 0; k < 2; k++) line[c][k].alloc(n);
+            combLine[c].alloc(n);      /* the strike comb reads from this */
+        }
+        reset();
+    }
+
+    void reset()
+    {
+        for (int c = 0; c < BS_MAX_POLY; c++) {
+            combLine[c].clear();
+            for (int k = 0; k < 2; k++) {
+                line[c][k].clear();
+                damp[c][k].reset();
+                for (int a = 0; a < AP; a++) ap1[c][k][a] = ap2[c][k][a] = 0.0f;
+            }
+            last[c] = 0.0f; burst[c] = 0; vel[c] = 0.0f; nz[c] = 12345 + c * 7919;
+        }
+    }
+
+    void process()
+    {
+        const int ch = polyIn();
+        setAllOutputChannels(ch);
+
+        const float oct = pv(0), fine = pv(1);
+        const float decay = pv(2), bright = pv(3);
+        const float inh = pv(4), strike = pv(5), spread = pv(6);
+
+        /* Negative: high partials round the loop sooner and land sharp. */
+        const float a = -0.72f * inh;
+
+        /* The coefficient, not the filter. Assigning a whole OnePole over each
+         * string's would carry the template's z with it and wipe out the state
+         * of a note that is still ringing. */
+        OnePole shape;
+        shape.setCutoff(400.0f + bright * bright * 11000.0f, sr);
+        const float dampA = shape.a;
+
+        for (int c = 0; c < ch; c++) {
+            for (int i = 0; i < BS_BLOCK; i++) {
+                const float g = in(1).get(c, i);
+                if (g > 1.0f && last[c] <= 1.0f) {
+                    burst[c] = (int)(sr * 0.004f);       /* 4 ms of hammer */
+                    vel[c]   = clampf(g * 0.1f, 0.05f, 1.0f);
+                    /* Felt stiffens under load, so the burst that a hard blow
+                     * puts into the string is brighter and not just louder. */
+                    hammer[c].setCutoff(600.0f + vel[c] * vel[c] * 7000.0f, sr);
+                }
+                last[c] = g;
+
+                const float f0 = clampf(261.6256f *
+                    std::exp2(in(0).get(c, i) + oct + fine / 1200.0f),
+                    20.0f, 4000.0f);
+
+                /* Everything in the loop delays, not only the line, and the
+                 * total is what sets the pitch. Approximating it left the
+                 * string 29 cents flat with the stiffness at zero - audible,
+                 * and worse at settings where it should be exact.
+                 *
+                 * So the phase delay of the damping filter and the allpass
+                 * chain is evaluated at the note's own frequency and taken
+                 * off. Both are one-pole sections, so this is a handful of
+                 * trig calls per note per block rather than per sample. */
+                const float w = 2.0f * 3.14159265358979f * f0 / sr;
+                const float cw = std::cos(w), sw = std::sin(w);
+
+                /* One-pole lowpass a/(1 - (1-a)z^-1): the phase is that of the
+                 * denominator, negated. */
+                const float b = 1.0f - dampA;
+                const float lpPhase = -std::atan2(b * sw, 1.0f - b * cw);
+
+                /* First-order allpass (a + z^-1)/(1 + a z^-1), AP of them. */
+                const float apPhase = (float)AP *
+                    (std::atan2(-sw, a + cw) - std::atan2(-a * sw, 1.0f + a * cw));
+
+                const float apDelay = -(lpPhase + apPhase) / w;
+
+                float sum = 0.0f;
+                for (int k = 0; k < 2; k++) {
+                    const float det = (k == 0 ? -0.5f : 0.5f) * spread / 1200.0f;
+                    const float f   = f0 * std::exp2(det);
+                    /* No fudge term here. An earlier version took a sample
+                     * off for luck, which at middle C is 0.54% of the period -
+                     * eleven cents sharp, constant across every partial, which
+                     * is exactly what the measurement showed. */
+                    float d = sr / f - apDelay;
+                    if (d < 4.0f) d = 4.0f;
+
+                    float x = line[c][k].read(d);
+
+                    /* Stiffness. */
+                    for (int n = 0; n < AP; n++) {
+                        const float y = a * x + ap1[c][k][n] - a * ap2[c][k][n];
+                        ap1[c][k][n] = x;
+                        ap2[c][k][n] = y;
+                        x = y;
+                    }
+
+                    damp[c][k].a = dampA;
+                    x = damp[c][k].lp(x);
+                    x *= 0.9f + 0.0999f * decay;
+
+                    float e = in(2).get(c, i) * 0.2f;
+                    if (burst[c] > 0) {
+                        nz[c] = nz[c] * 1103515245u + 12345u;
+                        const float r = (float)((int)(nz[c] >> 9) & 0x7fff) / 16384.0f - 1.0f;
+                        /* Harder means brighter: the hammer's felt stiffens
+                         * under load, so a loud note starts with more high
+                         * end and not merely more of everything. */
+                        /* Three, by measurement: at unity the string came out
+                         * a seventh of the level of everything else in the
+                         * rack, because four milliseconds of noise is not much
+                         * energy to give a resonator that then throws most of
+                         * it away through the damping filter. */
+                        e += hammer[c].lp(r * vel[c]) * (0.4f + 0.6f * vel[c]) * 3.0f;
+                    }
+
+                    line[c][k].write(x + e);
+                    sum += x;
+                }
+
+                /* Where it was struck. A string cannot sound a partial with a
+                 * node at the hammer, and that comb is a large part of why a
+                 * piano is not a sawtooth. */
+                const float pd = clampf(strike * sr / f0, 1.0f, 2000.0f);
+                combLine[c].write(sum * 0.5f);
+                const float shaped = sum * 0.5f - combLine[c].read(pd) * 0.6f;
+
+                outs[0].v[c][i] = clampf(shaped * 5.0f, -8.0f, 8.0f);
+                if (burst[c] > 0) burst[c]--;
+            }
+        }
+    }
+
+private:
+    /* Eight rather than four: each section bends the delay curve a little, and
+     * a piano's stretch is not a little. */
+    static const int AP = 8;
+    Delay   line[BS_MAX_POLY][2];
+    Delay   combLine[BS_MAX_POLY];
+    OnePole damp[BS_MAX_POLY][2], hammer[BS_MAX_POLY];
+    float   ap1[BS_MAX_POLY][2][AP], ap2[BS_MAX_POLY][2][AP];
+    float   last[BS_MAX_POLY], vel[BS_MAX_POLY];
+    int     burst[BS_MAX_POLY];
+    unsigned nz[BS_MAX_POLY];
+};
+
+/* ================================================================== *
+ * QUANT - pitch quantizer
+ *
+ * A sample and hold, an LFO or a sequencer produces whatever voltage it
+ * produces, and sent to a pitch input that is a note between the notes. This
+ * rounds to the nearest degree of a scale, which is the difference between a
+ * generative patch that is music and one that is a fault condition.
+ * ================================================================== */
+
+class ModuleQuant : public Module {
+public:
+    ModuleQuant()
+    {
+        configure("QUANT", "QUANT", 5, 2);
+        static const char *const SCALES[] = {
+            "CHROM", "MAJOR", "MINOR", "PENT+", "PENT-", "DORIAN", "WHOLE", "BLUES"
+        };
+        addSwitch("SCALE", SCALES, 8, 1);
+        static const char *const ROOTS[] = {
+            "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"
+        };
+        addSwitch("ROOT", ROOTS, 12, 0);
+        addKnob("OCT", -4.0f, 4.0f, 0.0f, "%+.0f", PC_LIN, 1.0f);
+
+        addInput("IN");
+        addOutput("OUT");
+        addOutput("TRIG");     /* fires when the chosen note changes */
+    }
+
+    void reset()
+    {
+        for (int c = 0; c < BS_MAX_POLY; c++) { held[c] = -999; trig[c] = 0.0f; }
+    }
+
+    void process()
+    {
+        const int ch = polyIn();
+        setAllOutputChannels(ch);
+
+        static const unsigned MASK[8] = {
+            0xFFFu,   /* chromatic          */
+            0xAB5u,   /* major       101010110101 */
+            0x5ADu,   /* natural minor            */
+            0x295u,   /* major pentatonic         */
+            0x4A9u,   /* minor pentatonic         */
+            0x6ADu,   /* dorian                   */
+            0x555u,   /* whole tone               */
+            0x4E9u    /* blues                    */
+        };
+        const unsigned mask = MASK[(int)(pv(0) + 0.5f) & 7];
+        const int root = (int)(pv(1) + 0.5f);
+        const float oct = pv(2);
+
+        for (int c = 0; c < ch; c++) {
+            for (int i = 0; i < BS_BLOCK; i++) {
+                const float v = in(0).get(c, i);
+                const float semis = v * 12.0f - (float)root;
+                int n = (int)std::floor(semis + 0.5f);
+
+                /* Search outward: the nearest degree, not the one below. A
+                 * quantizer that always rounds down drags a rising line flat. */
+                int best = n;
+                for (int d = 0; d < 12; d++) {
+                    const int up = n + d, dn = n - d;
+                    if (mask & (1u << (((up % 12) + 12) % 12))) { best = up; break; }
+                    if (mask & (1u << (((dn % 12) + 12) % 12))) { best = dn; break; }
+                }
+
+                if (best != held[c]) { held[c] = best; trig[c] = sr * 0.002f; }
+                if (trig[c] > 0.0f) trig[c] -= 1.0f;
+
+                outs[0].v[c][i] = ((float)best + (float)root) / 12.0f + oct;
+                outs[1].v[c][i] = trig[c] > 0.0f ? 10.0f : 0.0f;
+            }
+        }
+    }
+
+private:
+    int   held[BS_MAX_POLY];
+    float trig[BS_MAX_POLY];
+};
+
+/* ================================================================== *
+ * CLK - clock, with divisions
+ *
+ * Everything that repeats needs one, and an LFO's square output is a clock
+ * with no way to say "half that". The divisions come out together so a patch
+ * can have a bass line on the fours and a hat on the ones without a second
+ * module.
+ * ================================================================== */
+
+class ModuleClk : public Module {
+public:
+    ModuleClk()
+    {
+        configure("CLK", "CLK", 5, 2);
+        addKnob("BPM", 20.0f, 300.0f, 120.0f, "%.0f", PC_LIN, 1.0f);
+        addKnob("PW", 0.05f, 0.9f, 0.5f, "%.2f");
+        addToggle("RUN", 1.0f);
+
+        addInput("EXT");       /* an external clock takes over when patched */
+        addInput("RESET");
+        addOutput("X1");
+        addOutput("/2");
+        addOutput("/4");
+        addOutput("/8");
+    }
+
+    void reset() { ph = 0.0f; count = 0; lastExt = 0.0f; lastRst = 0.0f; }
+
+    void process()
+    {
+        setAllOutputChannels(1);
+        const float bpm = pv(0), pw = pv(1);
+        const int run = pv(2) >= 0.5f;
+
+        for (int i = 0; i < BS_BLOCK; i++) {
+            const float rst = in(1).get(0, i);
+            if (rst > 1.0f && lastRst <= 1.0f) { ph = 0.0f; count = 0; }
+            lastRst = rst;
+
+            int tick = 0;
+            const float ext = in(0).get(0, i);
+            if (ext > 1.0f && lastExt <= 1.0f) tick = 1;
+            const int external = (ext != 0.0f || lastExt != 0.0f);
+            lastExt = ext;
+
+            if (run && !external) {
+                ph += bpm / 60.0f / sr;
+                if (ph >= 1.0f) { ph -= 1.0f; tick = 1; }
+            }
+            if (tick) count++;
+
+            /* The pulse width applies to the fastest output; the divisions
+             * stay high for their whole half-period, which is what a divided
+             * clock looks like on hardware. */
+            const int high1 = external ? (ext > 1.0f) : (run && ph < pw);
+            outs[0].v[0][i] = high1 ? 10.0f : 0.0f;
+            outs[1].v[0][i] = ((count >> 0) & 1) == 0 && high1 ? 10.0f : 0.0f;
+            outs[2].v[0][i] = ((count >> 1) & 3) == 0 && high1 ? 10.0f : 0.0f;
+            outs[3].v[0][i] = ((count >> 2) & 7) == 0 && high1 ? 10.0f : 0.0f;
+        }
+    }
+
+private:
+    float ph, lastExt, lastRst;
+    unsigned count;
+};
+
+/* ================================================================== *
+ * SEQ - eight step sequencer
+ * ================================================================== */
+
+class ModuleSeq : public Module {
+public:
+    ModuleSeq()
+    {
+        configure("SEQ", "SEQ", 8, 4);
+        for (int i = 0; i < 8; i++) {
+            static const char *const N[8] = { "1","2","3","4","5","6","7","8" };
+            addKnob(N[i], -2.0f, 2.0f, 0.0f, "%+.2f V");
+        }
+        addKnob("LEN", 1.0f, 8.0f, 8.0f, "%.0f", PC_LIN, 1.0f);
+        addKnob("GLIDE", 0.0f, 0.5f, 0.0f, "%.3f s", PC_EXP);
+
+        addInput("CLOCK");
+        addInput("RESET");
+        addOutput("CV");
+        addOutput("GATE");
+        addOutput("EOC");
+    }
+
+    void reset() { step = 0; last = 0.0f; lastRst = 0.0f; gate = 0.0f; eoc = 0.0f; cv = 0.0f; }
+
+    void process()
+    {
+        setAllOutputChannels(1);
+        const int len = (int)(pv(8) + 0.5f);
+        const float glide = pv(9);
+
+        for (int i = 0; i < BS_BLOCK; i++) {
+            const float r = in(1).get(0, i);
+            if (r > 1.0f && lastRst <= 1.0f) step = 0;
+            lastRst = r;
+
+            const float c = in(0).get(0, i);
+            if (c > 1.0f && last <= 1.0f) {
+                step++;
+                if (step >= (len < 1 ? 1 : len)) { step = 0; eoc = sr * 0.002f; }
+                gate = sr * 0.01f;
+            }
+            last = c;
+
+            if (gate > 0.0f) gate -= 1.0f;
+            if (eoc > 0.0f) eoc -= 1.0f;
+
+            const float target = pv(step & 7);
+            if (glide <= 0.0002f) cv = target;
+            else cv += (target - cv) * (1.0f - std::exp(-1.0f / (glide * sr + 1.0f)));
+
+            outs[0].v[0][i] = cv;
+            /* The gate follows the clock rather than being a blip, so a note
+             * lasts as long as the step does - which is what makes a sequence
+             * play legato when the clock's pulse width is wide. */
+            outs[1].v[0][i] = (c > 1.0f) ? 10.0f : 0.0f;
+            outs[2].v[0][i] = eoc > 0.0f ? 10.0f : 0.0f;
+        }
+    }
+
+private:
+    int   step;
+    float last, lastRst, gate, eoc, cv;
+};
+
+/* ================================================================== *
+ * LOGIC - gates about gates
+ *
+ * Two gate inputs and the four answers. What it is for is rhythm: two clock
+ * divisions ANDed together fire on their common beat, XOR gives everything
+ * except it, and a pattern appears that neither input had.
+ * ================================================================== */
+
+class ModuleLogic : public Module {
+public:
+    ModuleLogic()
+    {
+        configure("LOGIC", "LOGIC", 4, 2);
+        addKnob("THRESH", 0.1f, 9.0f, 1.0f, "%.1f V");
+        addInput("A");
+        addInput("B");
+        addOutput("AND");
+        addOutput("OR");
+        addOutput("XOR");
+        addOutput("NOT A");
+    }
+
+    void process()
+    {
+        const int ch = polyIn();
+        setAllOutputChannels(ch);
+        const float th = pv(0);
+        for (int c = 0; c < ch; c++) {
+            for (int i = 0; i < BS_BLOCK; i++) {
+                const int a = in(0).get(c, i) > th;
+                const int b = in(1).get(c, i) > th;
+                outs[0].v[c][i] = (a && b) ? 10.0f : 0.0f;
+                outs[1].v[c][i] = (a || b) ? 10.0f : 0.0f;
+                outs[2].v[c][i] = (a != b) ? 10.0f : 0.0f;
+                outs[3].v[c][i] = a ? 0.0f : 10.0f;
+            }
+        }
+    }
+};
+
+/* ================================================================== *
+ * SWITCH - sequential switch
+ *
+ * One output, four inputs, and a clock that moves between them. Routing as a
+ * rhythmic act: four oscillators become one line that changes timbre on the
+ * beat, or one source is scattered across four destinations by patching it
+ * the other way round.
+ * ================================================================== */
+
+class ModuleSwitch : public Module {
+public:
+    ModuleSwitch()
+    {
+        configure("SWITCH", "SWITCH", 5, 2);
+        addKnob("STEPS", 2.0f, 4.0f, 4.0f, "%.0f", PC_LIN, 1.0f);
+        addInput("CLOCK");
+        addInput("RESET");
+        addInput("IN 1");
+        addInput("IN 2");
+        addInput("IN 3");
+        addInput("IN 4");
+        addOutput("OUT");
+        addOutput("STEP");
+    }
+
+    void reset() { pos = 0; last = 0.0f; lastRst = 0.0f; }
+
+    void process()
+    {
+        const int ch = polyIn();
+        setAllOutputChannels(ch);
+        const int steps = (int)(pv(0) + 0.5f);
+
+        for (int i = 0; i < BS_BLOCK; i++) {
+            const float r = in(1).get(0, i);
+            if (r > 1.0f && lastRst <= 1.0f) pos = 0;
+            lastRst = r;
+
+            const float c = in(0).get(0, i);
+            if (c > 1.0f && last <= 1.0f) pos = (pos + 1) % (steps < 2 ? 2 : steps);
+            last = c;
+
+            for (int ci = 0; ci < ch; ci++)
+                outs[0].v[ci][i] = in(2 + pos).get(ci, i);
+            outs[1].v[0][i] = (float)pos * 2.5f;
+        }
+    }
+
+private:
+    int   pos;
+    float last, lastRst;
+};
+
+/* ================================================================== *
+ * FOLD - wavefolder
+ *
+ * The other tradition. Subtractive synthesis starts with a rich wave and
+ * takes parts away; this starts with a sine and makes it complicated by
+ * folding it back on itself every time it exceeds a limit. Each fold adds
+ * harmonics, and the count changes with level - so the timbre moves with the
+ * envelope in a way a filter sweep cannot imitate.
+ * ================================================================== */
+
+class ModuleFold : public Module {
+public:
+    ModuleFold()
+    {
+        configure("FOLD", "FOLD", 4, 2);
+        addKnob("GAIN", 1.0f, 12.0f, 2.0f, "%.2f");
+        addKnob("SYM", -1.0f, 1.0f, 0.0f, "%+.2f");
+        addKnob("CV",   0.0f, 8.0f, 0.0f, "%.2f");
+        addInput("IN");
+        addInput("CV");
+        addOutput("OUT");
+    }
+
+    void process()
+    {
+        const int ch = polyIn();
+        setAllOutputChannels(ch);
+        const float g0 = pv(0), sym = pv(1), cv = pv(2);
+
+        for (int c = 0; c < ch; c++) {
+            for (int i = 0; i < BS_BLOCK; i++) {
+                const float g = clampf(g0 + cv * in(1).get(c, i) * 0.1f, 0.0f, 16.0f);
+                float x = in(0).get(c, i) * 0.2f * g + sym;
+
+                /* Six passes is enough for any gain this module offers, and
+                 * bounded so a runaway input cannot spin here. */
+                for (int n = 0; n < 6; n++) {
+                    if (x > 1.0f)       x =  2.0f - x;
+                    else if (x < -1.0f) x = -2.0f - x;
+                    else break;
+                }
+                /* Rounded off at the peaks: the triangle a pure fold produces
+                 * has corners, and corners alias. */
+                outs[0].v[c][i] = std::sin(1.5707963f * x) * 5.0f;
+            }
+        }
+    }
+};
+
+/* ================================================================== *
+ * CRUSH - bit depth and sample rate reduction
+ * ================================================================== */
+
+class ModuleCrush : public Module {
+public:
+    ModuleCrush()
+    {
+        configure("CRUSH", "CRUSH", 4, 2);
+        addKnob("BITS", 1.0f, 16.0f, 8.0f, "%.1f");
+        addKnob("RATE", 200.0f, 24000.0f, 24000.0f, "%.0f Hz", PC_EXP);
+        addKnob("MIX",  0.0f, 1.0f, 1.0f, "%.2f");
+        addInput("IN");
+        addOutput("OUT");
+    }
+
+    void reset()
+    {
+        for (int c = 0; c < BS_MAX_POLY; c++) { hold[c] = 0.0f; phase[c] = 0.0f; }
+    }
+
+    void process()
+    {
+        const int ch = polyIn();
+        setAllOutputChannels(ch);
+        const float steps = std::pow(2.0f, clampf(pv(0), 1.0f, 16.0f)) * 0.5f;
+        const float inc = clampf(pv(1), 1.0f, sr) / sr;
+        const float mix = pv(2);
+
+        for (int c = 0; c < ch; c++) {
+            for (int i = 0; i < BS_BLOCK; i++) {
+                const float x = in(0).get(c, i);
+                phase[c] += inc;
+                if (phase[c] >= 1.0f) {
+                    phase[c] -= 1.0f;
+                    hold[c] = std::floor(x * 0.2f * steps + 0.5f) / steps * 5.0f;
+                }
+                outs[0].v[c][i] = lerpf(x, hold[c], mix);
+            }
+        }
+    }
+
+private:
+    float hold[BS_MAX_POLY], phase[BS_MAX_POLY];
+};
+
+/* ================================================================== *
+ * CHORUS - the modulated delay
+ *
+ * The third of the three time effects and the one that was missing. A delay
+ * short enough to be heard as thickness rather than as an echo, with its
+ * length moving - so the copy is always slightly out of tune with the
+ * original, which is what a room full of nearly identical instruments sounds
+ * like. Mono in, stereo out, with the two sides moving in opposition.
+ * ================================================================== */
+
+class ModuleChorus : public Module {
+public:
+    ModuleChorus()
+    {
+        configure("CHORUS", "CHORUS", 5, 2);
+        addKnob("RATE",  0.02f, 8.0f, 0.6f, "%.2f Hz", PC_EXP);
+        addKnob("DEPTH", 0.0f, 1.0f, 0.45f, "%.2f");
+        addKnob("DELAY", 0.002f, 0.040f, 0.012f, "%.3f s");
+        addKnob("FBK",  -0.9f, 0.9f, 0.0f, "%+.2f");
+        addKnob("MIX",   0.0f, 1.0f, 0.5f, "%.2f");
+        addInput("IN");
+        addOutput("L");
+        addOutput("R");
+    }
+
+    void onSampleRate() { for (int k = 0; k < 2; k++) line[k].alloc((int)(sr * 0.09f) + 8); }
+    void reset() { for (int k = 0; k < 2; k++) { line[k].clear(); fb[k] = 0.0f; } ph = 0.0f; }
+
+    void process()
+    {
+        setAllOutputChannels(1);
+        const float rate = pv(0), depth = pv(1), base = pv(2);
+        const float fbk = pv(3), mix = pv(4);
+
+        for (int i = 0; i < BS_BLOCK; i++) {
+            const float x = in(0).sum(i);
+            ph += rate / sr;
+            if (ph >= 1.0f) ph -= 1.0f;
+
+            float wet[2];
+            for (int k = 0; k < 2; k++) {
+                /* Half a cycle apart, so the two sides drift against each
+                 * other and the result is wide rather than merely doubled. */
+                const float lfo = std::sin(6.2831853f * (ph + (k ? 0.5f : 0.0f)));
+                const float d = (base * (1.0f + depth * 0.7f * lfo)) * sr;
+                wet[k] = line[k].read(d);
+                line[k].write(x * 0.2f + wet[k] * fbk);
+                outs[k].v[0][i] = lerpf(x, wet[k] * 5.0f, mix);
+            }
+        }
+    }
+
+private:
+    Delay line[2];
+    float fb[2], ph;
+};
+
+/* ================================================================== *
+ * SLEW - portamento for anything
+ *
+ * FUNC in SLEW mode does this too; this is the four-unit version for when the
+ * rack is full and all that is wanted is to round the corners off a stepped
+ * voltage.
+ * ================================================================== */
+
+class ModuleSlew : public Module {
+public:
+    ModuleSlew()
+    {
+        configure("SLEW", "SLEW", 4, 2);
+        addKnob("RISE", 0.0f, 4.0f, 0.05f, "%.3f s", PC_EXP);
+        addKnob("FALL", 0.0f, 4.0f, 0.05f, "%.3f s", PC_EXP);
+        addInput("IN");
+        addOutput("OUT");
+    }
+
+    void reset() { for (int c = 0; c < BS_MAX_POLY; c++) v[c] = 0.0f; }
+
+    void process()
+    {
+        const int ch = polyIn();
+        setAllOutputChannels(ch);
+        const float rise = pv(0), fall = pv(1);
+        for (int c = 0; c < ch; c++) {
+            for (int i = 0; i < BS_BLOCK; i++) {
+                const float t = in(0).get(c, i);
+                const float time = (t > v[c]) ? rise : fall;
+                if (time <= 0.0002f) v[c] = t;
+                else v[c] += (t - v[c]) * (1.0f - std::exp(-1.0f / (time * sr + 1.0f)));
+                outs[0].v[c][i] = v[c];
+            }
+        }
+    }
+
+private:
+    float v[BS_MAX_POLY];
+};
+
+/* ================================================================== *
+ * SVF - state variable filter
+ *
+ * The ladder is a lowpass and only a lowpass, which leaves out most of what a
+ * filter is for: a highpass is how a lead stops being muddy and how a pad
+ * stops fighting the bass, and a bandpass is most of a wah or a formant.
+ *
+ * Topology-preserving transform, same family as the ladder, so it stays stable
+ * when the cutoff is swept hard. All four responses come out of the same two
+ * integrators - they are not four filters, they are four places to listen.
+ * ================================================================== */
+
+class ModuleSvf : public Module {
+public:
+    ModuleSvf()
+    {
+        configure("SVF", "SVF", 6, 3);
+        addKnob("CUTOFF", 20.0f, 18000.0f, 1200.0f, "%.0f Hz", PC_EXP);
+        addKnob("RES",    0.0f, 1.0f, 0.2f, "%.2f");
+        addKnob("CV1",   -4.0f, 4.0f, 0.0f, "%+.2f");
+        addKnob("CV2",   -4.0f, 4.0f, 0.0f, "%+.2f");
+        addKnob("KTRK",   0.0f, 1.0f, 0.0f, "%.2f");
+
+        addInput("IN");
+        addInput("CV1");
+        addInput("CV2");
+        addInput("V/OCT");
+        addOutput("LP");
+        addOutput("HP");
+        addOutput("BP");
+        addOutput("NOTCH");
+    }
+
+    void reset()
+    {
+        for (int c = 0; c < BS_MAX_POLY; c++) { s1[c] = 0.0f; s2[c] = 0.0f; }
+    }
+
+    void process()
+    {
+        const int ch = polyIn();
+        setAllOutputChannels(ch);
+
+        const float base = pv(0);
+        /* Damping, not resonance: the two are reciprocal, and at k = 0 this
+         * self-oscillates. Stopping a little short of zero keeps it musical
+         * without needing the saturator the ladder has. */
+        const float k = 2.0f - 1.98f * clampf(pv(1), 0.0f, 1.0f);
+        const float a1 = pv(2), a2 = pv(3), ktrk = pv(4);
+
+        for (int c = 0; c < ch; c++) {
+            for (int i = 0; i < BS_BLOCK; i++) {
+                const float mod = a1 * in(1).get(c, i) + a2 * in(2).get(c, i)
+                                + ktrk * in(3).get(c, i);
+                const float fc = clampf(base * std::exp2(mod), 10.0f, sr * 0.45f);
+                const float g  = std::tan(3.14159265358979f * fc / sr);
+
+                const float x  = in(0).get(c, i);
+                const float hp = (x - (k + g) * s1[c] - s2[c]) / (1.0f + g * (g + k));
+                const float bp = g * hp + s1[c];
+                s1[c] = g * hp + bp;
+                const float lp = g * bp + s2[c];
+                s2[c] = g * bp + lp;
+
+                outs[0].v[c][i] = lp;
+                outs[1].v[c][i] = hp;
+                outs[2].v[c][i] = bp;
+                outs[3].v[c][i] = hp + lp;      /* notch */
+            }
+        }
+    }
+
+private:
+    float s1[BS_MAX_POLY], s2[BS_MAX_POLY];
+};
+
+/* ================================================================== *
+ * FUNC - function generator
+ *
+ * The most useful module in a modular, and the hardest to describe, because
+ * what it is depends on what you patch. Rise and fall with a shape control:
+ * triggered it is an attack-decay envelope; cycling it is an LFO of any shape
+ * from ramp to triangle to inverse ramp; fed a stepped voltage with CYCLE off
+ * and a long rise it is a slew limiter; fed audio it is an envelope follower.
+ *
+ * EOC fires at the end of each fall, which is what chains two of them into a
+ * sequence, or makes one clock another.
+ * ================================================================== */
+
+class ModuleFunc : public Module {
+public:
+    ModuleFunc()
+    {
+        configure("FUNC", "FUNC", 5, 2);
+        addKnob("RISE", 0.0005f, 10.0f, 0.02f, "%.3f s", PC_EXP);
+        addKnob("FALL", 0.0005f, 10.0f, 0.40f, "%.3f s", PC_EXP);
+        /* Below a half it is exponential, above it logarithmic, and at a half
+         * it is a straight line. One knob because the two are the same
+         * gesture: how the curve leans. */
+        addKnob("SHAPE", 0.0f, 1.0f, 0.5f, "%.2f");
+        addKnob("LEVEL", 0.0f, 10.0f, 10.0f, "%.1f V");
+        /* Stated rather than inferred. An unpatched jack reads as silence on
+         * purpose here, so process() never has to ask whether a cable exists -
+         * which means "follow IN when TRIG is empty" would be a hidden branch
+         * on something the rest of the rack deliberately does not look at. */
+        static const char *const MODES[] = { "ENV", "CYCLE", "SLEW" };
+        addSwitch("MODE", MODES, 3, 0);
+
+        addInput("TRIG");
+        addInput("IN");        /* what SLEW follows */
+        addOutput("OUT");
+        addOutput("EOC");
+        addOutput("INV");
+    }
+
+    void reset()
+    {
+        for (int c = 0; c < BS_MAX_POLY; c++) {
+            v[c] = 0.0f; rising[c] = 0; last[c] = 0.0f; eoc[c] = 0.0f;
+        }
+    }
+
+    void process()
+    {
+        const int ch = polyIn();
+        setAllOutputChannels(ch);
+
+        const float rise = pv(0), fall = pv(1);
+        const float shape = clampf(pv(2), 0.0f, 1.0f);
+        const float level = pv(3);
+        const int mode  = (int)(pv(4) + 0.5f);   /* 0 env, 1 cycle, 2 slew */
+        const int cycle = (mode == 1);
+
+        for (int c = 0; c < ch; c++) {
+            for (int i = 0; i < BS_BLOCK; i++) {
+                const float g = in(0).get(c, i);
+                const int edge = (g > 1.0f && last[c] <= 1.0f);
+                last[c] = g;
+                if (edge) rising[c] = 1;
+                if (cycle && v[c] <= 0.0f && !rising[c]) rising[c] = 1;
+
+                if (eoc[c] > 0.0f) eoc[c] -= 1.0f;
+
+                /* Shape leans the curve by moving the target past the
+                 * destination: chasing 1.2 and stopping at 1.0 is a straight
+                 * line, chasing exactly 1.0 is the usual exponential crawl. */
+                const float lean = 1.0f + (1.0f - shape) * 3.0f;
+                if (rising[c]) {
+                    const float k = 1.0f - std::exp(-1.0f / (rise * sr + 1.0f));
+                    v[c] += (lean - v[c]) * k;
+                    if (v[c] >= 1.0f) { v[c] = 1.0f; rising[c] = 0; }
+                } else {
+                    const float k = 1.0f - std::exp(-1.0f / (fall * sr + 1.0f));
+                    v[c] += ((1.0f - lean) - v[c]) * k;
+                    if (v[c] <= 0.0f) {
+                        v[c] = 0.0f;
+                        eoc[c] = sr * 0.002f;      /* a 2 ms trigger */
+                    }
+                }
+
+                /* SLEW chases the input at the same two rates: a stepped
+                 * voltage becomes a glide, and audio becomes an envelope
+                 * follower. Same module, same two knobs. */
+                float outv = v[c];
+                if (mode == 2) {
+                    const float target = clampf(in(1).get(c, i) * 0.1f, -1.0f, 1.0f);
+                    const float k = 1.0f - std::exp(-1.0f /
+                        ((target > v[c] ? rise : fall) * sr + 1.0f));
+                    v[c] += (target - v[c]) * k;
+                    outv = v[c];
+                }
+
+                /* SLEW may legitimately go negative - it is following a
+                 * bipolar voltage - so only the generated shapes are clamped
+                 * to the positive half. */
+                if (mode != 2) outv = clampf(outv, 0.0f, 1.0f);
+                outs[0].v[c][i] = outv * level;
+                outs[1].v[c][i] = eoc[c] > 0.0f ? 10.0f : 0.0f;
+                outs[2].v[c][i] = (1.0f - clampf(outv, 0.0f, 1.0f)) * level;
+                (void)0;
+            }
+        }
+    }
+
+private:
+    float v[BS_MAX_POLY], last[BS_MAX_POLY], eoc[BS_MAX_POLY];
+    int   rising[BS_MAX_POLY];
+};
+
+/* ================================================================== *
  * DLY - echo
  *
  * Monophonic by construction: it sums the channels arriving at its input.
@@ -1028,9 +1925,12 @@ static const ModuleType TYPES[] = {
     { "VCO",   "VCO",        "SOURCE", makeT<ModuleVco>   },
     { "LFO",   "LFO",        "SOURCE", makeT<ModuleLfo>   },
     { "NOISE", "NOISE / S&H","SOURCE", makeT<ModuleNoise> },
+    { "STRING","STRING",     "SOURCE", makeT<ModuleString> },
     { "VCF",   "VCF",        "SHAPE",  makeT<ModuleVcf>   },
+    { "SVF",   "SVF",        "SHAPE",  makeT<ModuleSvf>   },
     { "VCA",   "VCA",        "SHAPE",  makeT<ModuleVca>   },
     { "ADSR",  "ADSR",       "SHAPE",  makeT<ModuleAdsr>  },
+    { "FUNC",  "FUNC",       "SHAPE",  makeT<ModuleFunc>  },
     { "MIX",   "MIX",        "UTILITY",makeT<ModuleMix>   },
     { "MULT",  "MULT",       "UTILITY",makeT<ModuleMult>  },
     { "ATT",   "ATT",        "UTILITY",makeT<ModuleAtt>   },
@@ -1040,6 +1940,15 @@ static const ModuleType TYPES[] = {
     { "MACRO", "MACRO",      "UTILITY",makeT<ModuleMacro> },
     { "SCOPE", "SCOPE",      "UTILITY",makeT<ModuleScope> },
     { "TEXT",  "TEXT / NOTES","UTILITY",makeT<ModuleText> },
+    { "FOLD",  "FOLD",       "SHAPE",  makeT<ModuleFold>  },
+    { "CRUSH", "CRUSH",      "SHAPE",  makeT<ModuleCrush> },
+    { "SLEW",  "SLEW",       "UTILITY",makeT<ModuleSlew>  },
+    { "QUANT", "QUANT",      "UTILITY",makeT<ModuleQuant> },
+    { "CLK",   "CLK",        "SOURCE", makeT<ModuleClk>   },
+    { "SEQ",   "SEQ",        "SOURCE", makeT<ModuleSeq>   },
+    { "LOGIC", "LOGIC",      "UTILITY",makeT<ModuleLogic> },
+    { "SWITCH","SWITCH",     "UTILITY",makeT<ModuleSwitch> },
+    { "CHORUS","CHORUS",     "EFFECT", makeT<ModuleChorus> },
     { "OUT",   "OUT",        "OUTPUT", makeT<ModuleOut>   }
 };
 

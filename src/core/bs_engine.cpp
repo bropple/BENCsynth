@@ -296,6 +296,8 @@ enum { OUT_LEVEL };
 
 const float R1 = 20.0f;
 const float R2 = 375.0f;
+const float R3 = 730.0f;
+const float R4 = 1085.0f;
 
 /* ---------------------------------------------------------------- */
 
@@ -679,6 +681,216 @@ void presetPiano(Builder &b)
     b.set(rvb, RVB_MIX,  0.17f);
 
     b.set(out, OUT_LEVEL, 0.82f);
+}
+
+/* A piano the way a piano actually works.
+ *
+ * PIANO next door does it by subtraction and gets remarkably close on
+ * gesture - decay while held, brightness dying faster than loudness, both
+ * scaling with velocity. What it cannot do at all is inharmonicity, because
+ * every oscillator in this rack has exactly harmonic partials and no filter
+ * introduces stretch. That is the difference between "convincing synthesizer
+ * piano" and "piano".
+ *
+ * This one is a modelled string: a delay line whose length is the pitch, with
+ * a chain of allpasses in the loop making the delay depend on frequency. The
+ * partials come out sharp of the harmonic series by exactly the amount the
+ * stiffness knob asks for - measured at 1.2e-4, which is a real piano's
+ * midrange - and the hammer is a noise burst that gets brighter when struck
+ * harder, because felt stiffens under load.
+ *
+ * The rest is a room: a little chorus for the two-strings-per-note beating
+ * that the model's own detuning starts, and a reverb for the soundboard.
+ */
+void presetGrand(Builder &b)
+{
+    b.row(R1);
+    const int kbd  = b.put("KBD");
+    const int str  = b.put("STRING");
+    const int svf  = b.put("SVF");
+    const int envA = b.put("ADSR");
+    const int vca  = b.put("VCA");
+
+    b.row(R2);
+    b.x = 560.0f;
+    const int cho = b.put("CHORUS");
+    const int rvb = b.put("RVB");
+    const int out = b.put("OUT");
+
+    b.wire(kbd, KBD_PITCH, str, 0);
+    b.wire(kbd, KBD_TRIG,  str, 1);
+    b.wire(kbd, KBD_VEL,   str, 1);      /* velocity strikes it harder */
+    b.wire(kbd, KBD_GATE,  envA, ADSR_IN_GATE);
+    b.wire(kbd, KBD_TRIG,  envA, ADSR_IN_TRIG);
+    b.wire(kbd, KBD_VEL,   envA, ADSR_IN_VEL);
+    b.wire(kbd, KBD_PITCH, svf, 3);      /* the top of a piano is not the bottom */
+
+    b.wire(str, 0, svf, 0);
+    b.wire(svf, 0, vca, VCA_IN);
+    b.wire(envA, ADSR_ENV, vca, VCA_IN_CV);
+    b.wire(vca, 0, cho, 0);
+    b.wire(cho, 0, rvb, 0);
+    b.wire(rvb, 0, out, 0);
+    b.wire(rvb, 1, out, 1);
+
+    b.set(kbd, KBD_VOICES, 8.0f);
+
+    b.set(str, 2, 0.93f);        /* DECAY  - long, this is a grand           */
+    b.set(str, 3, 0.60f);        /* BRIGHT                                    */
+    b.set(str, 4, 0.50f);        /* INHARM - measured at B = 1.2e-4           */
+    b.set(str, 5, 0.13f);        /* STRIKE - an eighth along, as a piano is   */
+    b.set(str, 6, 2.6f);         /* SPREAD - the strings per note, in cents   */
+
+    /* The damper, not the tone: the string already decides its own colour, so
+     * this only stops the very top from being glassy, and tracks the keyboard
+     * so the treble is not filtered into silence. */
+    b.set(svf, 0, 5200.0f);
+    b.set(svf, 1, 0.05f);
+    b.set(svf, 4, 0.55f);
+
+    /* Only the release matters. The string decays on its own - the amplifier
+     * envelope is a damper, and its job is to stop the note when the key comes
+     * up rather than to shape it while it is down. */
+    b.set(envA, ADSR_A, 0.0005f); b.set(envA, ADSR_D, 8.0f);
+    b.set(envA, ADSR_S, 1.0f);    b.set(envA, ADSR_R, 0.22f);
+    b.set(envA, ADSR_VEL, 0.25f);
+    b.set(vca, VCA_RESP, 0.0f);
+
+    b.set(cho, 0, 0.35f); b.set(cho, 1, 0.22f); b.set(cho, 4, 0.22f);
+    b.set(rvb, RVB_SIZE, 0.52f); b.set(rvb, RVB_DAMP, 0.62f);
+    b.set(rvb, RVB_MIX, 0.20f);
+    b.set(out, OUT_LEVEL, 0.80f);
+}
+
+/* The other tradition, in one rack. No filter anywhere. */
+void presetWestCoast(Builder &b)
+{
+    b.row(R1);
+    const int kbd  = b.put("KBD");
+    const int vco  = b.put("VCO");
+    const int fold = b.put("FOLD");
+    const int func = b.put("FUNC");
+    const int vca  = b.put("VCA");
+
+    b.row(R2);
+    b.x = 560.0f;
+    const int lfo = b.put("LFO");
+    const int rvb = b.put("RVB");
+    const int out = b.put("OUT");
+
+    b.wire(kbd, KBD_PITCH, vco, VCO_IN_PITCH);
+    b.wire(kbd, KBD_GATE,  func, 0);
+    b.wire(kbd, KBD_TRIG,  func, 0);
+    b.wire(vco, VCO_SIN,   fold, 0);
+    /* The envelope drives the folding, not a filter: louder is not brighter
+     * here, it is MORE FOLDED, which is a different kind of movement. */
+    b.wire(func, 0, fold, 1);
+    b.wire(lfo, LFO_TRI, vca, VCA_IN_CV);
+    b.wire(fold, 0, vca, VCA_IN);
+    b.wire(func, 0, vca, VCA_IN_CV);
+    b.wire(vca, 0, rvb, 0);
+    b.wire(rvb, 0, out, 0);
+    b.wire(rvb, 1, out, 1);
+
+    b.set(kbd, KBD_VOICES, 4.0f);
+    b.set(fold, 0, 1.4f); b.set(fold, 2, 5.0f);
+    b.set(func, 0, 0.004f); b.set(func, 1, 1.1f); b.set(func, 2, 0.25f);
+    b.set(lfo, LFO_RATE, 0.25f); b.set(lfo, LFO_UNI, 1.0f);
+    b.set(vca, VCA_RESP, 1.0f);
+    b.set(rvb, RVB_SIZE, 0.66f); b.set(rvb, RVB_MIX, 0.30f);
+    b.set(out, OUT_LEVEL, 0.55f);
+}
+
+/* Nothing held down, and it plays for as long as you leave it. */
+void presetOracle(Builder &b)
+{
+    b.row(R1);
+    const int clk   = b.put("CLK");
+    const int seq   = b.put("SEQ");
+    const int quant = b.put("QUANT");
+    const int slew  = b.put("SLEW");
+    const int vco   = b.put("VCO");
+    const int vcf   = b.put("SVF");
+
+    b.row(R2);
+    const int func  = b.put("FUNC");
+    const int logic = b.put("LOGIC");
+    const int vca   = b.put("VCA");
+    const int dly   = b.put("DLY");
+    const int rvb   = b.put("RVB");
+    const int out   = b.put("OUT");
+
+    b.wire(clk, 0, seq, 0);
+    b.wire(clk, 1, logic, 0);
+    b.wire(clk, 2, logic, 1);
+    b.wire(logic, 2, func, 0);          /* XOR: an accent pattern */
+
+    b.wire(seq, 0, quant, 0);
+    b.wire(quant, 0, slew, 0);
+    b.wire(slew, 0, vco, VCO_IN_PITCH);
+    b.wire(seq, 1, vca, VCA_IN_CV);
+
+    b.wire(vco, VCO_SAW, vcf, 0);
+    b.wire(func, 0, vcf, 1);
+    b.wire(vcf, 0, vca, VCA_IN);
+    b.wire(vca, 0, dly, 0);
+    b.wire(dly, 0, rvb, 0);
+    b.wire(rvb, 0, out, 0);
+    b.wire(rvb, 1, out, 1);
+
+    b.set(clk, 0, 96.0f);
+    b.set(seq, 0, -1.0f);  b.set(seq, 1, 0.33f); b.set(seq, 2, 0.0f);
+    b.set(seq, 3, 0.58f);  b.set(seq, 4, 0.25f); b.set(seq, 5, -0.42f);
+    b.set(seq, 6, 0.75f);  b.set(seq, 7, 0.08f);
+    b.set(seq, 9, 0.02f);
+    b.set(quant, 0, 4.0f); b.set(quant, 1, 9.0f);
+    b.set(slew, 0, 0.02f); b.set(slew, 1, 0.02f);
+    b.set(vcf, 0, 500.0f); b.set(vcf, 1, 0.42f); b.set(vcf, 2, 2.2f);
+    b.set(func, 0, 0.002f); b.set(func, 1, 0.30f);
+    b.set(vca, VCA_RESP, 1.0f);
+    b.set(dly, DLY_TIME, 0.375f); b.set(dly, DLY_FBK, 0.45f);
+    b.set(dly, DLY_MIX, 0.35f);
+    b.set(rvb, RVB_SIZE, 0.78f); b.set(rvb, RVB_MIX, 0.34f);
+    b.set(out, OUT_LEVEL, 0.5f);
+}
+
+/* The same string, wound tight. */
+void presetBell(Builder &b)
+{
+    b.row(R1);
+    const int kbd = b.put("KBD");
+    const int str = b.put("STRING");
+    const int crs = b.put("CRUSH");
+    const int cho = b.put("CHORUS");
+
+    b.row(R2);
+    b.x = 460.0f;
+    const int rvb = b.put("RVB");
+    const int out = b.put("OUT");
+
+    b.wire(kbd, KBD_PITCH, str, 0);
+    b.wire(kbd, KBD_TRIG,  str, 1);
+    b.wire(kbd, KBD_VEL,   str, 1);
+    b.wire(str, 0, crs, 0);
+    b.wire(crs, 0, cho, 0);
+    b.wire(cho, 0, rvb, 0);
+    b.wire(rvb, 0, out, 0);
+    b.wire(rvb, 1, out, 1);
+
+    b.set(kbd, KBD_VOICES, 6.0f);
+    /* Stiffness at the top of its range: the partials go so far sharp that
+     * they stop being a harmonic series at all, which is what a struck metal
+     * bar is. */
+    b.set(str, 2, 0.97f);
+    b.set(str, 3, 0.80f);
+    b.set(str, 4, 1.00f);
+    b.set(str, 5, 0.28f);
+    b.set(str, 6, 6.0f);
+    b.set(crs, 0, 11.0f); b.set(crs, 1, 16000.0f); b.set(crs, 2, 0.30f);
+    b.set(cho, 0, 0.18f); b.set(cho, 1, 0.35f); b.set(cho, 4, 0.35f);
+    b.set(rvb, RVB_SIZE, 0.86f); b.set(rvb, RVB_DAMP, 0.35f);
+    b.set(rvb, RVB_MIX, 0.42f);
+    b.set(out, OUT_LEVEL, 0.6f);
 }
 
 void presetPluck(Builder &b)
@@ -1861,6 +2073,87 @@ void presetGrandTour(Builder &b)
     b.set(dly,  DLY_TIME, 0.28f); b.set(dly, DLY_FBK, 0.42f);
     b.set(dly,  DLY_CV, 0.06f);   b.set(dly, DLY_MIX, 0.30f);
     b.set(rvb,  RVB_SIZE, 0.72f); b.set(rvb, RVB_MIX, 0.30f);
+
+    /* ---- and the second half of the rack ----
+     *
+     * A sequenced voice that shares nothing with the one above except the
+     * output: its own clock, its own pitch source, a struck string instead of
+     * an oscillator, and the whole shaping chain the rack has that subtraction
+     * does not - folding, crushing and a modulated delay. */
+    b.row(R3);
+    const int clk    = b.put("CLK");
+    const int seq    = b.put("SEQ");
+    const int quant  = b.put("QUANT");
+    const int slew   = b.put("SLEW");
+    const int str    = b.put("STRING");
+    const int svf    = b.put("SVF");
+
+    b.row(R4);
+    const int func   = b.put("FUNC");
+    const int logic  = b.put("LOGIC");
+    const int sw     = b.put("SWITCH");
+    const int fold   = b.put("FOLD");
+    const int crush  = b.put("CRUSH");
+    const int chorus = b.put("CHORUS");
+    const int mixL   = b.put("MIX");
+    const int mixR   = b.put("MIX");
+
+    /* Clock, and two divisions of it disagreeing with each other. */
+    b.wire(clk, 0, seq, 0);
+    b.wire(clk, 1, logic, 0);
+    b.wire(clk, 2, logic, 1);
+    b.wire(logic, 2, sw, 0);           /* XOR: a pattern neither input has */
+
+    /* Pitch: stepped, rounded to a scale, then the corners taken off. */
+    b.wire(seq, 0, quant, 0);
+    b.wire(quant, 0, slew, 0);
+    b.wire(slew, 0, str, 0);
+    b.wire(seq, 1, str, 1);            /* the gate strikes it */
+
+    b.wire(str, 0, svf, 0);
+    b.wire(func, 0, svf, 1);           /* cycling, so it is an LFO here */
+
+    /* Four things to be, one at a time, on a rhythm from the logic. */
+    b.wire(svf, 0, sw, 2);
+    b.wire(str, 0, sw, 3);
+    b.wire(noise, NOISE_PNK, sw, 4);
+    b.wire(vco3, VCO_SIN, sw, 5);
+
+    b.wire(sw, 0, fold, 0);
+    b.wire(fold, 0, crush, 0);
+    b.wire(crush, 0, chorus, 0);
+
+    /* Both halves meet here rather than fighting over the output's two jacks. */
+    b.wire(rvb, 0, mixL, 0);
+    b.wire(chorus, 0, mixL, 1);
+    b.wire(rvb, 1, mixR, 0);
+    b.wire(chorus, 1, mixR, 1);
+    b.wire(mixL, 0, out, 0);
+    b.wire(mixR, 0, out, 1);
+
+    /* The clock starts stopped. GRAND TOUR is declared as a rack that makes no
+     * sound until you play it, and a sequencer running under a held chord
+     * would quietly break that promise - so this half is an invitation rather
+     * than an ambush. The note tells you where the switch is. */
+    b.set(clk, 0, 104.0f);
+    b.set(clk, 2, 0.0f);                /* RUN off */
+    b.set(seq, 0, -1.00f); b.set(seq, 1, 0.25f);  b.set(seq, 2, 0.42f);
+    b.set(seq, 3, 0.00f);  b.set(seq, 4, -0.58f); b.set(seq, 5, 0.25f);
+    b.set(seq, 6, 0.67f);  b.set(seq, 7, 0.08f);
+    b.set(seq, 8, 8.0f);   b.set(seq, 9, 0.01f);
+    b.set(quant, 0, 4.0f);              /* minor pentatonic */
+    b.set(quant, 1, 9.0f);              /* rooted on A      */
+    b.set(slew, 0, 0.008f); b.set(slew, 1, 0.008f);
+    b.set(str, 2, 0.90f);               /* DECAY  */
+    b.set(str, 3, 0.62f);               /* BRIGHT */
+    b.set(str, 4, 0.50f);               /* INHARM - about a real piano's */
+    b.set(svf, 0, 900.0f); b.set(svf, 1, 0.35f); b.set(svf, 2, 1.4f);
+    b.set(func, 0, 0.9f); b.set(func, 1, 1.6f); b.set(func, 4, 1.0f);  /* CYCLE */
+    b.set(fold, 0, 1.7f);
+    b.set(crush, 0, 9.0f); b.set(crush, 1, 12000.0f); b.set(crush, 2, 0.45f);
+    b.set(chorus, 1, 0.55f); b.set(chorus, 4, 0.45f);
+    b.set(mixL, MIX_1, 0.85f); b.set(mixL, MIX_2, 0.42f);
+    b.set(mixR, MIX_1, 0.85f); b.set(mixR, MIX_2, 0.42f);
     b.set(out,  OUT_LEVEL, 0.55f);
 }
 
@@ -1950,6 +2243,14 @@ const PresetEntry PRESETS[] = {
       "SAW PAD\n\nEight voices, two saws pulled a few cents apart, and enough reverb to lose the edges. The slow attack is on both envelopes.\n\nTRY: hold a chord and turn VCF CV2 - that is the LFO on the cutoff, and it is what keeps a long note from standing still." }, presetPad },
     { { "PIANO",        "struck string - decays while held, brightness first", 0,
       "PIANO\n\nSubtractive synthesis cannot make a real piano: a struck string's partials are stretched sharp of the harmonic series and nothing here can be inharmonic. What it can copy is the three things the ear actually identifies a piano by, none of which are the waveform.\n\nOne: it decays while you hold it. Two: the brightness dies far faster than the loudness, so a note a second old is nearly a sine. Three: both scale with how hard you hit it and how high you play.\n\nSo the sound is in three envelopes, not the oscillators. Two saws a few cents apart are the strings, the pulse is the hollow midrange, and the 22 ms noise burst is the hammer.\n\nTRY: pull the NOISE mixer channel (IN4) to zero. The hammer disappears and it turns into an organ - that one twentieth of a second is most of the instrument. Then put it back and raise the amplifier envelope's S: it stops being a piano the moment it stops decaying." }, presetPiano },
+    { { "GRAND",        "a modelled string - stretched partials, felt hammer", 0,
+      "GRAND\n\nA piano the way a piano works, rather than an imitation of one.\n\nPIANO next door is subtractive, and gets remarkably close on gesture: it decays while held, its brightness dies faster than its loudness, and both scale with velocity. What it cannot do is INHARMONICITY. A real string is stiff, so wave speed depends on frequency and the partials are stretched sharp of the harmonic series - f(n) = n f0 sqrt(1 + B n^2). Every oscillator in this rack is exactly harmonic and no filter introduces stretch. That is the whole difference.\n\nThis is a modelled string: a delay line whose length is the pitch, with allpasses in the loop making the delay depend on frequency. That is the stiffness. The hammer is a noise burst that gets brighter when struck harder, because felt stiffens under load - so velocity changes the spectrum, not just the level.\n\nTRY: turn INHARM to 0 and play. It becomes a guitar harmonic - the partials are where the maths says they should be and it sounds wrong for a piano. Put it back to 0.5, which measures at B = 1.2e-4, about a real piano midrange. Then take it to 1.0 for a bell.\n\nAlso: DECAY is how long the note rings, STRIKE is where the hammer hits along the string, and SPREAD is how far apart the two strings per note are." }, presetGrand },
+    { { "WEST COAST",   "a sine, folded - no filter anywhere", 0,
+      "WEST COAST\n\nThe other tradition. Subtractive synthesis starts with a rich wave and removes parts of it; this starts with a SINE - the poorest wave there is - and makes it complicated by folding it back on itself every time it passes a limit.\n\nThere is no filter in this rack at all. The envelope drives the FOLD's depth instead of a cutoff, so playing harder does not open a filter, it folds more times. The harmonics that appear are a different set each fold, which is why the movement does not sound like a sweep.\n\nTRY: turn FOLD's GAIN down to 1.00. It collapses back to the sine it always was. Then raise the LFO rate and hear the tremolo the VCA is doing underneath." }, presetWestCoast },
+    { { "ORACLE",       "sequenced, quantised, and plays itself", 1,
+      "ORACLE\n\nNothing is held down and nothing needs to be. A CLK drives a SEQ, the SEQ's voltages are rounded by a QUANT to A minor pentatonic - which is what stops a sequence of arbitrary voltages being a sequence of arbitrary notes - and a SLEW takes the corners off so the pitch glides rather than jumps.\n\nThe rhythm is made rather than programmed: two divisions of the same clock go into a LOGIC, and the XOR of /2 and /4 fires on every beat where exactly one of them is high. That is a pattern neither input contains.\n\nTRY: change QUANT's SCALE. The same eight voltages become a different piece of music. Then turn the CLK's RUN off and on to hear where it restarts." }, presetOracle },
+    { { "BELL",         "the same string, wound until it rings", 0,
+      "BELL\n\nGRAND and this are the same module. The only real difference is INHARM at 1.00 instead of 0.50.\n\nAt a piano's stiffness the partials are stretched a few cents and the ear still hears a pitch with overtones. Push it further and the stretch is so large that the partials stop forming a harmonic series at all - and a sound with inharmonic partials that ring for a long time is what a struck metal bar is. It stops being a string and becomes a bell without changing a single cable.\n\nTRY: sweep INHARM slowly from 0 to 1 while playing. Somewhere around 0.5 it is a piano and around 0.8 it stops being one." }, presetBell },
     { { "PLUCK",        "no sustain, resonant filter chirp", 0,
       "PLUCK\n\nNo sustain at all on either envelope, so a held key still decays to nothing. The filter envelope is short and the resonance is high, which puts a chirp on the front of every note.\n\nTRY: raise the amplifier envelope's S and it stops being a pluck immediately." },          presetPluck },
     { { "DRONE",        "the filter is the oscillator - no keys needed", 1,
@@ -1999,7 +2300,7 @@ const PresetEntry PRESETS[] = {
       presetAxel },
 
     { { "GRAND TOUR",   "every module in the set, patched into one instrument", 0,
-      "GRAND TOUR\n\nEvery module type in the rack, working at once.\n\nThe signal path is ordinary: three oscillators through a mixer into the ladder, two envelopes, a delay and a reverb. What is not ordinary is everything driving it.\n\nThe keyboard never reaches the oscillators. It reaches an ARP, and the arpeggiator's clock is what plays the rack. That same clock is sent through a MULT to both envelopes AND to the noise module's sample-and-hold, so every arpeggio step also grabs a new random voltage - which an ATT scales down to something musical and sends to the filter's second CV input.\n\nA second LFO bends the delay's TIME, which is why the echoes wow like tape.\n\nTRY: hold a chord and change the ARP's MODE and OCT. Then turn the ATT's AMT 1 to zero and hear the filter stop jumping." },
+      "GRAND TOUR\n\nEvery module type in the rack, working at once.\n\nThe signal path is ordinary: three oscillators through a mixer into the ladder, two envelopes, a delay and a reverb. What is not ordinary is everything driving it.\n\nThe keyboard never reaches the oscillators. It reaches an ARP, and the arpeggiator's clock is what plays the rack. That same clock is sent through a MULT to both envelopes AND to the noise module's sample-and-hold, so every arpeggio step also grabs a new random voltage - which an ATT scales down to something musical and sends to the filter's second CV input.\n\nA second LFO bends the delay's TIME, which is why the echoes wow like tape.\n\nTRY: hold a chord and change the ARP's MODE and OCT. Then turn the ATT's AMT 1 to zero and hear the filter stop jumping.\n\nTHE OTHER HALF: the bottom two rows are a second instrument that shares nothing with this one but the output. Turn the CLK's RUN on. A sequence steps, a QUANT rounds it to A minor pentatonic, a SLEW rounds the corners off that, and it strikes a STRING - a real one, modelled, with partials stretched sharp the way a piano's are. From there a SWITCH picks between four sources on a rhythm two clock divisions make by disagreeing through a LOGIC, and what comes out is folded, crushed and run through a CHORUS.\n\nTRY: with the clock running, turn the STRING's INHARM from 0 to 1. At the bottom it is a guitar harmonic; halfway it is a piano; at the top it is a bell. That one knob is the difference, and no filter can imitate it." },
       presetGrandTour }
 };
 
