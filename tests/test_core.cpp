@@ -571,6 +571,40 @@ static void test_presets()
                           "%s idled at RMS %%.4f, expected below %%.2f", rp->name);
             okf(idle < 0.02f, msg, idle, 0.02);
         }
+
+        /* And again, after letting go.
+         *
+         * A rack can play its first note perfectly and be deaf to every one
+         * after it. GRAND shipped that way: two cables had been run into the
+         * string's trigger jack, and since an input takes only one, the second
+         * replaced the first - so the trigger was receiving velocity, which is
+         * a level that stays high while a key is held rather than a pulse.
+         * The first note found an edge on the way up and struck. Nothing else
+         * ever did.
+         *
+         * Every check above passed on that rack, because all of them play one
+         * note. This plays four. */
+        e.noteOff(48); e.noteOff(55); e.noteOff(60);
+        e.render(&buf[0], SPAN / 4);
+
+        float again = 0.0f;
+        for (int n = 0; n < 3; n++) {
+            const int note = 52 + n * 5;
+            e.noteOn(note, 0.9f);
+            e.render(&buf[0], SPAN / 2);
+            const float p = peakOf(&buf[0], SPAN);
+            if (p > again) again = p;
+            e.noteOff(note);
+            e.render(&buf[0], SPAN / 4);
+        }
+
+        /* Against the rack's own loudness, not an absolute: a quiet patch is
+         * allowed to be quiet, it is not allowed to be quiet only after the
+         * first note. */
+        std::snprintf(msg, sizeof msg,
+                      "%s still answers later notes: peak %%.4f against %%.4f held",
+                      rp->name);
+        okf(again > played * 0.25f, msg, again, (double)played);
     }
 }
 

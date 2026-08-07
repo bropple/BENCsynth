@@ -710,6 +710,12 @@ void presetGrand(Builder &b)
     const int svf  = b.put("SVF");
     const int envA = b.put("ADSR");
     const int vca  = b.put("VCA");
+    /* The hammer's force. STRING reads the height of its trigger as velocity,
+     * and the keyboard's TRIG is a fixed 10 V pulse - so the two are combined
+     * here rather than both being patched into one jack, which is a thing a
+     * patch bay cannot do and which quietly cost this rack every note after
+     * the first. */
+    const int hit  = b.put("VCA");
 
     b.row(R2);
     b.x = 560.0f;
@@ -718,8 +724,9 @@ void presetGrand(Builder &b)
     const int out = b.put("OUT");
 
     b.wire(kbd, KBD_PITCH, str, 0);
-    b.wire(kbd, KBD_TRIG,  str, 1);
-    b.wire(kbd, KBD_VEL,   str, 1);      /* velocity strikes it harder */
+    b.wire(kbd, KBD_TRIG,  hit, VCA_IN);
+    b.wire(kbd, KBD_VEL,   hit, VCA_IN_CV);
+    b.wire(hit, 0,         str, 1);      /* a pulse as tall as you played */
     b.wire(kbd, KBD_GATE,  envA, ADSR_IN_GATE);
     b.wire(kbd, KBD_TRIG,  envA, ADSR_IN_TRIG);
     b.wire(kbd, KBD_VEL,   envA, ADSR_IN_VEL);
@@ -734,6 +741,12 @@ void presetGrand(Builder &b)
     b.wire(rvb, 1, out, 1);
 
     b.set(kbd, KBD_VOICES, 8.0f);
+
+    /* A floor under the gain, so the softest possible key still clears the
+     * string's trigger threshold instead of being inaudible. */
+    b.set(hit, VCA_GAIN, 0.15f);
+    b.set(hit, VCA_CV,   1.0f);
+    b.set(hit, VCA_RESP, 0.0f);
 
     b.set(str, 2, 0.93f);        /* DECAY  - long, this is a grand           */
     b.set(str, 3, 0.60f);        /* BRIGHT                                    */
@@ -860,6 +873,7 @@ void presetBell(Builder &b)
     b.row(R1);
     const int kbd = b.put("KBD");
     const int str = b.put("STRING");
+    const int hit = b.put("VCA");
     const int crs = b.put("CRUSH");
     const int cho = b.put("CHORUS");
 
@@ -869,8 +883,9 @@ void presetBell(Builder &b)
     const int out = b.put("OUT");
 
     b.wire(kbd, KBD_PITCH, str, 0);
-    b.wire(kbd, KBD_TRIG,  str, 1);
-    b.wire(kbd, KBD_VEL,   str, 1);
+    b.wire(kbd, KBD_TRIG,  hit, VCA_IN);
+    b.wire(kbd, KBD_VEL,   hit, VCA_IN_CV);
+    b.wire(hit, 0,         str, 1);
     b.wire(str, 0, crs, 0);
     b.wire(crs, 0, cho, 0);
     b.wire(cho, 0, rvb, 0);
@@ -878,6 +893,9 @@ void presetBell(Builder &b)
     b.wire(rvb, 1, out, 1);
 
     b.set(kbd, KBD_VOICES, 6.0f);
+    b.set(hit, VCA_GAIN, 0.15f);
+    b.set(hit, VCA_CV,   1.0f);
+    b.set(hit, VCA_RESP, 0.0f);
     /* Stiffness at the top of its range: the partials go so far sharp that
      * they stop being a harmonic series at all, which is what a struck metal
      * bar is. */
