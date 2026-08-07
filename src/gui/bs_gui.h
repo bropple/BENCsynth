@@ -125,6 +125,8 @@ const char *bs_find_asset(const char *relative, char *probe, size_t cap);
 /* A small round information button, the same one BENCmouth puts in its corner:
  * a lowercase i in a circle. */
 int bs_info_button(bs_ui *ui, Rectangle r, int lit);
+/* The on-screen keyboard's toggle, beside it in the corner. */
+int bs_keys_button(bs_ui *ui, Rectangle r, int lit);
 
 /* True when something owns the mouse this frame and ordinary controls must
  * keep their hands off it - an open menu, or a caller that has set `suppress`.

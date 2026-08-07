@@ -290,6 +290,50 @@ int bs_info_button(bs_ui *ui, Rectangle r, int lit)
     return hot && IsMouseButtonReleased(MOUSE_BUTTON_LEFT);
 }
 
+/* A keyboard, drawn rather than loaded.
+ *
+ * Small enough that a bitmap would be a blurry rectangle on a Retina display
+ * and a second file to keep in step with the interface's colours. Three white
+ * keys and two black ones is the fewest that still reads as a keyboard at
+ * sixteen pixels - two whites and one black reads as a window. */
+int bs_keys_button(bs_ui *ui, Rectangle r, int lit)
+{
+    const Vector2 m = bs_mouse();
+    const int hot = !bs_ui_blocked(ui) && CheckCollisionPointRec(m, r);
+
+    const Color fill = lit ? BS_ACCENT : (hot ? BS_PANEL_HI : BS_PANEL);
+    DrawRectangleRounded(r, 0.25f, 6, fill);
+    DrawRectangleRoundedLines(r, 0.25f, 6, (hot || lit) ? BS_ACCENT : BS_EDGE);
+
+    /* The glyph sits in a box inset from the button, so the rounded corner
+     * never clips a key. */
+    const float pad = 5.0f;
+    Rectangle g = { r.x + pad, r.y + pad + 1.0f,
+                    r.width - pad * 2.0f, r.height - pad * 2.0f - 2.0f };
+    /* The sharps are cut out of the naturals in whatever the button is filled
+     * with, rather than painted in a colour of their own. Painting them dark
+     * makes them identical to the naturals when the button is lit, and the
+     * glyph collapses into a block with two slots in it. */
+    const Color ink   = lit ? BS_RACK : (hot ? BS_TEXT : BS_DIM);
+    const Color black = fill;
+
+    const float kw = g.width / 3.0f;
+    for (int i = 0; i < 3; i++) {
+        Rectangle w = { g.x + kw * (float)i + 0.5f, g.y, kw - 1.0f, g.height };
+        DrawRectangleRec(w, ink);
+    }
+    /* Two sharps, on the seams rather than centred on a key - which is where
+     * they are on the instrument, and the thing the eye actually checks. */
+    const float bw = kw * 0.52f;
+    for (int i = 0; i < 2; i++) {
+        Rectangle b = { g.x + kw * (float)(i + 1) - bw * 0.5f, g.y,
+                        bw, g.height * 0.6f };
+        DrawRectangleRec(b, black);
+    }
+
+    return hot && IsMouseButtonReleased(MOUSE_BUTTON_LEFT);
+}
+
 /* ------------------------------------------------------------------ *
  * Knob
  * ------------------------------------------------------------------ */

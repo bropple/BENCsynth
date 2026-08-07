@@ -60,7 +60,9 @@ static void audio_cb(void *buffer, unsigned int frames)
 static float g_hostLoad = -1.0f;
 static float g_hostRate = 0.0f;
 
-static int draw_header(bs_ui *ui, Rectangle r, const bs::Engine *eng, int infoOpen)
+/* Returns 1 for the information button, 2 for the keyboard toggle. */
+static int draw_header(bs_ui *ui, Rectangle r, const bs::Engine *eng,
+                       int infoOpen, int keysOn)
 {
     DrawRectangleRec(r, BS_RACK);
     DrawRectangle((int)r.x, (int)(r.y + r.height - 1), (int)r.width, 1, BS_BORDER);
@@ -91,6 +93,11 @@ static int draw_header(bs_ui *ui, Rectangle r, const bs::Engine *eng, int infoOp
                        24.0f, 24.0f };
     const int hit = bs_info_button(ui, info, infoOpen);
 
+    /* The keyboard toggle sits inside it, so the corner still belongs to the
+     * information button and nothing moves when this one appears. */
+    Rectangle keysBtn = { info.x - 32.0f, info.y, 28.0f, 24.0f };
+    const int keysHit = bs_keys_button(ui, keysBtn, keysOn);
+
     /* Sounding voices rather than allocated ones: the number that means
      * anything while playing is how many are audible. Read through the
      * published counters - the voice array belongs to the audio thread. */
@@ -103,10 +110,10 @@ static int draw_header(bs_ui *ui, Rectangle r, const bs::Engine *eng, int infoOp
                   (double)((g_hostLoad >= 0.0f ? g_hostLoad : eng->load) * 100.0f),
                   (int)(g_hostRate > 0.0f ? g_hostRate : (float)SAMPLE_RATE));
     const float w = bs_measure(ui, BS_F_SMALL, buf, 1.0f);
-    bs_text_spaced(ui, BS_F_SMALL, buf, info.x - w - 16.0f,
+    bs_text_spaced(ui, BS_F_SMALL, buf, keysBtn.x - w - 16.0f,
                    r.y + (r.height - BS_F_SMALL) * 0.5f, BS_DIM);
 
-    return hit;
+    return keysHit ? 2 : (hit ? 1 : 0);
 }
 
 /* ------------------------------------------------------------------ *
@@ -399,14 +406,6 @@ static void draw_toolbar(bs_app *app, bs_ui *ui, bs_rack *rack, bs_keyboard *kb,
         bs_rack_preset_menu(rack, ui, (Vector2){ b.x, b.y + h });
     }
     x += 80.0f;
-
-    b = (Rectangle){ x, y, 62.0f, h };
-    if (bs_button(ui, 8010, b, app->showKeys ? "KEYS \xE2\x96\xBC" : "KEYS \xE2\x96\xB2", 1)) {
-        bs_keyboard_release_all(kb, eng);
-        app->showKeys = !app->showKeys;
-        say(app, app->showKeys ? "keyboard shown" : "keyboard hidden - the rack gets the room");
-    }
-    x += 68.0f;
 
     b = (Rectangle){ x, y, 62.0f, h };
     if (bs_button(ui, 8007, b, "CLEAR", 1)) {
@@ -765,9 +764,16 @@ int main(int argc, char **argv)
          * and shuts it again before anything is drawn. The window appeared for
          * a single frame and looked like it was refusing to open. */
         int justOpened = 0;
-        if (draw_header(&ui, header, &g_engine, app.about)) {
+        const int headerHit = draw_header(&ui, header, &g_engine, app.about,
+                                          app.showKeys);
+        if (headerHit == 1) {
             app.about = !app.about;
             justOpened = app.about;
+        } else if (headerHit == 2) {
+            bs_keyboard_release_all(&kb, &g_engine);
+            app.showKeys = !app.showKeys;
+            say(&app, app.showKeys ? "keyboard shown"
+                                   : "keyboard hidden - the rack gets the room");
         }
 
         ui.suppress = app.about;
