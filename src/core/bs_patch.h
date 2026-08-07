@@ -48,6 +48,10 @@ public:
     void disconnect(int cableId);
     int  cableAtInput(int dst, int dstPort) const;
 
+    /* How many times a cable displaced another at an input. Zero for anything
+     * built from a preset; nonzero only when a person repatches. */
+    int replaced;
+
     const std::vector<Cable> &cableList() const { return cables; }
     Cable *cable(int id)
     {

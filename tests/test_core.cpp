@@ -536,6 +536,16 @@ static void test_presets()
         e.render(&buf[0], SPAN);
         const float idle = rmsOf(&buf[0], SPAN * 2);
 
+        /* Two cables into one input. The engine accepts it - a patch bay does,
+         * and a person dropping a plug into an occupied jack means it - but a
+         * preset never does, and the wire that loses is gone without a word.
+         * GRAND shipped with the keyboard's trigger and its velocity both run
+         * into the string, and played exactly one note. */
+        std::snprintf(msg, sizeof msg,
+                      "%s patches every input once (%%.0f were overwritten)",
+                      rp->name);
+        okf(e.patch.replaced == 0, msg, (double)e.patch.replaced, 0.0);
+
         std::snprintf(msg, sizeof msg, "%s is finite before a note", rp->name);
         ok(finite(&buf[0], SPAN * 2), msg);
 

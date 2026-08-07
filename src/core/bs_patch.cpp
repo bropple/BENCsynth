@@ -8,7 +8,7 @@ const Signal &zeroSignal()
     return z;
 }
 
-Patch::Patch() : sr(48000.0f), rev(1), orderDirty(true) {}
+Patch::Patch() : replaced(0), sr(48000.0f), rev(1), orderDirty(true) {}
 
 Patch::~Patch() { clear(); }
 
@@ -17,6 +17,7 @@ void Patch::clear()
     for (size_t i = 0; i < mods.size(); i++) delete mods[i];
     mods.clear();
     cables.clear();
+    replaced = 0;
     order.clear();
     orderDirty = true;
     rev++;
@@ -87,8 +88,14 @@ int Patch::connect(int src, int srcPort, int dst, int dstPort)
     if (srcPort < 0 || srcPort >= s->outputCount()) return -1;
     if (dstPort < 0 || dstPort >= d->inputCount())  return -1;
 
+    /* An input takes one cable, so a second replaces the first - which is
+     * right at a patch bay and is what a person expects when they drop a plug
+     * into an occupied jack. It is never what a preset means, though: a rack
+     * built in code with two wires into one input silently loses one of them.
+     * GRAND shipped that way and played only its first note. Counted here so a
+     * test can insist that no preset does it. */
     const int existing = cableAtInput(dst, dstPort);
-    if (existing >= 0) disconnect(existing);
+    if (existing >= 0) { disconnect(existing); replaced++; }
 
     int slot = -1;
     for (size_t i = 0; i < cables.size(); i++) if (!cables[i].alive) { slot = (int)i; break; }

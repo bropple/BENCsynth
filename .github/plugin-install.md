@@ -32,7 +32,7 @@ your host with nothing to play.
 Restart the host — they scan once at startup. BENCsynth appears among the
 instruments. Click the plugin's UI button and the rack opens.
 
-The **Rack** parameter steps through all 33 presets and saves with the project.
+The **Rack** parameter steps through all 37 presets and saves with the project.
 The eight **Macro** parameters are automatable; what each one does is decided
 in the rack, by cable, on the MACRO module.
 

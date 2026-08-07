@@ -30,7 +30,7 @@ before you start: the editor is `bencsynth.exe` and has to sit beside the
 `.clap`, and `%LOCALAPPDATA%` is not `%APPDATA%` — putting a plugin in the
 wrong one fails with no message at all.
 
-The **Rack** parameter steps through all 33 presets and saves with your
+The **Rack** parameter steps through all 37 presets and saves with your
 project. The eight **Macro** parameters are automatable.
 
 ### Getting started
