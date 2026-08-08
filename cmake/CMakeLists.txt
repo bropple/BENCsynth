@@ -48,3 +48,26 @@ target_add_vst3_wrapper(
     BUNDLE_IDENTIFIER "net.ropple.bencsynth"
     BUNDLE_VERSION "0.1.0"
 )
+
+# AU, on macOS only. The only way into Logic and GarageBand, which between
+# them are most of the Macs that will ever open this.
+#
+# Configured "explicitly" rather than from a CLAP target: the wrapper can read
+# a plugin's identity out of a clap_entry it builds in the same CMake project,
+# and ours is built by the Makefile instead, so the four-character codes are
+# spelled out here. They are permanent - a host remembers a plugin by
+# type/subtype/manufacturer, and changing any of them makes every saved
+# project stop finding it.
+if(APPLE)
+    add_library(bencsynth_as_auv2 MODULE)
+    target_add_auv2_wrapper(
+        TARGET bencsynth_as_auv2
+        OUTPUT_NAME "BENCsynth"
+        BUNDLE_IDENTIFIER "net.ropple.bencsynth.auv2"
+        BUNDLE_VERSION "1"
+        MANUFACTURER_NAME "BENCO"
+        MANUFACTURER_CODE "BNCO"
+        SUBTYPE_CODE "BNCS"
+        INSTRUMENT_TYPE "aumu"
+    )
+endif()

@@ -236,6 +236,14 @@ else
   VST3_INSTALL_DIR ?= $(HOME)/.vst3
 endif
 
+# AU, from the same wrapper. macOS only - there is no such thing anywhere
+# else, and the wrapper's own cmake returns early off Apple.
+AU_SDK_TAG     := AudioUnitSDK-1.1.0
+AU_SDK_DIR     := vendor/AudioUnitSDK
+AU_BUILD       := build/au
+AU_BUNDLE      := build/BENCsynth.component
+AU_INSTALL_DIR ?= $(HOME)/Library/Audio/Plug-Ins/Components
+
 RENDER_SRC := tools/render_wav.cpp
 RENDER_OBJ := $(RENDER_SRC:.cpp=.o)
 RENDER     := bencsynth-render$(EXE)
@@ -315,7 +323,8 @@ endif
 
 .PHONY: all core test clean info run render icons lv2 lv2-install lv2-validate lv2-test \
         clap clap-test clap-install clap-fetch ipc-test \
-        vst3 vst3-fetch vst3-install mac-sign macos-plugin-dmg
+        vst3 vst3-fetch vst3-install mac-sign macos-plugin-dmg \
+        au au-fetch au-install
 
 
 all: $(GUI)
@@ -523,6 +532,57 @@ endif
 # The VST3 is a shim: it finds bencsynth.clap in the standard CLAP directories
 # at runtime, so the CLAP has to be installed too. Both, or the host loads a
 # plugin that has nothing to play.
+# ------------------------------------------------------------------
+# AU - the same clap-wrapper, the other format Apple will load
+#
+# Logic and GarageBand do not load CLAP or VST3 and never will, so on macOS
+# this is the difference between "works in REAPER" and "works". Like the VST3
+# it is a shim: it finds bencsynth.clap at runtime rather than containing any
+# of the synth, so the two can never drift.
+# ------------------------------------------------------------------
+
+au-fetch:
+	@test "$(UNAME_S)" = "Darwin" || { echo "  AU is macOS only."; false; }
+	mkdir -p vendor
+	rm -rf $(AU_SDK_DIR)
+	test -d $(CW_DIR) || git clone -q --depth 1 --branch $(CW_VERSION) \
+	    https://github.com/free-audio/clap-wrapper.git $(CW_DIR)
+	git clone -q --depth 1 --branch $(AU_SDK_TAG) \
+	    https://github.com/apple/AudioUnitSDK.git $(AU_SDK_DIR)
+	@echo "clap-wrapper $(CW_VERSION) and $(AU_SDK_TAG) are in vendor/"
+
+au:
+	@test "$(UNAME_S)" = "Darwin" || { echo "  AU is macOS only."; false; }
+ifeq ($(CLAP_FOUND),yes)
+	@test -d $(CW_DIR) || { echo "  run 'make au-fetch' first."; false; }
+	@test -d $(AU_SDK_DIR) || { echo "  run 'make au-fetch' first."; false; }
+	cmake -S cmake -B $(AU_BUILD) -DCMAKE_BUILD_TYPE=Release \
+	    -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64" \
+	    -DCLAP_WRAPPER_DIR="$(CURDIR)/$(CW_DIR)" \
+	    -DCLAP_SDK_ROOT="$(CURDIR)/vendor/clap" \
+	    -DVST3_SDK_ROOT="$(CURDIR)/$(VST3_SDK_DIR)" \
+	    -DAUDIOUNIT_SDK_ROOT="$(CURDIR)/$(AU_SDK_DIR)"
+	cmake --build $(AU_BUILD) --target bencsynth_as_auv2 --config Release -j
+	rm -rf $(AU_BUNDLE)
+	cp -r "$$(find $(AU_BUILD) -name 'BENCsynth.component' -maxdepth 4 | head -1)" $(AU_BUNDLE)
+	@# Ad-hoc, for the same reason the CLAP is: unsigned arm64 code does not
+	@# load, and the message a host shows says nothing about signatures.
+	codesign -s - -f --deep "$(AU_BUNDLE)"
+	@echo "built $(AU_BUNDLE)"
+else
+	@echo "  no CLAP headers - run 'make clap-fetch' first."
+	@false
+endif
+
+au-install: au clap-install
+	mkdir -p "$(AU_INSTALL_DIR)"
+	rm -rf "$(AU_INSTALL_DIR)/BENCsynth.component"
+	cp -r $(AU_BUNDLE) "$(AU_INSTALL_DIR)/"
+	@echo
+	@echo "  installed to $(AU_INSTALL_DIR)/BENCsynth.component"
+	@echo "  it loads bencsynth.clap from $(CLAP_INSTALL_DIR)"
+	@echo "  Logic rescans on launch; auval -v aumu BNCS BNCO checks it now."
+
 vst3-install: vst3 clap-install
 	mkdir -p "$(VST3_INSTALL_DIR)"
 	rm -rf "$(VST3_INSTALL_DIR)/bencsynth.vst3"

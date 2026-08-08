@@ -322,6 +322,67 @@ jobs:
   # contains no BENCsynth code at all - it finds bencsynth.clap in the standard
   # CLAP directories at runtime - which is why the Windows job below can build
   # it with MSVC while the CLAP itself is built with MinGW.
+  # AU, the one format Logic and GarageBand will load. Built from the same
+  # clap-wrapper as the VST3 and equally a shim - it finds bencsynth.clap at
+  # runtime rather than containing any of the synth.
+  #
+  # auval is the point of this job. It is Apple's own validator, the same one
+  # Logic runs before it will show a plugin, and it exercises far more of the
+  # AU contract than loading the bundle would: parameter and property
+  # round-trips, render-quality sweeps, and the lifecycle at several sample
+  # rates and buffer sizes. A component that builds and fails auval is a
+  # component Logic silently refuses to list.
+  au-macos:
+    name: au plugin (macos)
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: CLAP headers, clap-wrapper and the AudioUnit SDK
+        run: |
+          make clap-fetch
+          make au-fetch
+      - name: Build
+        run: |
+          make clap      # the AU is a shim; it is useless without this
+          make au
+      - name: It is a component bundle with the right entry point
+        run: |
+          find build/BENCsynth.component -type f | head -20
+          test -f build/BENCsynth.component/Contents/Info.plist
+          test -f build/BENCsynth.component/Contents/MacOS/BENCsynth
+          plutil -lint build/BENCsynth.component/Contents/Info.plist
+          # The four-character codes are how a host remembers this plugin
+          # forever. If they ever change, every saved project stops finding it.
+          plutil -p build/BENCsynth.component/Contents/Info.plist | grep -A6 AudioComponents
+          plutil -p build/BENCsynth.component/Contents/Info.plist | grep -q 'aumu'
+          plutil -p build/BENCsynth.component/Contents/Info.plist | grep -q 'BNCS'
+          plutil -p build/BENCsynth.component/Contents/Info.plist | grep -q 'BNCO'
+      - name: Signed, universal, and no debug symbols
+        run: |
+          codesign --verify --deep --strict --verbose=2 build/BENCsynth.component
+          lipo -info build/BENCsynth.component/Contents/MacOS/BENCsynth
+          lipo -info build/BENCsynth.component/Contents/MacOS/BENCsynth | grep -q x86_64
+          lipo -info build/BENCsynth.component/Contents/MacOS/BENCsynth | grep -q arm64
+          test -z "$(find build/BENCsynth.component -name '*.dSYM')"
+      # And it is a shim, not a second copy of the synth: no BENCsynth DSP
+      # symbols in it, or the two would drift apart silently.
+      - name: It is a shim
+        run: |
+          test "$(nm -U build/BENCsynth.component/Contents/MacOS/BENCsynth 2>/dev/null | grep -c 'bs::')" = "0"
+      - name: Install both, because the AU loads the CLAP at runtime
+        run: |
+          make clap-install
+          make au-install
+          ls -la ~/Library/Audio/Plug-Ins/Components ~/Library/Audio/Plug-Ins/CLAP
+      - name: auval
+        run: |
+          # The registrar caches the component list; a freshly copied bundle is
+          # not in it until it rescans.
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          auval -a | grep -i bencsynth || echo "(not in the list yet)"
+          auval -v aumu BNCS BNCO
+
   vst3:
     name: vst3 wrapper (linux)
     runs-on: ubuntu-latest
