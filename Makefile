@@ -177,11 +177,11 @@ endif
 # its Info.plist and both cmake bundle versions each carried their own copy,
 # and auval reported a plugin claiming 1.1.1 wrapping a CLAP claiming 0.1.0
 # in a release tagged v0.2.2.
-# One line and awk, not sed over a continuation: macOS ships GNU make 3.81,
-# which reads the backslash-newline inside $(shell ...) and then reports
-# "unterminated call to function shell". BSD sed would not have taken the
-# \(a\|b\) alternation either.
-BS_VERSION := $(shell awk '/^#define BS_VERSION_(MAJOR|MINOR|PATCH)/ {printf "%s%s", sep, $$3; sep="."}' src/core/bs_version.h)
+# A script, because this line cannot be written portably: it has to match
+# "#define", and make 3.81 - which macOS ships - treats a # inside $(shell ...)
+# as a comment, truncates the line and reports "unterminated call to function
+# shell". See tools/version.sh.
+BS_VERSION := $(shell tools/version.sh)
 
 CLAP_SRC     := src/clap/bencsynth_clap.cpp $(PLUGIN_SRC)
 CLAP_VERSION := 1.2.10

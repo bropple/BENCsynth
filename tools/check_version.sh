@@ -18,8 +18,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 
-# awk, not sed: BSD sed on macOS has no \(a\|b\) alternation.
-V=$(awk '/^#define BS_VERSION_(MAJOR|MINOR|PATCH)/ {printf "%s%s", sep, $3; sep="."}' src/core/bs_version.h)
+V=$(tools/version.sh)
 case "$V" in
     [0-9]*.[0-9]*.[0-9]*) ;;
     *) echo "cannot read a version out of src/core/bs_version.h (got '$V')"; exit 1 ;;

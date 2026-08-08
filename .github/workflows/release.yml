@@ -159,7 +159,7 @@ jobs:
       - name: Which version
         shell: bash
         run: |
-          V=$(awk '/^#define BS_VERSION_(MAJOR|MINOR|PATCH)/ {printf "%s%s", sep, $3; sep="."}' src/core/bs_version.h)
+          V=$(tools/version.sh)
           echo "BS_VERSION=$V" >> "$GITHUB_ENV"
           echo "version $V"
       - name: Build
