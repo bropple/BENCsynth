@@ -63,12 +63,11 @@ the scopes; turning a knob reaches the audio without interrupting it.
 - **LV2** — Linux only. Ardour, Carla, Zrythm. It has no editor of its own; the
   rack is reachable as a parameter rather than a window.
 
-**The AU is new and nobody has run it in Logic yet.** It builds signed and
-universal, carries the right component codes, and contains no DSP of its own —
-but `auval`, the validator Logic runs before it will list a plugin, cannot see
-a freshly installed component on a CI runner, so that check has not happened.
-If you have a Mac, `auval -v aumu BNCS BNCO` after installing settles it. A
-failure there costs you nothing else: the CLAP is unaffected.
+The AU passes **`auval`** — Apple's validator, the one Logic runs before it
+will list a plugin — every section, on a real Mac. In GarageBand and Logic it
+appears under **BENCO → BENCsynth** in the instrument slot of a Software
+Instrument track. Both hosts only scan for new AUs at launch, so if it is not
+there, quit and reopen.
 
 If you are placing files by hand, `INSTALL.md` in each plug-in pack says which
 folder. The one thing to get right on every platform is that **the editor is
@@ -91,9 +90,18 @@ Everything else saves too — the patch, where the rack was scrolled and how far
 it was zoomed. You do not have to save inside BENCsynth for the DAW's project
 to come back the way you left it.
 
-### New since v0.2.1
+### New in v0.2.3
 
-- **AU on macOS**, so Logic and GarageBand can load it. See the caveat above.
+- **The AU is validated.** `auval` passes every section; it shipped in v0.2.2
+  unproven, and now it is not.
+- **One version, everywhere.** v0.2.2 reported three different numbers for one
+  plugin — a component saying 1.1.1, wrapping a CLAP saying 0.1.0, in a release
+  tagged v0.2.2. Everything now reads `src/core/bs_version.h`, and the release
+  refuses to build a tag that disagrees with it.
+
+### New in v0.2.2
+
+- **AU on macOS**, so Logic and GarageBand can load it.
 - **PING on DLY.** Two identical delay lines are stereo only in that nothing
   gets summed; they still repeat in place. With PING on, the source enters the
   left line and the repeats alternate — measured 100/0, 4/96, 97/3, 3/97.
