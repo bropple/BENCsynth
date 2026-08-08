@@ -22,9 +22,10 @@ has a `.tar.gz`, a `.dmg` and a `.zip` attached.
 rendered offline by `make render`, which needs neither a window nor a sound
 card.
 
-Fourteen module types, eight-voice polyphony carried in the cables themselves,
-a Moog-style ladder filter, and a keyboard along the bottom you can play with
-the mouse or with the computer keyboard.
+Thirty module types, eight-voice polyphony carried in the cables themselves, a
+Moog-style ladder filter, a plucked-string waveguide, and a keyboard along the
+bottom you can play with the mouse or with the computer keyboard. Thirty-seven
+example racks, each with a panel explaining what it does.
 
 The mascot is **S. Tarr**, who is the program's icon, sits in the header, and
 otherwise stays out of the way.
