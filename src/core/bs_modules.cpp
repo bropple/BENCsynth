@@ -1664,6 +1664,9 @@ public:
         addToggle("SYNC", 0.0f);
         static const char *const DIVS[] = { "1/2","1/4","1/8","1/8.","1/16","1/4T","1/8T" };
         addSwitch("DIV", DIVS, 7, 2);
+        /* Appended last, after the switch, so every parameter index a saved
+         * patch already refers to still means what it meant. */
+        addToggle("PING", 0.0f);
 
         addInput("IN");
         addInput("TIME");
@@ -1718,6 +1721,12 @@ public:
          * used to sum its input, and a rack that had placed its voices across
          * the field lost them on the way through. */
         const bool stereo = patched(2);
+        /* Two identical lines side by side are stereo in the sense that
+         * nothing gets summed, which is what the IN R port bought. They still
+         * repeat in place. Crossing the feedback is what makes the repeats
+         * walk left, right, left - the reason to want a stereo delay rather
+         * than two mono ones. */
+        const bool ping = pv(7) >= 0.5f;
 
         for (int i = 0; i < BS_BLOCK; i++) {
             const float xl = in(0).sum(i);
@@ -1727,12 +1736,29 @@ public:
              * into the tape-speed slide people reach for it to make. */
             const float d  = smooth.step(tt, 0.05f, sr) * sr;
 
-            for (int k = 0; k < 2; k++) {
-                const float x = k ? xr : xl;
-                const float wet = line[k].read(d);
-                line[k].write(dc[k].step(softClip((x + wet * fb) * 0.2f) * 5.0f));
+            /* Both taps before either write: with PING on, each line's input
+             * needs the other line's output from this same sample. */
+            const float wet[2] = { line[0].read(d), line[1].read(d) };
 
-                const float w = tone[k].lp(wet);
+            /* Crossing the feedback symmetrically does nothing: both lines
+             * would take the same input and stay identical copies forever.
+             * The repeats can only alternate if the source enters one side,
+             * so with PING on it goes into the left line and the right line
+             * hears nothing but what the left one hands it.
+             *
+             * The dry path is untouched - it stays per-side, so a stereo
+             * source still arrives where it was put. Only the repeats walk. */
+            const float xin = stereo ? (xl + xr) * 0.5f : xl;
+            const float fed[2] = {
+                ping ? xin + wet[1] * fb : xl + wet[0] * fb,
+                ping ?       wet[0] * fb : xr + wet[1] * fb
+            };
+
+            for (int k = 0; k < 2; k++) {
+                line[k].write(dc[k].step(softClip(fed[k] * 0.2f) * 5.0f));
+
+                const float x = k ? xr : xl;
+                const float w = tone[k].lp(wet[k]);
                 outs[k ? 2 : 0].v[0][i] = lerpf(x, w, mix);
                 outs[k ? 3 : 1].v[0][i] = w;
             }
