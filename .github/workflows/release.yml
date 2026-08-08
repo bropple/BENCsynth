@@ -213,7 +213,9 @@ jobs:
       # neither. The editor is a separate executable for exactly this reason.
       - name: The plugin needs nothing from raylib or GLFW
         run: |
-          if nm -D --undefined-only build/bencsynth.clap | grep -iE 'glfw|raylib|Rl[A-Z]'; then
+          # Not 'Rl[A-Z]' with -i, which was the first attempt: it matches the
+          # "rle" in strlen, so the check failed on libc.
+          if nm -D --undefined-only build/bencsynth.clap | grep -iE 'glfw|raylib|InitWindow|BeginDrawing'; then
             echo "the plugin wants a window library it will not find in a host"
             exit 1
           fi
