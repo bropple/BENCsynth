@@ -26,7 +26,10 @@
 !endif
 !ifndef ICONFILE
   ; Relative to wherever makensis was invoked, which is the repository root.
-  !define ICONFILE "assets\icon\bencsynth.ico"
+  ; Forward slashes: the compiler reads this on the build machine, which is
+  ; Linux, where a backslash is not a path separator and the error you get is
+  ; "can't open file" three macros deep.
+  !define ICONFILE "assets/icon/bencsynth.ico"
 !endif
 
 Name "BENCsynth ${VERSION}"
@@ -52,7 +55,7 @@ ShowUninstDetails show
 !define MUI_FINISHPAGE_RUN "$INSTDIR\bencsynth.exe"
 !define MUI_FINISHPAGE_RUN_TEXT "Run BENCsynth"
 
-!insertmacro MUI_PAGE_LICENSE "${SRCDIR}\LICENSE"
+!insertmacro MUI_PAGE_LICENSE "${SRCDIR}/LICENSE"
 !insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
@@ -67,17 +70,17 @@ Section "BENCsynth (the program)" SEC_APP
   SectionIn RO      ; the plugins need its binary as their editor
   SetOutPath "$INSTDIR"
   SetOverwrite on
-  File "${SRCDIR}\bencsynth.exe"
-  File "${SRCDIR}\README.md"
-  File "${SRCDIR}\LICENSE"
-  File "${SRCDIR}\NOTICE"
-  File /nonfatal "${SRCDIR}\ARCHITECTURE.md"
+  File "${SRCDIR}/bencsynth.exe"
+  File "${SRCDIR}/README.md"
+  File "${SRCDIR}/LICENSE"
+  File "${SRCDIR}/NOTICE"
+  File /nonfatal "${SRCDIR}/ARCHITECTURE.md"
 
   ; The font and the wordmark. Without them the program still runs, in
   ; raylib's built-in face, which is not the look this is for.
   RMDir /r "$INSTDIR\assets"
   SetOutPath "$INSTDIR\assets"
-  File /r "${SRCDIR}\assets\*.*"
+  File /r "${SRCDIR}/assets/*.*"
   SetOutPath "$INSTDIR"
 
   CreateDirectory "$SMPROGRAMS\BENCsynth"
@@ -93,7 +96,7 @@ Section "CLAP plug-in" SEC_CLAP
   RMDir /r "${CLAPDIR}\bencsynth.clap"
   SetOutPath "${CLAPDIR}"
   SetOverwrite on
-  File "${SRCDIR}\bencsynth.clap"
+  File "${SRCDIR}/bencsynth.clap"
 
   ; The editor, beside the plugin.
   ;
@@ -103,7 +106,7 @@ Section "CLAP plug-in" SEC_CLAP
   ; A copy here is five megabytes and needs no environment variable, no PATH
   ; edit and no reboot, and it can never be a different build from the plugin
   ; beside it.
-  File "${SRCDIR}\bencsynth.exe"
+  File "${SRCDIR}/bencsynth.exe"
 SectionEnd
 
 ; ---------------------------------------------------------------- VST3
@@ -112,7 +115,7 @@ Section "VST3 plug-in" SEC_VST3
   RMDir /r "${VST3DIR}\bencsynth.vst3"
   SetOutPath "${VST3DIR}\bencsynth.vst3"
   SetOverwrite on
-  File /r "${SRCDIR}\bencsynth.vst3\*.*"
+  File /r "${SRCDIR}/bencsynth.vst3/*.*"
 SectionEnd
 
 ; ---------------------------------------------------------------- LV2
@@ -121,7 +124,7 @@ Section /o "LV2 plug-in (LMMS)" SEC_LV2
   RMDir /r "${LV2DIR}\bencsynth.lv2"
   SetOutPath "${LV2DIR}\bencsynth.lv2"
   SetOverwrite on
-  File /r "${SRCDIR}\bencsynth.lv2\*.*"
+  File /r "${SRCDIR}/bencsynth.lv2/*.*"
 SectionEnd
 
 ; ---------------------------------------------------------------- finish
