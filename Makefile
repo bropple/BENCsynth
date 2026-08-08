@@ -505,7 +505,7 @@ clap-test: clap $(CLAPHOST)
 	./$(CLAPHOST) $(CLAP_BINARY)
 
 $(CLAPHOST): tools/clap_host.cpp
-	$(CXX) $(CXXFLAGS) -I$(CLAP_INCLUDE) -o $@ $< -ldl
+	$(CXX) $(CXXFLAGS) -I$(CLAP_INCLUDE) -o $@ $< -ldl $(IPC_X11)
 
 # ------------------------------------------------------------------
 # VST3 targets

@@ -1061,6 +1061,51 @@ static bool gui_set_size(const clap_plugin_t *p, uint32_t w, uint32_t h)
     return true;
 }
 
+/* Starting the editor, from whichever call gets here first.
+ *
+ * CLAP says a host calls gui.create, gui.set_parent, then gui.show, and show
+ * is the natural place to start a process. Every host that calls show gets
+ * that. clap-wrapper's AUv2 view does not call it - the line is there in
+ * wrappedview.asinclude.mm, commented out, twice - so under Logic and
+ * GarageBand the plugin was handed a parent view and then asked for nothing
+ * else, and sat on "starting the rack" forever with the editor never spawned.
+ *
+ * Idempotent, because now two paths reach it. */
+static bool ensureEditor(BencSynthClap *s)
+{
+    if (!s->guiCreated || !s->shmOpen) {
+        bs::bs_log("  no editor yet (created=%d shm=%d)",
+                   s->guiCreated ? 1 : 0, s->shmOpen ? 1 : 0);
+        return false;
+    }
+    if (s->editorProc && bs::bs_shm_editor_running(s->editorProc)) return true;
+
+    s->shm.block->quit.store(0, std::memory_order_release);
+    s->shm.block->embedParent.store(s->floating ? 0 : s->parentHandle,
+                                    std::memory_order_release);
+    const char *hint = s->bundleDir.empty() ? 0 : s->bundleDir.c_str();
+#if defined(__APPLE__)
+    const bool offscreen = !s->floating;
+#else
+    const bool offscreen = false;
+#endif
+    if (!bs::bs_shm_spawn_editor(hint, s->shm.name, &s->editorProc, offscreen)) {
+        bs::bs_log("  the editor could not be started - see the candidates above");
+        /* Nothing to show and no way to say why through this interface. The
+         * host will report a failed show; the message goes to stderr, which is
+         * where a person looking for it will be. */
+        std::fprintf(stderr,
+                     "BENCsynth: could not start the editor. Set BENCSYNTH_EDITOR "
+                     "to the path of the bencsynth executable.\n");
+        return false;
+    }
+    bs::bs_log("  editor started");
+#if defined(__APPLE__)
+    if (s->cocoaView) bs::bs_cocoa_set_status(s->cocoaView, "");
+#endif
+    return true;
+}
+
 static bool gui_set_parent(const clap_plugin_t *p, const clap_window_t *window)
 {
     BencSynthClap *s = self_of(p);
@@ -1094,6 +1139,9 @@ static bool gui_set_parent(const clap_plugin_t *p, const clap_window_t *window)
 #endif
     if (s->shmOpen)
         s->shm.block->embedParent.store(s->parentHandle, std::memory_order_release);
+    /* A host that goes on to call show() finds it already running. One that
+     * never calls show() - clap-wrapper's AUv2 view - gets a rack anyway. */
+    ensureEditor(s);
     return true;
 }
 static bool gui_set_transient(const clap_plugin_t *, const clap_window_t *) { return false; }
@@ -1105,7 +1153,7 @@ static bool gui_show(const clap_plugin_t *p)
 #if defined(__APPLE__)
     /* Embedded here means the editor draws offscreen and its frames are
      * copied into the surface behind the host's view. It still has to be
-     * started, and it still has to be found - the rest of show() does both. */
+     * started, and it still has to be found - ensureEditor does both. */
     if (!s->floating && !s->cocoaView) {
         bs::bs_log("gui.show  (macOS: no view to draw into)");
         return false;
@@ -1114,36 +1162,7 @@ static bool gui_show(const clap_plugin_t *p)
     bs::bs_log("gui.show  (created=%d shm=%d editorDir=%s)",
                s->guiCreated ? 1 : 0, s->shmOpen ? 1 : 0,
                s->bundleDir.empty() ? "(none)" : s->bundleDir.c_str());
-    if (!s->guiCreated || !s->shmOpen) {
-        bs::bs_log("  refused - no GUI created yet");
-        return false;
-    }
-    if (s->editorProc && bs::bs_shm_editor_running(s->editorProc)) return true;
-
-    s->shm.block->quit.store(0, std::memory_order_release);
-    s->shm.block->embedParent.store(s->floating ? 0 : s->parentHandle,
-                                    std::memory_order_release);
-    const char *hint = s->bundleDir.empty() ? 0 : s->bundleDir.c_str();
-#if defined(__APPLE__)
-    const bool offscreen = !s->floating;
-#else
-    const bool offscreen = false;
-#endif
-    if (!bs::bs_shm_spawn_editor(hint, s->shm.name, &s->editorProc, offscreen)) {
-        bs::bs_log("  the editor could not be started - see the candidates above");
-        /* Nothing to show and no way to say why through this interface. The
-         * host will report a failed show; the message goes to stderr, which is
-         * where a person looking for it will be. */
-        std::fprintf(stderr,
-                     "BENCsynth: could not start the editor. Set BENCSYNTH_EDITOR "
-                     "to the path of the bencsynth executable.\n");
-        return false;
-    }
-    bs::bs_log("  editor started");
-#if defined(__APPLE__)
-    if (s->cocoaView) bs::bs_cocoa_set_status(s->cocoaView, "");
-#endif
-    return true;
+    return ensureEditor(s);
 }
 
 static bool gui_hide(const clap_plugin_t *p)

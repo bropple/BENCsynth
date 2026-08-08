@@ -176,6 +176,13 @@ The Makefile reads the header and feeds `@BS_VERSION@` into the plist and
 release job runs it against the tag — so a tag that disagrees with the source
 now fails before anything is built.
 
+**clap-wrapper's AUv2 view never calls `gui->show()`.** The line is in
+`wrappedview.asinclude.mm`, commented out, twice. It calls `create` and
+`set_parent` and stops. Anything a plugin does in `show()` — starting the
+editor process, in our case — simply never happens under Logic and GarageBand.
+`ensureEditor()` is called from both `set_parent` and `show` for this reason,
+and `clap_host.cpp` has a test that attaches a parent and never shows.
+
 **`%LOCALAPPDATA%` is not `%APPDATA%`.** A plugin in the wrong one fails with
 no message at all.
 

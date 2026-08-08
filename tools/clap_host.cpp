@@ -16,12 +16,50 @@
 #include <clap/clap.h>
 
 #include <dlfcn.h>
+#if defined(__linux__)
+#  include <X11/Xlib.h>
+#  include <dirent.h>
+#  include <unistd.h>
+#  include <time.h>
+#endif
 
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
+
+
+#if defined(__linux__)
+/* How many processes call this one their parent.
+ *
+ * The only way a host can tell that a plugin started an editor: it has no
+ * access to the shared block, and no other visible effect happens. */
+static int childCount(void)
+{
+    const pid_t me = getpid();
+    DIR *d = opendir("/proc");
+    if (!d) return -1;
+    int n = 0;
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        if (e->d_name[0] < '0' || e->d_name[0] > '9') continue;
+        char path[64];
+        std::snprintf(path, sizeof path, "/proc/%s/status", e->d_name);
+        FILE *f = std::fopen(path, "r");
+        if (!f) continue;
+        char line[256];
+        while (std::fgets(line, sizeof line, f))
+            if (std::strncmp(line, "PPid:", 5) == 0) {
+                if (std::atoi(line + 5) == (int)me) n++;
+                break;
+            }
+        std::fclose(f);
+    }
+    closedir(d);
+    return n;
+}
+#endif
 
 static int checks = 0, failures = 0;
 
@@ -540,6 +578,51 @@ int main(int argc, char **argv)
             }
             g->destroy(p);
             ok(true, "the GUI is destroyed");
+
+#if defined(__linux__)
+            /* A host that attaches a parent and never calls show.
+             *
+             * CLAP says create, set_parent, show, and show is where a process
+             * naturally gets started. clap-wrapper's AUv2 view does not call
+             * it - the line is in wrappedview.asinclude.mm, commented out,
+             * twice - so under Logic and GarageBand the plugin was handed a
+             * view and asked for nothing further. It sat on "starting the
+             * rack" with no editor behind it.
+             *
+             * There is no way to ask a plugin whether it started a process, so
+             * this counts the test's own children instead. */
+            if (std::getenv("DISPLAY") && std::getenv("BENCSYNTH_EDITOR")) {
+                Display *dpy = XOpenDisplay(0);
+                if (dpy) {
+                    const Window win = XCreateSimpleWindow(
+                        dpy, DefaultRootWindow(dpy), 0, 0, 400, 300, 0, 0, 0);
+                    XFlush(dpy);
+
+                    const int before = childCount();
+                    ok(g->create(p, api, false), "a GUI, for a host that will not call show");
+                    clap_window_t cw;
+                    cw.api = CLAP_WINDOW_API_X11;
+                    cw.x11 = (unsigned long)win;
+                    ok(g->set_parent(p, &cw), "it takes the parent window");
+
+                    int after = before;
+                    for (int i = 0; i < 60 && after <= before; i++) {
+                        struct timespec ts = { 0, 50 * 1000 * 1000 };
+                        nanosleep(&ts, 0);
+                        evs.clear();
+                        p->process(p, &proc);
+                        after = childCount();
+                    }
+                    ok(after > before,
+                       "set_parent alone starts the editor - no show() needed");
+
+                    g->hide(p);
+                    g->destroy(p);
+                    XDestroyWindow(dpy, win);
+                    XCloseDisplay(dpy);
+                }
+            }
+#endif
         }
     }
 
