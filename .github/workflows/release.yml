@@ -303,11 +303,15 @@ jobs:
       # .vst3, and there is no LV2 in the image for the same reason there is no
       # LV2 job in ci.yml's macOS lane - nothing on this platform is asking for
       # one that cannot take the CLAP instead.
-      - name: The plugin
+      - name: The plugins
         run: |
           make clap-fetch
+          make au-fetch
           MACOS_UNIVERSAL=1 make clap
           make clap-test
+          # AU, which is the only one of these Logic and GarageBand will load.
+          # Universal by its own cmake flag, not MACOS_UNIVERSAL.
+          make au
       - name: dmgbuild
         run: |
           python3 -m venv /tmp/dmgvenv
@@ -359,6 +363,7 @@ jobs:
             -mountpoint /tmp/pdmg "$P"
           ls -la /tmp/pdmg
           test -d /tmp/pdmg/bencsynth.clap
+          test -d /tmp/pdmg/BENCsynth.component
           test -d /tmp/pdmg/BENCsynth.app
           test -x "/tmp/pdmg/Install Plug-Ins.command"
           test -L /tmp/pdmg/Applications
@@ -366,7 +371,9 @@ jobs:
           # The signature has to survive being put in an image: an invalid one
           # is exactly the state macOS calls "damaged".
           codesign --verify --deep --strict --verbose=2 /tmp/pdmg/bencsynth.clap
+          codesign --verify --deep --strict --verbose=2 /tmp/pdmg/BENCsynth.component
           codesign --verify --deep --strict --verbose=2 /tmp/pdmg/BENCsynth.app
+          lipo -info /tmp/pdmg/BENCsynth.component/Contents/MacOS/BENCsynth | grep -q x86_64
           # And the editor inside the image is still both architectures.
           lipo -info /tmp/pdmg/BENCsynth.app/Contents/MacOS/BENCsynth | grep -q x86_64
           hdiutil detach /tmp/pdmg

@@ -28,6 +28,7 @@ DMGBUILD="${DMGBUILD:-dmgbuild}"
 APP=BENCsynth.app
 CLAP=build/bencsynth.clap
 VST3=build/bencsynth.vst3
+AU=build/BENCsynth.component
 
 STAGE="$(mktemp -d)/stage"
 mkdir -p "$STAGE"
@@ -36,6 +37,7 @@ HAVE=""
 [ -d "$APP" ]  && { cp -R "$APP"  "$STAGE/"; HAVE="$HAVE app"; }
 [ -d "$CLAP" ] && { cp -R "$CLAP" "$STAGE/"; HAVE="$HAVE clap"; }
 [ -d "$VST3" ] && { cp -R "$VST3" "$STAGE/"; HAVE="$HAVE vst3"; }
+[ -d "$AU" ]   && { cp -R "$AU"   "$STAGE/"; HAVE="$HAVE au"; }
 [ -n "$HAVE" ] || { echo "nothing to package - build something first" >&2; exit 1; }
 echo "packaging:$HAVE"
 
@@ -54,7 +56,8 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 
 CLAPDIR="$HOME/Library/Audio/Plug-Ins/CLAP"
 VST3DIR="$HOME/Library/Audio/Plug-Ins/VST3"
-mkdir -p "$CLAPDIR" "$VST3DIR"
+AUDIR="$HOME/Library/Audio/Plug-Ins/Components"
+mkdir -p "$CLAPDIR" "$VST3DIR" "$AUDIR"
 
 installed=""
 
@@ -70,6 +73,14 @@ if [ -d "$HERE/bencsynth.vst3" ]; then
     cp -R "$HERE/bencsynth.vst3" "$VST3DIR/"
     xattr -dr com.apple.quarantine "$VST3DIR/bencsynth.vst3" 2>/dev/null || true
     installed="$installed\n  VST3  -> $VST3DIR"
+fi
+
+# AU, which is the only one of these Logic and GarageBand will load.
+if [ -d "$HERE/BENCsynth.component" ]; then
+    rm -rf "$AUDIR/BENCsynth.component"
+    cp -R "$HERE/BENCsynth.component" "$AUDIR/"
+    xattr -dr com.apple.quarantine "$AUDIR/BENCsynth.component" 2>/dev/null || true
+    installed="$installed\n  AU    -> $AUDIR"
 fi
 
 # The editor. The plugin opens the rack by starting this, so a plugin without
