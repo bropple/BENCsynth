@@ -154,10 +154,19 @@ jobs:
             https://github.com/steinbergmedia/vst3sdk.git vendor/vst3sdk
           cd vendor/vst3sdk && git submodule update --init --depth 1 \
             base pluginterfaces public.sdk cmake
+      # This job configures cmake itself rather than going through the
+      # Makefile, so it has to read the version the same way the Makefile does.
+      - name: Which version
+        shell: bash
+        run: |
+          V=$(awk '/^#define BS_VERSION_(MAJOR|MINOR|PATCH)/ {printf "%s%s", sep, $3; sep="."}' src/core/bs_version.h)
+          echo "BS_VERSION=$V" >> "$GITHUB_ENV"
+          echo "version $V"
       - name: Build
         shell: pwsh
         run: |
           cmake -S cmake -B build/vst3 -A x64 `
+            -DBS_VERSION="$env:BS_VERSION" `
             -DCLAP_WRAPPER_DIR="$env:GITHUB_WORKSPACE/vendor/clap-wrapper" `
             -DCLAP_SDK_ROOT="$env:GITHUB_WORKSPACE/vendor/clap" `
             -DVST3_SDK_ROOT="$env:GITHUB_WORKSPACE/vendor/vst3sdk"
