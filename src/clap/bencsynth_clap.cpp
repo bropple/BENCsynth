@@ -735,6 +735,20 @@ static clap_process_status pl_process(const clap_plugin_t *p,
     float *outR = proc->audio_outputs[0].data32[1];
     if (!outL || !outR) return CLAP_PROCESS_ERROR;
 
+    /* The host's tempo, before anything reads it. Handed over every block and
+     * previously thrown away - which is why every clocked rack drifted against
+     * the session within a few bars. */
+    if (proc->transport && (proc->transport->flags & CLAP_TRANSPORT_HAS_TEMPO)) {
+        s->engine.patch.transport.bpm = (float)proc->transport->tempo;
+        s->engine.patch.transport.playing =
+            (proc->transport->flags & CLAP_TRANSPORT_IS_PLAYING) ? 1 : 0;
+    } else {
+        /* No transport is not the same as a tempo of zero: it means every
+         * module should fall back to its own knob. */
+        s->engine.patch.transport.bpm = 0.0f;
+        s->engine.patch.transport.playing = 0;
+    }
+
     /* Anything the editor changed since the last block, applied before a
      * sample is produced so a knob turn lands where it was made. */
     pumpEditorRealtime(s);

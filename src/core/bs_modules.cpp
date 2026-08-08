@@ -942,6 +942,12 @@ public:
         addKnob("BPM", 20.0f, 300.0f, 120.0f, "%.0f", PC_LIN, 1.0f);
         addKnob("PW", 0.05f, 0.9f, 0.5f, "%.2f");
         addToggle("RUN", 1.0f);
+        /* With a host, the knob is ignored and the tempo comes from the
+         * session - which is the difference between a rack that grooves with
+         * the track and one that walks away from it inside eight bars. */
+        addToggle("SYNC", 1.0f);
+        static const char *const DIVS[] = { "1/1","1/2","1/4","1/8","1/16","1/4T","1/8T" };
+        addSwitch("DIV", DIVS, 7, 2);
 
         addInput("EXT");       /* an external clock takes over when patched */
         addInput("RESET");
@@ -956,8 +962,18 @@ public:
     void process()
     {
         setAllOutputChannels(1);
-        const float bpm = pv(0), pw = pv(1);
+        const float pw = pv(1);
         const int run = pv(2) >= 0.5f;
+
+        /* The knob when there is no host, the host when there is one and SYNC
+         * is on. Beats per bar-division: 1/4 is one beat, 1/8 is half of one,
+         * and the triplets are two thirds of their straight neighbour. */
+        static const float BEATS[7] = { 4.0f, 2.0f, 1.0f, 0.5f, 0.25f,
+                                        2.0f / 3.0f, 1.0f / 3.0f };
+        const int sync = pv(3) >= 0.5f;
+        const float beats = BEATS[(int)(pv(4) + 0.5f) % 7];
+        const float tempo = sync ? hostBpm(pv(0)) : pv(0);
+        const float bpm = tempo / beats;
 
         for (int i = 0; i < BS_BLOCK; i++) {
             const float rst = in(1).get(0, i);
@@ -1576,6 +1592,9 @@ public:
         addKnob("TONE", 300.0f, 12000.0f, 3500.0f, "%.0f Hz", PC_EXP);
         addKnob("MIX",  0.0f, 1.0f, 0.3f, "%.2f");
         addKnob("CV",  -2.0f, 2.0f, 0.0f, "%+.2f");
+        addToggle("SYNC", 0.0f);
+        static const char *const DIVS[] = { "1/2","1/4","1/8","1/8.","1/16","1/4T","1/8T" };
+        addSwitch("DIV", DIVS, 7, 2);
 
         addInput("IN");
         addInput("TIME");
@@ -1594,7 +1613,18 @@ public:
     {
         setAllOutputChannels(1);
 
-        const float t0  = pv(0);
+        /* A delay in a session wants to be a note value, not a number of
+         * milliseconds that was right at one tempo. With SYNC on and a host
+         * present the knob is ignored and the time comes from the transport. */
+        static const float BEATS[7] = { 2.0f, 1.0f, 0.5f, 0.75f, 0.25f,
+                                        2.0f / 3.0f, 1.0f / 3.0f };
+        float t0 = pv(0);
+        if (pv(5) >= 0.5f) {
+            const float bpm = hostBpm(0.0f);
+            if (bpm > 1.0f)
+                t0 = clampf(60.0f / bpm * BEATS[(int)(pv(6) + 0.5f) % 7],
+                            0.005f, 2.0f);
+        }
         const float fb  = pv(1);
         const float mix = pv(3);
         const float cvA = pv(4);
@@ -1671,6 +1701,9 @@ ModuleScope::ModuleScope() : traceLen(TRACE), writePos(0), accCount(0), decim(8)
     configure("SCOPE", "SCOPE", 8, 2);
     addKnob("TIME", 1.0f, 256.0f, 8.0f, "%.0f x", PC_EXP, 1.0f);
     addKnob("GAIN", 0.1f, 8.0f, 1.0f, "%.2f");
+    /* Free-running is right for envelopes and slow modulation, where there is
+     * no edge to lock to. It is wrong for anything pitched, which crawls. */
+    addToggle("TRIG", 1.0f);
 
     addInput("A");
     addInput("B");
@@ -1686,6 +1719,9 @@ void ModuleScope::reset()
     writePos = 0;
     acc[0] = acc[1] = 0.0f;
     accCount = 0;
+    armed = 1;
+    sweep = 0;
+    prev = 0.0f;
 }
 
 void ModuleScope::process()
@@ -1707,8 +1743,29 @@ void ModuleScope::process()
      * what the output stage is going to receive anyway. Averaging over the
      * decimation window rather than picking one sample keeps a fast waveform
      * from aliasing into a slow lie when the time knob is turned up. */
+    const int trig = pv(2) >= 0.5f;
+
     for (int i = 0; i < BS_BLOCK; i++) {
-        acc[0] += in(0).sum(i);
+        const float a = in(0).sum(i);
+
+        /* Wait at the start of the buffer for channel A to cross zero going
+         * up, then write one sweep and wait again. The picture then redraws in
+         * the same place every time instead of sliding, which is the whole
+         * difference between a scope you can read a waveform off and one that
+         * just proves something is happening. */
+        if (trig && armed) {
+            const int rising = (prev <= 0.0f && a > 0.0f);
+            prev = a;
+            if (!rising) continue;
+            armed = 0;
+            sweep = 0;
+            writePos = 0;
+            acc[0] = acc[1] = 0.0f;
+            accCount = 0;
+        }
+        prev = a;
+
+        acc[0] += a;
         acc[1] += in(1).sum(i);
         if (++accCount < decim) continue;
         const float inv = 1.0f / (float)accCount;
@@ -1717,7 +1774,12 @@ void ModuleScope::process()
         writePos = (writePos + 1) % TRACE;
         acc[0] = acc[1] = 0.0f;
         accCount = 0;
+
+        if (trig && ++sweep >= TRACE) armed = 1;
     }
+
+    /* Turned off mid-sweep, the trace must not stay frozen where it stopped. */
+    if (!trig) { armed = 0; sweep = 0; }
 }
 
 /* ================================================================== *
@@ -1728,6 +1790,16 @@ ModuleOut::ModuleOut() : clipping(false), clipHold(0.0f)
 {
     configure("OUT", "OUT", 6, 2);
     addKnob("LEVEL", 0.0f, 1.5f, 0.6f, "%.2f");
+    /* Everything upstream is per-voice already; this is the only place that
+     * knows how many voices there are AND has two channels to put them in.
+     * Zero by default, so every existing rack sounds exactly as it did.
+     *
+     * It only does anything if the voices are still separate when they get
+     * here. DLY, RVB and CHORUS are mono by construction - they sum their
+     * input - so a rack with any of them in the chain arrives as one channel
+     * and this knob has nothing to spread. Making those effects stereo through
+     * is the fix, and is a bigger change than this knob. */
+    addKnob("SPREAD", 0.0f, 1.0f, 0.0f, "%.2f");
 
     addInput("L");
     addInput("R");
@@ -1752,9 +1824,32 @@ void ModuleOut::process()
      * speaker - the far more likely intent than a hard-panned voice. */
     const bool  dual = patched(1);
 
+    /* Voices across the field rather than stacked in the middle.
+     *
+     * A polyphonic patch arrives here as eight channels on one cable and gets
+     * summed, so an eight-voice pad is eight things in exactly the same place.
+     * Panning them by voice number costs a multiply and turns the same patch
+     * into something with width. Constant power, and scaled so a centred voice
+     * is unity - which is what makes SPREAD at zero identical to the sum it
+     * replaces. */
+    const float spread = pv(1);
+    const bs::Signal &A = in(0);
+    const bs::Signal &B = dual ? in(1) : in(0);
+    const int nch = A.channels;
+
     for (int i = 0; i < BS_BLOCK; i++) {
-        const float l = in(0).sum(i) * g;
-        const float r = (dual ? in(1).sum(i) * g : l);
+        float l = 0.0f, r = 0.0f;
+        for (int c = 0; c < nch; c++) {
+            float pos = (nch > 1) ? ((float)c / (float)(nch - 1) * 2.0f - 1.0f)
+                                  : 0.0f;
+            pos = clampf(pos * spread, -1.0f, 1.0f);
+            const float gl = std::sqrt(0.5f * (1.0f - pos)) * 1.41421356f;
+            const float gr = std::sqrt(0.5f * (1.0f + pos)) * 1.41421356f;
+            l += A.v[c][i] * gl;
+            r += B.v[c < B.channels ? c : 0][i] * gr;
+        }
+        l *= g;
+        r *= g;
 
         if (std::fabs(l) > 1.0f || std::fabs(r) > 1.0f) clipHold = 0.25f;
 

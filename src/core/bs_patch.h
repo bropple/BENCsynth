@@ -75,6 +75,10 @@ public:
      * before this existed - the view falls back to fitting the rack. */
     float viewX, viewY, viewZoom;
 
+    /* Filled in by the plugin wrapper once per block; zero in the standalone.
+     * Every module gets a pointer to it as it is added. */
+    Transport transport;
+
     /* The knobs this rack offers the host, by slot. Part of the patch rather
      * than of the plugin, so they travel in a .bencsynth and in whatever the
      * host saves without a second thing to serialise. */

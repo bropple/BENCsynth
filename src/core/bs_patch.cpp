@@ -67,6 +67,9 @@ void Patch::clear()
 
 int Patch::add(Module *m, float x, float y)
 {
+    /* Every module can see the host's tempo without being handed it. */
+    m->xport = &transport;
+
     if (!m) return -1;
 
     /* Reuse a hole left by a deleted module, so ids stay dense and a long

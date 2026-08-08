@@ -73,6 +73,21 @@ struct Signal {
     }
 };
 
+/* What the host's transport is doing, when there is one.
+ *
+ * A modular has no idea what tempo anything is at, which is fine on a bench
+ * and wrong in a session: a delay set to 0.352 s and a clock set to 130 BPM
+ * are both approximately right and both drift against the bar within a few
+ * seconds. The plugin fills this in once per block from the host; the
+ * standalone leaves bpm at zero, which every module reads as "no host, use
+ * your own knob".
+ */
+struct Transport {
+    float bpm;        /* zero when nothing is telling us */
+    int   playing;
+    Transport() : bpm(0.0f), playing(0) {}
+};
+
 /* The signal an unpatched input reads. Silence, permanently. Having one of
  * these means process() never has to branch on whether a jack is connected
  * except where the distinction actually matters musically. */
@@ -168,7 +183,7 @@ struct PortInfo {
 class Module {
 public:
     Module()
-        : hp(6), cols(2), sr(48000.0f), st(1.0f / 48000.0f),
+        : hp(6), cols(2), sr(48000.0f), st(1.0f / 48000.0f), xport(0),
           id(-1), x(0.0f), y(0.0f) {}
     virtual ~Module() {}
 
@@ -316,6 +331,17 @@ public:
     std::vector<const Signal *> ins;   /* null when the jack is empty */
 
     float sr, st;
+
+    /* Borrowed from the patch, which owns it. Null only before a module is
+     * added to one. */
+    const Transport *xport;
+
+    /* The host's tempo, or the fallback if there is no host. Modules ask for
+     * it this way so none of them has to know whether one exists. */
+    float hostBpm(float fallback) const
+    {
+        return (xport && xport->bpm > 1.0f) ? xport->bpm : fallback;
+    }
 
     /* Identity and rack position. Placement is not a DSP concern, but it is a
      * property of this module rather than of a parallel structure the GUI

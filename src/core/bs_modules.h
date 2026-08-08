@@ -59,6 +59,11 @@ private:
     float acc[2];
     int   accCount;
     int   decim;
+    /* Trigger state. A free-running trace of a pitched waveform crawls across
+     * the screen, which is exactly the case the teaching racks need it for. */
+    int   armed;        /* waiting for a rising edge to start a sweep */
+    int   sweep;        /* samples written into the current sweep     */
+    float prev;
 };
 
 /* A panel that does nothing to the audio at all: somewhere to write down what
