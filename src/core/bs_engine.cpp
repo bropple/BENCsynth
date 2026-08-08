@@ -508,6 +508,7 @@ void presetPad(Builder &b)
     b.row(R2);
     const int lfo = b.put("LFO");
     b.x = 640.0f;
+    const int pan = b.put("PAN");
     const int rvb = b.put("RVB");
     const int out = b.put("OUT");
 
@@ -525,7 +526,12 @@ void presetPad(Builder &b)
     b.wire(kbd,  KBD_PITCH, vcf, VCF_IN_PITCH);
     b.wire(vcf,  VCF_LP24, vca, VCA_IN);
     b.wire(envA, ADSR_ENV, vca, VCA_IN_CV);
-    b.wire(vca, 0, rvb, 0);
+    /* Eight voices arrive here on one cable and used to be summed into the
+     * middle. PAN gives each one a place, and the reverb's dry path now keeps
+     * the two sides apart instead of flattening them again. */
+    b.wire(vca, 0, pan, 0);
+    b.wire(pan, 0, rvb, 0);
+    b.wire(pan, 1, rvb, 1);
     b.wire(rvb, 0, out, 0);
     b.wire(rvb, 1, out, 1);
 
@@ -545,6 +551,7 @@ void presetPad(Builder &b)
     b.set(rvb,  RVB_SIZE, 0.85f); b.set(rvb, RVB_DAMP, 0.35f);
     b.set(rvb,  RVB_MIX, 0.45f);
     b.set(out,  OUT_LEVEL, 0.50f);
+    b.set(pan, 0, 0.85f);
 }
 
 /* No sustain at all on either envelope, and enough resonance that the filter
@@ -2325,6 +2332,7 @@ void presetGrandTour(Builder &b)
     const int fold   = b.put("FOLD");
     const int crush  = b.put("CRUSH");
     const int chorus = b.put("CHORUS");
+    const int pan    = b.put("PAN");
     const int mixL   = b.put("MIX");
     const int mixR   = b.put("MIX");
 
@@ -2351,7 +2359,8 @@ void presetGrandTour(Builder &b)
 
     b.wire(sw, 0, fold, 0);
     b.wire(fold, 0, crush, 0);
-    b.wire(crush, 0, chorus, 0);
+    b.wire(crush, 0, pan, 0);
+    b.wire(pan, 0, chorus, 0);
 
     /* Both halves meet here rather than fighting over the output's two jacks. */
     b.wire(rvb, 0, mixL, 0);
@@ -2382,6 +2391,7 @@ void presetGrandTour(Builder &b)
     b.set(fold, 0, 1.7f);
     b.set(crush, 0, 9.0f); b.set(crush, 1, 12000.0f); b.set(crush, 2, 0.45f);
     b.set(chorus, 1, 0.55f); b.set(chorus, 4, 0.45f);
+    b.set(pan, 0, 0.8f);
     b.set(mixL, MIX_1, 0.85f); b.set(mixL, MIX_2, 0.42f);
     b.set(mixR, MIX_1, 0.85f); b.set(mixR, MIX_2, 0.42f);
     b.set(out,  OUT_LEVEL, 0.55f);
@@ -2470,7 +2480,7 @@ const PresetEntry PRESETS[] = {
     { { "SQUARE LEAD",  "pulse width on an LFO, glide and echo", 0,
       "SQUARE LEAD\n\nA pulse whose width the LFO keeps moving, which is what stops a square wave sounding like a test tone.\n\nTRY: set the VCO's PWM to zero. The movement stops dead and the sound goes flat - that one knob is most of what you were hearing." },      presetSquareLead },
     { { "SAW PAD",      "eight voices, two detuned saws, long reverb", 0,
-      "SAW PAD\n\nEight voices, two saws pulled a few cents apart, and enough reverb to lose the edges. The slow attack is on both envelopes.\n\nTRY: hold a chord and turn VCF CV2 - that is the LFO on the cutoff, and it is what keeps a long note from standing still." }, presetPad },
+      "SAW PAD\n\nEight voices, two saws pulled a few cents apart, and enough reverb to lose the edges. The slow attack is on both envelopes.\n\nTRY: hold a chord and turn VCF CV2 - that is the LFO on the cutoff, and it is what keeps a long note from standing still. The PAN before the reverb gives each of the eight voices its own place rather than stacking them in the middle. On a pad this wet the reverb is already doing most of the widening, so the difference is small here - PAN earns its keep on a dry patch, where the whole chord otherwise arrives from one point." }, presetPad },
     { { "PIANO",        "struck string - decays while held, brightness first", 0,
       "PIANO\n\nSubtractive synthesis cannot make a real piano: a struck string's partials are stretched sharp of the harmonic series and nothing here can be inharmonic. What it can copy is the three things the ear actually identifies a piano by, none of which are the waveform.\n\nOne: it decays while you hold it. Two: the brightness dies far faster than the loudness, so a note a second old is nearly a sine. Three: both scale with how hard you hit it and how high you play.\n\nSo the sound is in three envelopes, not the oscillators. Two saws a few cents apart are the strings, the pulse is the hollow midrange, and the 22 ms noise burst is the hammer.\n\nTRY: pull the NOISE mixer channel (IN4) to zero. The hammer disappears and it turns into an organ - that one twentieth of a second is most of the instrument. Then put it back and raise the amplifier envelope's S: it stops being a piano the moment it stops decaying." }, presetPiano },
     { { "GRAND",        "a modelled string - stretched partials, felt hammer", 0,

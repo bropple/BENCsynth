@@ -1574,6 +1574,60 @@ private:
 };
 
 /* ================================================================== *
+ * PAN - voices across the field
+ *
+ * Polyphony travels down one cable as separate channels, and everything that
+ * eventually mixes it sums those channels - so eight voices arrive at the
+ * output stacked in exactly the same place. This is where they stop being a
+ * stack: each voice gets a position from its channel number, and what comes
+ * out is an ordinary stereo pair that the rest of the rack can carry.
+ *
+ * Put it after the amplifier and before the effects. The OUT module has the
+ * same knob, which is the version for a rack with nothing between the two.
+ * ================================================================== */
+
+class ModulePan : public Module {
+public:
+    ModulePan()
+    {
+        configure("PAN", "PAN", 4, 2);
+        addKnob("SPREAD", 0.0f, 1.0f, 0.7f, "%.2f");
+        addKnob("PAN",   -1.0f, 1.0f, 0.0f, "%+.2f");
+        addKnob("CV",     0.0f, 1.0f, 0.0f, "%.2f");
+
+        addInput("IN");
+        addInput("CV");
+        addOutput("L");
+        addOutput("R");
+    }
+
+    void process()
+    {
+        setAllOutputChannels(1);
+        const float spread = pv(0), centre = pv(1), cvA = pv(2);
+        const Signal &a = in(0);
+        const int nch = a.channels;
+
+        for (int i = 0; i < BS_BLOCK; i++) {
+            const float shift = centre + cvA * in(1).get(0, i) * 0.2f;
+            float l = 0.0f, r = 0.0f;
+            for (int c = 0; c < nch; c++) {
+                float pos = (nch > 1) ? ((float)c / (float)(nch - 1) * 2.0f - 1.0f)
+                                      : 0.0f;
+                pos = clampf(pos * spread + shift, -1.0f, 1.0f);
+                /* Constant power, scaled so a centred voice is unity - which
+                 * makes SPREAD at zero and PAN at centre identical to the sum
+                 * this replaces. */
+                l += a.v[c][i] * std::sqrt(0.5f * (1.0f - pos)) * 1.41421356f;
+                r += a.v[c][i] * std::sqrt(0.5f * (1.0f + pos)) * 1.41421356f;
+            }
+            outs[0].v[0][i] = l;
+            outs[1].v[0][i] = r;
+        }
+    }
+};
+
+/* ================================================================== *
  * DLY - echo
  *
  * Monophonic by construction: it sums the channels arriving at its input.
@@ -1667,6 +1721,11 @@ public:
         addKnob("MIX",  0.0f, 1.0f, 0.25f, "%.2f");
 
         addInput("IN");
+        /* Appended, so every existing patch keeps the port numbers it was
+         * saved with. Unpatched it reads as silence, and patched() tells the
+         * difference - which is the case the comment beside zeroSignal calls
+         * "where the distinction actually matters musically". */
+        addInput("IN R");
         addOutput("L");
         addOutput("R");
     }
@@ -1679,12 +1738,20 @@ public:
         setAllOutputChannels(1);
         const float size = pv(0), damp = pv(1), mix = pv(2);
 
+        /* The tank stays mono - a mono send and a stereo return is what a
+         * reverb has always been, and two tanks would cost twice as much to
+         * produce a difference nobody can hear. What was wrong was the DRY
+         * path: it used the same summed signal for both sides, so anything
+         * panned upstream was flattened on its way through. */
+        const bool stereo = patched(1);
+
         for (int i = 0; i < BS_BLOCK; i++) {
-            const float x = in(0).sum(i);
+            const float dl = in(0).sum(i);
+            const float dr = stereo ? in(1).sum(i) : dl;
             float l, r;
-            verb.step(x * 0.2f, size, damp, &l, &r);
-            outs[0].v[0][i] = lerpf(x, l * 5.0f, mix);
-            outs[1].v[0][i] = lerpf(x, r * 5.0f, mix);
+            verb.step((dl + dr) * 0.1f, size, damp, &l, &r);
+            outs[0].v[0][i] = lerpf(dl, l * 5.0f, mix);
+            outs[1].v[0][i] = lerpf(dr, r * 5.0f, mix);
         }
     }
 
@@ -2117,6 +2184,7 @@ static const ModuleType TYPES[] = {
     { "LOGIC", "LOGIC",      "UTILITY",makeT<ModuleLogic> },
     { "SWITCH","SWITCH",     "UTILITY",makeT<ModuleSwitch> },
     { "CHORUS","CHORUS",     "EFFECT", makeT<ModuleChorus> },
+    { "PAN",   "PAN",        "UTILITY",makeT<ModulePan>   },
     { "OUT",   "OUT",        "OUTPUT", makeT<ModuleOut>   }
 };
 
