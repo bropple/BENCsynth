@@ -1,9 +1,9 @@
 A polyphonic virtual modular synthesizer. Panels in a rack, jacks you drag
 patch cables between, and the cables hang.
 
-**All three platforms this time.** Windows was the only one for v0.1.0 and
-v0.2.0, on the rule that a release is a claim someone has actually run the
-thing. That has stopped being true, so Linux and macOS are back.
+**All three platforms.** Windows was the only one for v0.1.0 and v0.2.0, on the
+rule that a release is a claim someone has actually run the thing. That has
+stopped being true, so Linux and macOS are back.
 
 ### Which file
 
@@ -20,7 +20,7 @@ thing. That has stopped being true, so Linux and macOS are back.
 | | |
 |---|---|
 | The program | `bencsynth-*-macos-universal.dmg` — drag it to Applications. |
-| The plug-ins | `bencsynth-*-macos-plugins.dmg` — CLAP and the editor, with an `Install Plug-Ins.command` that puts them where hosts look. |
+| The plug-ins | `bencsynth-*-macos-plugins.dmg` — CLAP and **AU**, with the editor and an `Install Plug-Ins.command` that puts them where hosts look. |
 
 **Linux** — x86_64.
 
@@ -58,11 +58,17 @@ the scopes; turning a knob reaches the audio without interrupting it.
 - **CLAP** — all three platforms. REAPER, Bitwig, Studio One.
 - **VST3** — Windows and Linux. Ableton, Cubase, FL Studio, Studio One. It is
   a shim that loads the CLAP, so **install both**.
+- **AU** — macOS. Logic and GarageBand, which will load nothing else. Also a
+  shim over the CLAP, so install both — the `Install Plug-Ins.command` does.
 - **LV2** — Linux only. Ardour, Carla, Zrythm. It has no editor of its own; the
   rack is reachable as a parameter rather than a window.
 
-macOS is CLAP-only this release. Anything that loads a CLAP gets the whole
-rack; Logic and GarageBand want AU, which is the next format on the list.
+**The AU is new and nobody has run it in Logic yet.** It builds signed and
+universal, carries the right component codes, and contains no DSP of its own —
+but `auval`, the validator Logic runs before it will list a plugin, cannot see
+a freshly installed component on a CI runner, so that check has not happened.
+If you have a Mac, `auval -v aumu BNCS BNCO` after installing settles it. A
+failure there costs you nothing else: the CLAP is unaffected.
 
 If you are placing files by hand, `INSTALL.md` in each plug-in pack says which
 folder. The one thing to get right on every platform is that **the editor is
@@ -85,7 +91,14 @@ Everything else saves too — the patch, where the rack was scrolled and how far
 it was zoomed. You do not have to save inside BENCsynth for the DAW's project
 to come back the way you left it.
 
-### New since v0.2.0
+### New since v0.2.1
+
+- **AU on macOS**, so Logic and GarageBand can load it. See the caveat above.
+- **PING on DLY.** Two identical delay lines are stereo only in that nothing
+  gets summed; they still repeat in place. With PING on, the source enters the
+  left line and the repeats alternate — measured 100/0, 4/96, 97/3, 3/97.
+
+### New in v0.2.1
 
 - **Linux and macOS builds**, per the above.
 - **The macOS executable is universal now.** The plug-ins always were, but the

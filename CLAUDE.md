@@ -1,7 +1,7 @@
 # BENCsynth — working notes for Claude
 
 A polyphonic virtual analog modular synth. C++17 + raylib, physics-based patch
-cables. Ships as a standalone program and as CLAP / VST3 / LV2 plugins.
+cables. Ships as a standalone program and as CLAP / VST3 / AU / LV2 plugins.
 
 This file is for the things that are **expensive to re-derive** — the release
 sequence, and the traps that have actually cost a build. It is not a tour of
@@ -120,6 +120,22 @@ and validates, but identifies nobody, so macOS still says it cannot check for
 malicious software. That is expected. "Damaged" is a different thing and is a
 real bug.
 
+**One CMakeLists declares both wrappers, so each needs its SDK guarded.**
+Without that, configuring for AU demands the VST3 tree and vice versa. The
+guards test the same file clap-wrapper's own `guarantee_*sdk` looks for.
+
+**`project()` must list `OBJCXX` on Apple.** Both wrappers have `.mm` sources.
+Miss it and CMake configures happily, then fails at *generate* time with
+"required internal CMake variable not set: CMAKE_OBJCXX_COMPILE_OBJECT", which
+does not obviously mean "declare the language".
+
+**`auval` cannot see a component on a GitHub runner.** Registration is
+asynchronous and needs a real user session; six retries with the registrar
+killed between them never worked. The AU's structural checks — signature, both
+architectures, the four-character codes in the plist, no DSP symbols — are
+real, but **nobody has validated the AU functionally**. Run
+`auval -v aumu BNCS BNCO` on an actual Mac.
+
 **`%LOCALAPPDATA%` is not `%APPDATA%`.** A plugin in the wrong one fails with
 no message at all.
 
@@ -144,6 +160,10 @@ is editor-only for this reason.
 cables by port *index*, so appending keeps every saved patch working. Verify
 compatibility by writing a patch with the previously shipped binary and loading
 it with the new one — do not reason about it.
+
+**The AU's four-character codes are permanent** — `aumu` / `BNCS` / `BNCO`. A
+host remembers a plugin by type, subtype and manufacturer; change any of them
+and every saved project stops finding it.
 
 **CLAP parameter IDs are permanent.** There are 16 exposed slots whose *names*
 change via `rescan(INFO|TEXT)`; the IDs never do.
