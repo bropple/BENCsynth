@@ -55,6 +55,13 @@ The plugin opens the **real rack** — cables, physics, keyboard — inside your
 DAW, not a row of sliders. Notes from the host light up the keyboard and drive
 the scopes; turning a knob reaches the audio without interrupting it.
 
+One exception, and it is a platform one. The rack is drawn by a second process
+— raylib keeps its window in a single global, so one window means one process —
+and a **sandboxed host is not allowed to start one**. GarageBand is sandboxed,
+so it gets the host's generic parameter panel: all 25 parameters, fully
+automatable, and it plays exactly the same. REAPER, Bitwig, Studio One and
+Ardour are not sandboxed and get the cables.
+
 - **CLAP** — all three platforms. REAPER, Bitwig, Studio One.
 - **VST3** — Windows and Linux. Ableton, Cubase, FL Studio, Studio One. It is
   a shim that loads the CLAP, so **install both**.
