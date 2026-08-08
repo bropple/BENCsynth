@@ -1284,6 +1284,9 @@ public:
         addKnob("FBK",  -0.9f, 0.9f, 0.0f, "%+.2f");
         addKnob("MIX",   0.0f, 1.0f, 0.5f, "%.2f");
         addInput("IN");
+        /* Appended, for the reason RVB's is: an existing patch file names its
+         * ports by number, so a new one has to go on the end. */
+        addInput("IN R");
         addOutput("L");
         addOutput("R");
     }
@@ -1297,13 +1300,21 @@ public:
         const float rate = pv(0), depth = pv(1), base = pv(2);
         const float fbk = pv(3), mix = pv(4);
 
+        /* The two lines were always stereo. The input was not: one summed
+         * signal fed both of them and served as the dry for both, so anything
+         * placed left or right upstream arrived here and stopped being
+         * anywhere. Now each side keeps its own. */
+        const bool stereo = patched(1);
+
         for (int i = 0; i < BS_BLOCK; i++) {
-            const float x = in(0).sum(i);
+            const float xl = in(0).sum(i);
+            const float xr = stereo ? in(1).sum(i) : xl;
             ph += rate / sr;
             if (ph >= 1.0f) ph -= 1.0f;
 
             float wet[2];
             for (int k = 0; k < 2; k++) {
+                const float x = k ? xr : xl;
                 /* Half a cycle apart, so the two sides drift against each
                  * other and the result is wide rather than merely doubled. */
                 const float lfo = std::sin(6.2831853f * (ph + (k ? 0.5f : 0.0f)));
@@ -1640,7 +1651,11 @@ class ModuleDly : public Module {
 public:
     ModuleDly()
     {
-        configure("DLY", "DLY", 5, 2);
+        /* Six units and three columns, not five and two. The stereo ports
+         * took the panel from two jack rows to four; at three columns across
+         * the knobs and the jacks both pack tighter, and the panel ends up the
+         * height it always was, one unit wider. */
+        configure("DLY", "DLY", 6, 3);
         addKnob("TIME", 0.005f, 2.0f, 0.32f, "%.3f s", PC_EXP);
         addKnob("FBK",  0.0f, 1.05f, 0.35f, "%.2f");
         addKnob("TONE", 300.0f, 12000.0f, 3500.0f, "%.0f Hz", PC_EXP);
@@ -1652,16 +1667,29 @@ public:
 
         addInput("IN");
         addInput("TIME");
+        /* Appended, like RVB's and CHORUS's, so a saved patch keeps the port
+         * numbers it was written with. */
+        addInput("IN R");
         addOutput("OUT");
         addOutput("WET");
+        /* Appended for the same reason. Unpatched IN R makes the right line an
+         * exact copy of the left, so a rack that only reads OUT and WET sounds
+         * the way it always did. */
+        addOutput("OUT R");
+        addOutput("WET R");
     }
 
     void onSampleRate()
     {
-        line.alloc((int)(sr * 2.2f) + 8);
+        for (int k = 0; k < 2; k++) line[k].alloc((int)(sr * 2.2f) + 8);
         smooth.reset(0.0f);
     }
-    void reset() { line.clear(); tone.reset(); dc.setSampleRate(sr); }
+    void reset()
+    {
+        for (int k = 0; k < 2; k++) { line[k].clear(); tone[k].reset(); }
+        dc[0].setSampleRate(sr);
+        dc[1].setSampleRate(sr);
+    }
 
     void process()
     {
@@ -1682,29 +1710,40 @@ public:
         const float fb  = pv(1);
         const float mix = pv(3);
         const float cvA = pv(4);
-        tone.setCutoff(pv(2), sr);
+        tone[0].setCutoff(pv(2), sr);
+        tone[1].setCutoff(pv(2), sr);
+
+        /* One line per side. The time, the tone and the feedback are shared -
+         * what differs is only what goes in, which is the whole point: a delay
+         * used to sum its input, and a rack that had placed its voices across
+         * the field lost them on the way through. */
+        const bool stereo = patched(2);
 
         for (int i = 0; i < BS_BLOCK; i++) {
-            const float x  = in(0).sum(i);
+            const float xl = in(0).sum(i);
+            const float xr = stereo ? in(2).sum(i) : xl;
             const float tt = clampf(t0 * std::exp2(cvA * in(1).get(0, i)), 0.001f, 2.1f);
             /* Slewing the delay time is what turns a knob twist from a click
              * into the tape-speed slide people reach for it to make. */
             const float d  = smooth.step(tt, 0.05f, sr) * sr;
 
-            const float wet = line.read(d);
-            line.write(dc.step(softClip((x + wet * fb) * 0.2f) * 5.0f));
+            for (int k = 0; k < 2; k++) {
+                const float x = k ? xr : xl;
+                const float wet = line[k].read(d);
+                line[k].write(dc[k].step(softClip((x + wet * fb) * 0.2f) * 5.0f));
 
-            const float w = tone.lp(wet);
-            outs[0].v[0][i] = lerpf(x, w, mix);
-            outs[1].v[0][i] = w;
+                const float w = tone[k].lp(wet);
+                outs[k ? 2 : 0].v[0][i] = lerpf(x, w, mix);
+                outs[k ? 3 : 1].v[0][i] = w;
+            }
         }
     }
 
 private:
-    Delay   line;
-    OnePole tone;
-    DCBlock dc;
-    Slew    smooth;
+    Delay   line[2];
+    OnePole tone[2];
+    DCBlock dc[2];
+    Slew    smooth;   /* one: both sides track the same delay time */
 };
 
 /* ================================================================== *
