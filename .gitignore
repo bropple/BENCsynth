@@ -48,3 +48,4 @@ bencsynth-*-test
 # Working notes. Deliberately untracked: it is a scratchpad of intentions, and
 # intentions that live in git turn into promises.
 ROADMAP.txt
+bencsynth-gen-racks
