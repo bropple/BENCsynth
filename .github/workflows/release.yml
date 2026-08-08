@@ -202,7 +202,14 @@ jobs:
           cp -r dl/plugins-vst3/bencsynth.vst3 stage/
           cp README.md LICENSE NOTICE ARCHITECTURE.md stage/
           ls -R stage | head -30
-          makensis -DVERSION="$V" -DSRCDIR=stage tools/windows-installer.nsi
+          # Absolute. makensis resolves a relative source path against the
+          # script's own directory rather than the working directory, so
+          # "assets/icon/..." was looked for under tools/ and reported as an
+          # icon that could not be opened, three macros deep.
+          makensis -DVERSION="$V" \
+                   -DSRCDIR="$PWD/stage" \
+                   -DICONFILE="$PWD/assets/icon/bencsynth.ico" \
+                   tools/windows-installer.nsi
           ls -l ./*setup.exe
           mkdir -p dist
           cp "bencsynth-$V-windows-setup.exe" dist/
