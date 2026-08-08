@@ -206,13 +206,13 @@ jobs:
           # script's own directory rather than the working directory, so
           # "assets/icon/..." was looked for under tools/ and reported as an
           # icon that could not be opened, three macros deep.
+          mkdir -p dist
           makensis -DVERSION="$V" \
                    -DSRCDIR="$PWD/stage" \
                    -DICONFILE="$PWD/assets/icon/bencsynth.ico" \
+                   -DOUTFILE="$PWD/dist/bencsynth-$V-windows-setup.exe" \
                    tools/windows-installer.nsi
-          ls -l ./*setup.exe
-          mkdir -p dist
-          cp "bencsynth-$V-windows-setup.exe" dist/
+          ls -l dist/*setup.exe
 
       - name: Assemble the plugin pack
         run: |

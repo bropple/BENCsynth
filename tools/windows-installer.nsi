@@ -33,7 +33,12 @@
 !endif
 
 Name "BENCsynth ${VERSION}"
-OutFile "bencsynth-${VERSION}-windows-setup.exe"
+!ifndef OUTFILE
+  !define OUTFILE "bencsynth-${VERSION}-windows-setup.exe"
+!endif
+; Absolute when the caller says so - makensis writes a relative OutFile beside
+; the script, not into the working directory.
+OutFile "${OUTFILE}"
 Unicode true
 RequestExecutionLevel user
 InstallDir "$LOCALAPPDATA\Programs\BENCsynth"
