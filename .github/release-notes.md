@@ -9,8 +9,15 @@ release ought to mean someone has. They follow.
 
 | | |
 |---|---|
-| **The program** | `bencsynth-*-windows-x86_64.zip` — unzip and run `bencsynth.exe`. |
-| **The plugins** | `bencsynth-*-windows-plugins.zip` — CLAP and VST3, with `INSTALL.md`. |
+| **Everything** | `bencsynth-*-windows-setup.exe` — the installer. Program and plug-ins, and it upgrades an existing install rather than sitting beside it. No administrator rights needed. |
+| The program alone | `bencsynth-*-windows-x86_64.zip` — unzip and run `bencsynth.exe`. |
+| The plug-ins alone | `bencsynth-*-windows-plugins.zip` — CLAP and VST3, with `INSTALL.md` for placing them by hand. |
+
+The installer is the one to take unless you have a reason not to. It puts each
+format in the folder its hosts already search, and puts a copy of the program
+beside the CLAP as its editor — which is the part that is easy to get wrong by
+hand, and without which the plug-in opens to a row of sliders instead of the
+rack.
 
 Keep the `assets` folder beside the binary: it carries the interface font and
 the wordmark. Without it the program still runs, in raylib's built-in face.

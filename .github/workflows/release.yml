@@ -91,7 +91,14 @@ jobs:
         run: |
           make clap-fetch
           make clap
-          make lv2 || echo "no LV2 headers on this runner - skipping"
+          # LV2 headers straight from the release, as ci.yml does. Without
+          # this the release quietly shipped an installer with no LV2 section
+          # while the workflow reported success.
+          curl -sL -o /tmp/lv2.tar.gz \
+            https://github.com/lv2/lv2/archive/refs/tags/v1.18.10.tar.gz
+          tar -xzf /tmp/lv2.tar.gz -C /tmp
+          LV2_INCLUDE=/tmp/lv2-1.18.10/include make lv2
+          test -f build/bencsynth.lv2/bencsynth.dll
       - name: The plugins are self-contained
         run: |
           for f in build/bencsynth.clap; do
@@ -105,7 +112,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: plugins-msys2
-          path: build/bencsynth.clap
+          path: |
+            build/bencsynth.clap
+            build/bencsynth.lv2
           if-no-files-found: error
 
   # MSVC, because the VST3 SDK expects it. Nothing of ours is linked in: the
@@ -173,6 +182,31 @@ jobs:
       # One plugin bundle rather than three downloads, and the executable goes
       # in it: the CLAP's editor IS the standalone binary, so a plugin pack
       # without it opens to a generic parameter list and nothing else.
+      # One thing to download and double-click, which upgrades whatever is
+      # already there rather than sitting beside it.
+      - name: NSIS
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nsis
+
+      - name: Assemble the installer
+        run: |
+          V="$VERSION"
+          rm -rf stage && mkdir -p stage
+          unzip -q dl/pkg-windows/*.zip -d /tmp/std
+          cp /tmp/std/*/bencsynth.exe stage/
+          cp -r /tmp/std/*/assets stage/
+          cp dl/plugins-msys2/bencsynth.clap stage/
+          cp -r dl/plugins-msys2/bencsynth.lv2 stage/ 2>/dev/null || \
+            echo "no LV2 in this build - the installer will skip that section"
+          cp -r dl/plugins-vst3/bencsynth.vst3 stage/
+          cp README.md LICENSE NOTICE ARCHITECTURE.md stage/
+          ls -R stage | head -30
+          makensis -DVERSION="$V" -DSRCDIR=stage tools/windows-installer.nsi
+          ls -l ./*setup.exe
+          mkdir -p dist
+          cp "bencsynth-$V-windows-setup.exe" dist/
+
       - name: Assemble the plugin pack
         run: |
           V="$VERSION"
