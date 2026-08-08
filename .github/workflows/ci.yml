@@ -679,7 +679,11 @@ jobs:
       - name: No non-system dynamic libraries
         run: |
           otool -L bencsynth
-          if otool -L bencsynth | tail -n +2 | \
+          # Only the indented lines. otool prints an unindented header per
+          # architecture, so on a universal binary "tail -n +2" leaves
+          # "bencsynth (architecture arm64):" in the stream and the check
+          # reports the binary's own name as a library it cannot find.
+          if otool -L bencsynth | grep -E '^[[:space:]]' | \
              grep -vE '^[[:space:]]+(/usr/lib/|/System/)'; then
             echo "links a library that will not be present on a stock macOS"
             exit 1
