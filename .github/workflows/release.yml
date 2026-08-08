@@ -193,7 +193,7 @@ jobs:
         run: |
           V="$VERSION"
           rm -rf stage && mkdir -p stage
-          unzip -q dl/pkg-windows/*.zip -d /tmp/std
+          unzip -qo dl/pkg-windows/*.zip -d /tmp/std   # -o: the installer step unpacked this too
           cp /tmp/std/*/bencsynth.exe stage/
           cp -r /tmp/std/*/assets stage/
           cp dl/plugins-msys2/bencsynth.clap stage/
@@ -221,7 +221,7 @@ jobs:
           mkdir -p "$D"
           cp dl/plugins-msys2/bencsynth.clap "$D"/
           cp -r dl/plugins-vst3/bencsynth.vst3 "$D"/
-          unzip -q dl/pkg-windows/*.zip -d /tmp/std
+          unzip -qo dl/pkg-windows/*.zip -d /tmp/std   # -o: the installer step unpacked this too
           cp /tmp/std/*/bencsynth.exe "$D"/
           cp -r /tmp/std/*/assets "$D"/
           cp README.md LICENSE NOTICE docs/PLUGIN.md "$D"/
