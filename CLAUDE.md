@@ -81,6 +81,38 @@ instead, or install it.
 
 ---
 
+## Formats: what builds them, what ships them, where they land
+
+| Format | Build | Ships in | Installs to |
+|---|---|---|---|
+| standalone | `make` | `*-<os>-x86_64.zip` / `.tar.gz` / `*-macos-universal.dmg` | anywhere; keep `assets/` beside it |
+| CLAP | `make clap` | every plug-in pack | `~/Library/Audio/Plug-Ins/CLAP`, `%LOCALAPPDATA%\Programs\Common\CLAP`, `~/.clap` |
+| VST3 | `make vst3` | Windows + Linux packs | `…/VST3`, `~/.vst3` |
+| **AU** | `make au` | **`*-macos-plugins.dmg`** | `~/Library/Audio/Plug-Ins/Components` |
+| LV2 | `make lv2` | Linux pack | `~/.lv2` |
+
+The CLAP is the synth. VST3 and AU are shims that load it at runtime, so
+**both always install together** — a shim on its own does nothing. The editor
+is the standalone binary and must sit beside the CLAP (or in `/Applications`
+on macOS), or the plug-in opens to a row of sliders.
+
+`make au-fetch` clones clap-wrapper **and** Apple's AudioUnitSDK;
+`make vst3-fetch` clones clap-wrapper and the VST3 SDK. Neither implies the
+other, which is why `cmake/CMakeLists.txt` guards each wrapper on its own SDK.
+
+### Validating the AU (only possible on a real Mac)
+
+```sh
+# from the mounted bencsynth-*-macos-plugins.dmg
+open "/Volumes/BENCsynth Plug-Ins/Install Plug-Ins.command"
+auval -v aumu BNCS BNCO          # what Logic runs before it will list a plugin
+auval -a | grep -i bencsynth     # is it even registered
+```
+
+If it is not registered, `killall -9 AudioComponentRegistrar` and try again.
+
+---
+
 ## Traps that have cost a build
 
 Each of these has happened. They are cheap to re-introduce.
