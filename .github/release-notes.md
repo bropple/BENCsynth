@@ -55,11 +55,14 @@ The plugin opens the **real rack** — cables, physics, keyboard — inside your
 DAW, not a row of sliders. Notes from the host light up the keyboard and drive
 the scopes; turning a knob reaches the audio without interrupting it.
 
-- **CLAP** for REAPER, Bitwig and Studio One.
-- **VST3** for Ableton, Cubase, FL Studio and Studio One. It is a shim that
-  loads the CLAP, so **install both**.
+- **CLAP** — all three platforms. REAPER, Bitwig, Studio One.
+- **VST3** — Windows and Linux. Ableton, Cubase, FL Studio, Studio One. It is
+  a shim that loads the CLAP, so **install both**.
+- **LV2** — Linux only. Ardour, Carla, Zrythm. It has no editor of its own; the
+  rack is reachable as a parameter rather than a window.
 
-- **LV2** on Linux, for hosts that want it. It has no editor — see below.
+macOS is CLAP-only this release. Anything that loads a CLAP gets the whole
+rack; Logic and GarageBand want AU, which is the next format on the list.
 
 If you are placing files by hand, `INSTALL.md` in each plug-in pack says which
 folder. The one thing to get right on every platform is that **the editor is

@@ -185,7 +185,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libasound2-dev libx11-dev libxrandr-dev \
-            libxi-dev libxcursor-dev libxinerama-dev libgl1-mesa-dev xvfb
+            libxi-dev libxcursor-dev libxinerama-dev libgl1-mesa-dev xvfb \
+            lv2-dev
       # From source and static, not from apt: a release binary linked against
       # the runner image's libraylib needs that exact library on the machine
       # that downloaded it, which is no machine at all.
@@ -296,13 +297,15 @@ jobs:
             exit 1
           fi
           echo "self-contained"
-      - name: The plugins
+      # The CLAP only. macos-plugin-dmg.sh stages the .app, the .clap and the
+      # .vst3, and there is no LV2 in the image for the same reason there is no
+      # LV2 job in ci.yml's macOS lane - nothing on this platform is asking for
+      # one that cannot take the CLAP instead.
+      - name: The plugin
         run: |
           make clap-fetch
           MACOS_UNIVERSAL=1 make clap
-          MACOS_UNIVERSAL=1 make lv2
           make clap-test
-          make lv2-test
       - name: dmgbuild
         run: |
           python3 -m venv /tmp/dmgvenv
