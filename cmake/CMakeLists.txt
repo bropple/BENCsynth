@@ -48,6 +48,14 @@ if(NOT DEFINED CLAP_WRAPPER_DIR)
     message(FATAL_ERROR "set -DCLAP_WRAPPER_DIR to the clap-wrapper checkout")
 endif()
 
+# Handed down from src/core/bs_version.h by the Makefile, so a bundle cannot
+# claim a version the synth inside it disagrees with. auval reported exactly
+# that: a component at 1.1.1 wrapping a CLAP at 0.1.0, in a release tagged
+# v0.2.2.
+if(NOT DEFINED BS_VERSION OR BS_VERSION STREQUAL "")
+    message(FATAL_ERROR "set -DBS_VERSION (the Makefile reads it from bs_version.h)")
+endif()
+
 set(CLAP_WRAPPER_OUTPUT_NAME "bencsynth" CACHE STRING "" FORCE)
 set(CLAP_WRAPPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 
@@ -67,7 +75,7 @@ if(EXISTS "${VST3_SDK_ROOT}/public.sdk/source/main/pluginfactory.cpp")
         TARGET bencsynth_as_vst3
         OUTPUT_NAME "bencsynth"
         BUNDLE_IDENTIFIER "net.ropple.bencsynth"
-        BUNDLE_VERSION "0.1.0"
+        BUNDLE_VERSION "${BS_VERSION}"
     )
 else()
     message(STATUS "bencsynth: no VST3 SDK at '${VST3_SDK_ROOT}' - skipping the VST3 wrapper")
@@ -88,7 +96,7 @@ if(APPLE AND EXISTS "${AUDIOUNIT_SDK_ROOT}/src/AudioUnitSDK")
         TARGET bencsynth_as_auv2
         OUTPUT_NAME "BENCsynth"
         BUNDLE_IDENTIFIER "net.ropple.bencsynth.auv2"
-        BUNDLE_VERSION "1"
+        BUNDLE_VERSION "${BS_VERSION}"
         MANUFACTURER_NAME "BENCO"
         MANUFACTURER_CODE "BNCO"
         SUBTYPE_CODE "BNCS"

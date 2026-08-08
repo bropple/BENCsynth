@@ -30,6 +30,11 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      # Cheap, and it guards a claim the code makes about itself: bs_version.h
+      # says it is the one place a version lives.
+      - name: One version, everywhere
+        run: tools/check_version.sh
+
       - name: Build the core and run the tests
         run: |
           make core

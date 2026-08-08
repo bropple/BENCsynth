@@ -37,6 +37,8 @@
 
 #define BS_CLAP_ID "net.ropple.bencsynth"
 
+#include "bs_version.h"
+
 /* Where the .clap itself lives, filled in by entry_init. The editor is a
  * different file and nothing guarantees the two were installed together, so
  * this is a hint rather than an answer - see editorCandidates() in
@@ -1193,7 +1195,7 @@ static const clap_plugin_descriptor_t DESCRIPTOR = {
     "https://github.com/bropple/BENCsynth",
     0,
     0,
-    "0.1.0",
+    BS_VERSION_STRING,
     "A polyphonic virtual modular synthesizer. Build a rack in the standalone, "
     "save a .bencsynth, and load it here.",
     FEATURES

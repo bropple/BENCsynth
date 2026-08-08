@@ -410,6 +410,11 @@ jobs:
           echo "VERSION=$V" >> "$GITHUB_ENV"
           echo "releasing $V"
 
+      # And the tag has to be the version the code thinks it is. v0.2.2 shipped
+      # plugins reporting 0.1.0 and a component reporting 1.1.1.
+      - name: The tag matches the source
+        run: tools/check_version.sh "$VERSION"
+
       # One plugin bundle rather than three downloads, and the executable goes
       # in it: the CLAP's editor IS the standalone binary, so a plugin pack
       # without it opens to a generic parameter list and nothing else.

@@ -172,6 +172,14 @@ endif
 # wants a bundle directory, which is why that branch does more.
 # ------------------------------------------------------------------
 
+# One version, read from the header rather than repeated here. src/core/
+# bs_version.h says it is the single place; it was not - the CLAP descriptor,
+# its Info.plist and both cmake bundle versions each carried their own copy,
+# and auval reported a plugin claiming 1.1.1 wrapping a CLAP claiming 0.1.0
+# in a release tagged v0.2.2.
+BS_VERSION := $(shell sed -n 's/^#define BS_VERSION_\(MAJOR\|MINOR\|PATCH\) *//p' \
+                src/core/bs_version.h | paste -sd. -)
+
 CLAP_SRC     := src/clap/bencsynth_clap.cpp $(PLUGIN_SRC)
 CLAP_VERSION := 1.2.10
 CLAP_INCLUDE ?= vendor/clap/include
@@ -469,7 +477,7 @@ $(CLAP_BINARY): $(CLAP_SRC) $(PLUGIN_HDR) $(CORE_SRC) $(wildcard src/clap/Info.p
 	    $(CLAP_SHARED) $(CLAP_LINK) -o $(CLAP_BINARY) \
 	    $(CLAP_SRC) $(CLAP_EXTRA_SRC) $(CORE_SRC) -lm $(CLAP_RT) $(CLAP_FRAMEWORKS)
 ifeq ($(UNAME_S),Darwin)
-	cp src/clap/Info.plist $(CLAP_BUNDLE)/Contents/Info.plist
+	sed 's/@BS_VERSION@/$(BS_VERSION)/g' src/clap/Info.plist > $(CLAP_BUNDLE)/Contents/Info.plist
 	@$(MAKE) --no-print-directory mac-sign SIGN=$(CLAP_BUNDLE)
 endif
 	@echo "built $(CLAP_BUNDLE)"
@@ -519,6 +527,7 @@ ifeq ($(CLAP_FOUND),yes)
 	cmake -S cmake -B $(VST3_BUILD) -DCMAKE_BUILD_TYPE=Release \
 	    -DCLAP_WRAPPER_DIR="$(CURDIR)/$(CW_DIR)" \
 	    -DCLAP_SDK_ROOT="$(CURDIR)/vendor/clap" \
+	    -DBS_VERSION="$(BS_VERSION)" \
 	    -DVST3_SDK_ROOT="$(CURDIR)/$(VST3_SDK_DIR)"
 	cmake --build $(VST3_BUILD) --target bencsynth_as_vst3 --config Release -j
 	rm -rf $(VST3_BUNDLE)
@@ -560,6 +569,7 @@ ifeq ($(CLAP_FOUND),yes)
 	    -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64" \
 	    -DCLAP_WRAPPER_DIR="$(CURDIR)/$(CW_DIR)" \
 	    -DCLAP_SDK_ROOT="$(CURDIR)/vendor/clap" \
+	    -DBS_VERSION="$(BS_VERSION)" \
 	    -DAUDIOUNIT_SDK_ROOT="$(CURDIR)/$(AU_SDK_DIR)"
 	cmake --build $(AU_BUILD) --target bencsynth_as_auv2 --config Release -j
 	rm -rf $(AU_BUNDLE)

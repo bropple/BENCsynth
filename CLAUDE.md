@@ -163,10 +163,18 @@ does not obviously mean "declare the language".
 
 **`auval` cannot see a component on a GitHub runner.** Registration is
 asynchronous and needs a real user session; six retries with the registrar
-killed between them never worked. The AU's structural checks — signature, both
-architectures, the four-character codes in the plist, no DSP symbols — are
-real, but **nobody has validated the AU functionally**. Run
-`auval -v aumu BNCS BNCO` on an actual Mac.
+killed between them never worked, so the CI job warns and skips. The AU
+*was* validated by hand on a real Mac and passed everything — but that is a
+human step, and it stays one. Re-run `auval -v aumu BNCS BNCO` after any
+change to the wrapper, the codes, or the CLAP's parameter list.
+
+**Nothing outside `bs_version.h` may spell a version out.** The header has
+always claimed to be the single place; it was not, and v0.2.2 shipped an AU
+reporting 1.1.1 wrapping a CLAP reporting 0.1.0 under a tag saying 0.2.2.
+The Makefile reads the header and feeds `@BS_VERSION@` into the plist and
+`-DBS_VERSION` into cmake. `tools/check_version.sh` enforces it, and the
+release job runs it against the tag — so a tag that disagrees with the source
+now fails before anything is built.
 
 **`%LOCALAPPDATA%` is not `%APPDATA%`.** A plugin in the wrong one fails with
 no message at all.
