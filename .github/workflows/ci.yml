@@ -639,22 +639,40 @@ jobs:
       # dylib under /opt/homebrew, and a binary linked against it aborts at
       # launch on any machine without that exact library - which is every
       # machine that has just downloaded a build.
+      # Universal, because the executable is built universal below and a
+      # single-architecture raylib underneath it will not link.
       - name: raylib
         run: |
           git clone --depth 1 --branch 5.5 https://github.com/raysan5/raylib.git /tmp/raylib
           cmake -S /tmp/raylib -B /tmp/raylib/build -DCMAKE_INSTALL_PREFIX=/tmp/rl \
-            -DBUILD_SHARED_LIBS=OFF -DBUILD_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Release
+            -DBUILD_SHARED_LIBS=OFF -DBUILD_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64"
           cmake --build /tmp/raylib/build -j3
           cmake --install /tmp/raylib/build
+          lipo -info /tmp/rl/lib/libraylib.a | tail -1
 
       - name: What the build decided
         run: RAYLIB=/tmp/rl make info
 
+      # Universal here as well as at release time. The flag exists because
+      # -MMD and two -arch flags cannot be combined, so it is off by default -
+      # which would leave it exercised only on a tag, where a mistake in it is
+      # most expensive to find.
       - name: Build
-        run: RAYLIB=/tmp/rl make
+        run: RAYLIB=/tmp/rl MACOS_UNIVERSAL=1 make
 
       - name: Tests
         run: make test
+
+      # The plugins have been universal since v0.1.0; the executable has not,
+      # and it is the plugin's editor. An arm64 editor inside a universal
+      # plugin is a plugin that loads on an Intel Mac and never opens its
+      # window - which reads as the plugin being broken, not the build.
+      - name: The executable is universal
+        run: |
+          lipo -info bencsynth
+          lipo -info bencsynth | grep -q x86_64
+          lipo -info bencsynth | grep -q arm64
 
       # The check that would have caught shipping a Homebrew-linked binary.
       # Anything outside /usr/lib and /System is not on a stock Mac.

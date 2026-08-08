@@ -98,6 +98,27 @@ LV2_BUNDLE := build/bencsynth.lv2
 # which, like everything else on this platform, is reported as "damaged".
 MAC_ARCHS := -arch x86_64 -arch arm64
 
+# The plugins are universal unconditionally, above. The executable is not, and
+# for a long time that was only a standalone-download question: an Intel Mac
+# got nothing, and could tell.
+#
+# It stopped being only that when the CLAP started opening its editor by
+# running this binary. The plugin bundle carries BENCsynth.app, so an arm64
+# executable inside a universal plugin means the plugin loads on an Intel Mac
+# and its window never appears - the one failure that looks like the plugin
+# being broken rather than the download being wrong.
+#
+# Off by default all the same. Two -arch flags and -MMD cannot be combined -
+# clang refuses outright, which is why every plugin rule below filters them
+# out - so turning this on costs dependency tracking, and somebody rebuilding
+# one file locally should not pay for a release's problem. Releases and CI set
+# it; `make` on a developer's Mac stays native and incremental.
+ifeq ($(UNAME_S),Darwin)
+ifeq ($(MACOS_UNIVERSAL),1)
+  CXXFLAGS := $(filter-out -MMD -MP,$(CXXFLAGS)) $(MAC_ARCHS)
+endif
+endif
+
 ifeq ($(UNAME_S),Darwin)
   LV2_LIB_EXT := .dylib
   LV2_SHARED  := -dynamiclib $(MAC_ARCHS)
