@@ -30,7 +30,19 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 # the same reason the CLAP and the executable are linked -static under MinGW.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
-project(bencsynth-vst3 LANGUAGES C CXX)
+# Objective-C++ on Apple, because both wrappers have .mm sources there -
+# auv2_shared.mm, wrappedview.mm and os/macos.mm. Without OBJCXX in this list
+# CMake configures happily and then fails at generate time with "required
+# internal CMake variable not set: CMAKE_OBJCXX_COMPILE_OBJECT", which does not
+# obviously mean "declare the language".
+#
+# It had never come up: there is no macOS VST3 job, so the only build that
+# reached a .mm was this one.
+if(APPLE)
+    project(bencsynth-wrappers LANGUAGES C CXX OBJC OBJCXX)
+else()
+    project(bencsynth-wrappers LANGUAGES C CXX)
+endif()
 
 if(NOT DEFINED CLAP_WRAPPER_DIR)
     message(FATAL_ERROR "set -DCLAP_WRAPPER_DIR to the clap-wrapper checkout")
