@@ -40,6 +40,32 @@ wrong one fails with no message at all.
 The **Rack** parameter steps through all 37 presets and saves with your
 project. The eight **Macro** parameters are automatable.
 
+So is any knob you choose: **right-click a knob → EXPOSE** and it takes one of
+sixteen slots the host sees by name — `VCF CUTOFF` rather than `Param 12`. The
+choice is saved with the project, and the host is told to re-read the names, so
+they change as you change them.
+
+Everything else saves too — the patch, where the rack was scrolled and how far
+it was zoomed. You do not have to save inside BENCsynth for the DAW's project
+to come back the way you left it.
+
+### New since v0.1.0
+
+- **An installer**, which is the headline. It upgrades in place; the old
+  version does not have to be removed first.
+- **Thirteen more module types**, thirty in all: a plucked-string waveguide, a
+  state-variable filter, a function generator, a quantizer, a clock, an
+  eight-step sequencer, logic, a switch, a wavefolder, a bitcrusher, a chorus,
+  a slew limiter and a stereo panner among them.
+- **Eight more racks**, thirty-seven in all — including **PIANO** and
+  **GRAND**, which are struck strings rather than a filter pretending.
+- **Musical typing** while the plugin has focus, a keyboard you can fold away
+  with the icon in the top right, and a rack list that scrolls and sorts.
+- **Tempo sync** — CLK and DLY can follow the host's BPM in note values.
+- **Five bugs** an audit turned up, three of them serious: a restored rack
+  being wiped on activate, which made saved projects come back silent; clock
+  divisions that did not divide; and an envelope's end-of-cycle that stuck on.
+
 ### Getting started
 
 Press **Z** or click the keys. **RACKS** on the toolbar loads a preset; each
