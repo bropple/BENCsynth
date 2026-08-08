@@ -1,0 +1,175 @@
+# BENCsynth — working notes for Claude
+
+A polyphonic virtual analog modular synth. C++17 + raylib, physics-based patch
+cables. Ships as a standalone program and as CLAP / VST3 / LV2 plugins.
+
+This file is for the things that are **expensive to re-derive** — the release
+sequence, and the traps that have actually cost a build. It is not a tour of
+the code; `ARCHITECTURE.md` and `docs/PLUGIN.md` are that, and the Makefile
+documents its own targets.
+
+---
+
+## Untracked on purpose
+
+- **`style/`** — the BENCO style guide. Gitignored, and must stay that way.
+- **`ROADMAP.txt`** — working notes, deliberately untracked. Read it at the
+  start of a session; it is ordered by what to pick up next.
+- `patches/`, `vendor/`, `shots/`, `build/`.
+
+The mascot is **S. Tarr** (the star). `../BENCmouth` is a reference for GUI
+style only — do not copy code from it.
+
+---
+
+## Before you commit anything
+
+```sh
+make && make test                     # 480 checks
+make clap  && make clap-test          #  58
+make lv2   && make lv2-test           #  27
+make ipc-test && xvfb-run -a --server-args="-screen 0 1400x900x24" \
+    ./bencsynth-ipc-test ./bencsynth  #  46
+```
+
+Screenshots: `./bencsynth --shot NAME.png --frames 90` under `xvfb-run`.
+**raylib's `TakeScreenshot` ignores the directory** and writes to the working
+directory — pass a bare filename and move it afterwards.
+
+---
+
+## Cutting a release
+
+The workflow builds **from the tag**, and on a tag push it also reads its own
+definition from the tag. So a bug in `release.yml` means deleting and
+re-pointing the tag, not just pushing a fix to main.
+
+```sh
+# 1. everything above passes, main is pushed, and CI on that exact commit is green
+gh run list --branch main --limit 1
+
+# 2. update .github/release-notes.md   <- the release body comes from this file
+# 3. tag and push
+git tag -a v0.X.Y -m "..." && git push origin v0.X.Y
+
+# 4. watch it
+gh run watch "$(gh run list --workflow release --limit 1 --json databaseId -q '.[0].databaseId')"
+```
+
+To move a tag after a failed run (nothing was published, so nothing is lost):
+
+```sh
+git tag -d v0.X.Y && git push origin :refs/tags/v0.X.Y
+git tag -a v0.X.Y -m "..." && git push origin v0.X.Y
+```
+
+Seven assets across three platforms. `publish` asserts all seven exist before
+creating the release — if that step fails, a glob did not match.
+
+**Verify what actually shipped.** Download the artifacts and check them; do not
+infer from a green run. The Linux binary can be run right here, which is a real
+end-to-end test because it was built on a different machine:
+
+```sh
+gh release download vX --pattern '*linux*' && tar xzf *x86_64.tar.gz
+xvfb-run -a ./bencsynth-*/bencsynth --shot t.png --frames 60
+```
+
+NSIS compresses its string table, so the installer's payload is **not**
+readable with `strings`. Verify it from the build log's staging listing
+instead, or install it.
+
+---
+
+## Traps that have cost a build
+
+Each of these has happened. They are cheap to re-introduce.
+
+**`workflow_dispatch` checks out the branch, not the tag.** This shipped
+v0.1.0's release with `main`'s code attached to it. All three checkouts are now
+pinned to `${{ github.event.inputs.tag || github.ref }}`. Same for
+`GITHUB_REF_NAME`, which is the *branch* on a dispatch — that once published a
+release called "main".
+
+**`otool -L` prints a header line per architecture.** On a universal binary
+`tail -n +2` leaves `bencsynth (architecture arm64):` in the stream, and a
+"self-contained" check then fails the build for linking against itself. Filter
+to indented lines only.
+
+**`grep -i 'Rl[A-Z]'` matches the `rle` in `strlen`.** Do not widen the
+raylib-symbol check that way; it fails on libc.
+
+**`-MMD` cannot be combined with two `-arch` flags.** Clang refuses outright.
+That is why every plugin rule filters `-MMD -MP` out, and why the universal
+executable is behind `MACOS_UNIVERSAL=1` rather than always on. CI sets it too
+— a flag exercised only on a tag is a flag that breaks on a tag.
+
+**The macOS executable is the plugin's editor.** The CLAP opens the rack by
+running the standalone, and the plugin DMG carries it. An arm64 executable
+inside a universal plugin means the plugin loads on an Intel Mac and never
+opens a window, which reads as a broken plugin rather than a wrong download.
+Keep them both universal.
+
+**Never ship a `.app` or `.clap` in a zip.** GitHub's zip drops the executable
+bit and the code signature seals file modes — losing them invalidates the
+signature, and an invalid signature is exactly what macOS reports as
+"damaged". Disk image on macOS, tarball on Linux. Zip is fine for Windows.
+
+**Signing is not notarisation.** Ad-hoc signing satisfies arm64's requirement
+and validates, but identifies nobody, so macOS still says it cannot check for
+malicious software. That is expected. "Damaged" is a different thing and is a
+real bug.
+
+**`%LOCALAPPDATA%` is not `%APPDATA%`.** A plugin in the wrong one fails with
+no message at all.
+
+**`makensis` on Linux:** backslashes are not path separators, and relative
+source paths resolve against the *script's* directory, not the working
+directory. Pass absolute paths for the icon and the output.
+
+---
+
+## Invariants that constrain changes
+
+**One raylib window per process.** raylib keeps its window and GL context in a
+single file-scope `CoreData CORE`. That is why the editor is a **separate
+process** talking over shared memory, not a thread. Do not try to make it a
+thread again.
+
+**The `.clap` must not link raylib or GLFW.** The host process has neither. CI
+fails on any undefined glfw/raylib symbol in the plugin. `src/plugin/bs_embed.cpp`
+is editor-only for this reason.
+
+**Append ports and parameters; never insert or reorder.** Patch files store
+cables by port *index*, so appending keeps every saved patch working. Verify
+compatibility by writing a patch with the previously shipped binary and loading
+it with the new one — do not reason about it.
+
+**CLAP parameter IDs are permanent.** There are 16 exposed slots whose *names*
+change via `rescan(INFO|TEXT)`; the IDs never do.
+
+**Unpatched inputs read as silence by design**, and an input takes exactly one
+cable — a second silently replaces the first. Right at a patch bay, never right
+in a preset. `Patch::connect` counts replacements and the preset sweep insists
+on zero, which found four such cables in one run after one of them had already
+broken GRAND.
+
+**Wayland cannot embed a plugin window at all.** Not our gap; XWayland covers
+it. Windows uses `SetParent`, X11 uses `XReparentWindow`, macOS cannot reparent
+across processes at all and so ships pixels into an `IOSurface`.
+
+---
+
+## Measure, don't reason
+
+This project has a strong track record of measurement catching what argument
+missed: FFT spectra for string inharmonicity, tick-gap timing for the clock,
+L/R correlation for stereo width, `XQueryTree` for embedding, Xvfb + xdotool
+for UI. Build a throwaway probe against `libbencsynth.a`:
+
+```sh
+g++ -O2 -std=c++17 -Isrc/core -o /tmp/probe probe.cpp libbencsynth.a -lm
+```
+
+When a change is supposed to affect the sound, **put the number in the commit
+message**, and say so plainly when the number is unimpressive.
