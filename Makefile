@@ -560,7 +560,6 @@ ifeq ($(CLAP_FOUND),yes)
 	    -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64" \
 	    -DCLAP_WRAPPER_DIR="$(CURDIR)/$(CW_DIR)" \
 	    -DCLAP_SDK_ROOT="$(CURDIR)/vendor/clap" \
-	    -DVST3_SDK_ROOT="$(CURDIR)/$(VST3_SDK_DIR)" \
 	    -DAUDIOUNIT_SDK_ROOT="$(CURDIR)/$(AU_SDK_DIR)"
 	cmake --build $(AU_BUILD) --target bencsynth_as_auv2 --config Release -j
 	rm -rf $(AU_BUNDLE)

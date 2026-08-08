@@ -41,13 +41,25 @@ set(CLAP_WRAPPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 
 add_subdirectory(${CLAP_WRAPPER_DIR} clap-wrapper EXCLUDE_FROM_ALL)
 
-add_library(bencsynth_as_vst3 MODULE)
-target_add_vst3_wrapper(
-    TARGET bencsynth_as_vst3
-    OUTPUT_NAME "bencsynth"
-    BUNDLE_IDENTIFIER "net.ropple.bencsynth"
-    BUNDLE_VERSION "0.1.0"
-)
+# Each wrapper only if its SDK is actually here.
+#
+# One CMakeLists declares both, so without these guards configuring for either
+# format demands both SDKs - which is how the first AU build failed: make
+# au-fetch clones clap-wrapper and the AudioUnit SDK, and the configure then
+# stopped dead on a missing VST3 tree it had no use for.
+#
+# The test is clap-wrapper's own: the file guarantee_vst3sdk checks for.
+if(EXISTS "${VST3_SDK_ROOT}/public.sdk/source/main/pluginfactory.cpp")
+    add_library(bencsynth_as_vst3 MODULE)
+    target_add_vst3_wrapper(
+        TARGET bencsynth_as_vst3
+        OUTPUT_NAME "bencsynth"
+        BUNDLE_IDENTIFIER "net.ropple.bencsynth"
+        BUNDLE_VERSION "0.1.0"
+    )
+else()
+    message(STATUS "bencsynth: no VST3 SDK at '${VST3_SDK_ROOT}' - skipping the VST3 wrapper")
+endif()
 
 # AU, on macOS only. The only way into Logic and GarageBand, which between
 # them are most of the Macs that will ever open this.
@@ -58,7 +70,7 @@ target_add_vst3_wrapper(
 # spelled out here. They are permanent - a host remembers a plugin by
 # type/subtype/manufacturer, and changing any of them makes every saved
 # project stop finding it.
-if(APPLE)
+if(APPLE AND EXISTS "${AUDIOUNIT_SDK_ROOT}/src/AudioUnitSDK")
     add_library(bencsynth_as_auv2 MODULE)
     target_add_auv2_wrapper(
         TARGET bencsynth_as_auv2
@@ -70,4 +82,6 @@ if(APPLE)
         SUBTYPE_CODE "BNCS"
         INSTRUMENT_TYPE "aumu"
     )
+elseif(APPLE)
+    message(STATUS "bencsynth: no AudioUnit SDK at '${AUDIOUNIT_SDK_ROOT}' - skipping the AU wrapper")
 endif()
