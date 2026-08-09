@@ -818,13 +818,25 @@ int main(int argc, char **argv)
              * rack comes back through the host channel below like any other
              * change the plugin made, so the knob updates itself. */
             if (bs_rack_learn_macro >= 0) {
-                b->learnMacro.store(bs_rack_learn_macro, std::memory_order_release);
-                say(&app, "learning - turn a knob on your controller");
-            }
-            if (b->learnMacro.load(std::memory_order_acquire) < 0 &&
-                bs_rack_learn_macro >= 0) {
-                bs_rack_learn_macro = -1;
-                say(&app, "learned");
+                const int cc = b->learnCc.exchange(0, std::memory_order_acq_rel);
+                if (cc > 0) {
+                    /* The knob is turned here, not in the plugin. The plugin
+                     * has the rack too, but this side publishes every knob
+                     * every frame - so a frame already in flight would
+                     * overwrite anything the plugin wrote and the learn would
+                     * vanish with nothing said. One writer. */
+                    g_engine.setMacroCc(bs_rack_learn_macro, cc);
+                    char m2[128];
+                    std::snprintf(m2, sizeof m2, "MACRO %d takes CC %d",
+                                  bs_rack_learn_macro + 1, cc);
+                    say(&app, m2);
+                    bs_rack_learn_macro = -1;
+                    b->learnMacro.store(-1, std::memory_order_release);
+                    rack.edited = 1;      /* so the new knob goes out */
+                } else {
+                    b->learnMacro.store(bs_rack_learn_macro,
+                                        std::memory_order_release);
+                }
             }
             if (b->quit.load(std::memory_order_acquire)) break;
 

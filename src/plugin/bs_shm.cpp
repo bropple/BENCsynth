@@ -134,6 +134,7 @@ bool bs_shm_create(ShmMap *m, unsigned long salt)
     /* Explicitly, because zero is macro one. Everything else in this block
      * means "nothing yet" when it is zero and this does not. */
     m->block->learnMacro.store(-1, std::memory_order_relaxed);
+    m->block->learnCc.store(0, std::memory_order_relaxed);
     return true;
 }
 
@@ -251,6 +252,7 @@ bool bs_shm_create(ShmMap *m, unsigned long salt)
     /* Explicitly, because zero is macro one. Everything else in this block
      * means "nothing yet" when it is zero and this does not. */
     m->block->learnMacro.store(-1, std::memory_order_relaxed);
+    m->block->learnCc.store(0, std::memory_order_relaxed);
     return true;
 }
 

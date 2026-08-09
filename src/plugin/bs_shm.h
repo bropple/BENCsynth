@@ -160,6 +160,19 @@ struct ShmBlock {
      * and travels the way every other knob does. */
     std::atomic<int32_t>  learnMacro;
 
+    /* And the answer coming back: the CC the plugin caught, or 0.
+     *
+     * The plugin does not write the assignment itself. It could - it has the
+     * rack - but the editor also publishes every knob every frame, so a frame
+     * already in flight would overwrite it and the learn would vanish with
+     * nothing said. Two writers, one rack.
+     *
+     * So the plugin reports what it saw and the editor, which owns the rack,
+     * turns the knob. That also makes the plugin's half free: one atomic
+     * store on the audio thread, no lock and no main-thread callback for
+     * something a person does once. */
+    std::atomic<int32_t>  learnCc;
+
     std::atomic<uint64_t> embedParent;
     std::atomic<uint32_t> wantW;
     std::atomic<uint32_t> wantH;

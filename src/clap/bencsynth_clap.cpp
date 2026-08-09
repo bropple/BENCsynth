@@ -84,12 +84,6 @@ struct BencSynthClap {
      * it records the request and asks the host for a main-thread callback,
      * which is precisely what request_callback is for. */
     bs::MpeState     mpe;
-    /* A learn waiting to be applied: (macro << 8) | cc, or -1.
-     *
-     * Not applied where it is noticed. Assigning takes the graph lock and
-     * then has to publish the whole rack to the editor, and neither of those
-     * belongs in an audio callback for something a person does once. */
-    std::atomic<int> pendingLearn;
     std::atomic<int> wantPreset;
     int              havePreset;
 
@@ -761,10 +755,10 @@ static void handleEvent(BencSynthClap *s, const clap_event_header_t *h, int at,
                 const int learn =
                     s->shm.block->learnMacro.load(std::memory_order_acquire);
                 if (learn >= 0 && learn < bs::BS_MACROS && m[1] > 0) {
-                    s->pendingLearn.store((learn << 8) | (int)m[1],
-                                          std::memory_order_release);
-                    if (s->host && s->host->request_callback)
-                        s->host->request_callback(s->host);
+                    /* Reported, not applied. The editor owns the rack and
+                     * turns the knob; see learnCc in bs_shm.h. */
+                    s->shm.block->learnCc.store((int32_t)m[1],
+                                                std::memory_order_release);
                     break;
                 }
             }
@@ -909,23 +903,6 @@ static void pl_on_main_thread(const clap_plugin_t *p)
 {
     BencSynthClap *s = self_of(p);
 
-    /* A CC that was caught while a macro was learning.
-     *
-     * Done here rather than where it was noticed: it takes the graph lock and
-     * then publishes the whole rack, and neither belongs in an audio callback
-     * for something a person does once. The editor is watching learnMacro and
-     * takes -1 as "done"; the assignment itself reaches it as an ordinary
-     * knob, in the rack that goes out below. */
-    const int learn = s->pendingLearn.exchange(-1, std::memory_order_acq_rel);
-    if (learn >= 0) {
-        const int macro = (learn >> 8) & 0xff;
-        const int cc    = learn & 0xff;
-        s->engine.setMacroCc(macro, cc);
-        bs::bs_log("  macro %d learned CC %d", macro + 1, cc);
-        if (s->shmOpen)
-            s->shm.block->learnMacro.store(-1, std::memory_order_release);
-        pushRackToEditor(s);
-    }
 
     /* A structural change from the editor: a module or a cable appeared or
      * went away, so the rack has to be rebuilt. This allocates, which is why
@@ -1086,7 +1063,6 @@ static bool gui_create(const clap_plugin_t *p, const char *api, bool is_floating
     s->appliedSnapSeq  = 0;
     s->appliedParamSeq = 0;
     s->pendingEdit.store(0);
-    s->pendingLearn.store(-1);
 
     s->shm.block->wantW.store(s->guiW);
     s->shm.block->wantH.store(s->guiH);

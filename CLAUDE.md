@@ -26,7 +26,7 @@ style only — do not copy code from it.
 
 ```sh
 make && make test                     # 532 checks
-make clap  && make clap-test          #  69
+make clap  && make clap-test          #  68
 make lv2   && make lv2-test           #  27
 make ipc-test && xvfb-run -a --server-args="-screen 0 1400x900x24" \
     ./bencsynth-ipc-test ./bencsynth  #  46
@@ -229,6 +229,12 @@ or the silent voices drown the one playing — this cost an hour on the MPE work
 **Goertzel drifts over a long window.** It reported 261 Hz for a note an octave
 up. Use direct sin/cos correlation for pitch over more than a few thousand
 samples.
+
+**The editor owns the rack; the plugin must not write knobs.** The editor
+publishes every knob every frame, so anything the plugin writes into the rack
+is overwritten by a frame already in flight — silently. MIDI learn was built
+the wrong way round first and passed locally while failing in CI, which is what
+a race looks like. The plugin reports what it saw; the editor turns the knob.
 
 **Changing `ShmBlock` means bumping `BS_SHM_VERSION`.** The handshake refuses
 a mismatched pair rather than reading the block at the wrong offsets, which is
