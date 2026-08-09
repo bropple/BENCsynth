@@ -404,6 +404,35 @@ int main(int argc, char **argv)
         ok(pa->get_info(p, 8, &info) && (info.flags & CLAP_PARAM_IS_STEPPED),
            "the rack parameter is stepped, so hosts draw a chooser");
         ok(info.max_value >= 20, "every rack preset is reachable from the host");
+
+        /* The racks a person saved, at the end of the same chooser. The
+         * Makefile puts one in a folder of its own and points
+         * BENCSYNTH_RACKS at it; without that this is a built-in-only list
+         * and there is nothing to find. */
+        if (std::getenv("BENCSYNTH_RACKS")) {
+            bool found = false;
+            char last[64] = "";
+            for (int i = (int)info.max_value; i >= 0 && !found; i--) {
+                char nm[64] = "";
+                if (!pa->value_to_text(p, 8, i, nm, sizeof nm)) continue;
+                if (!last[0]) std::snprintf(last, sizeof last, "%s", nm);
+                if (std::strstr(nm, "ZZ_TEST_RACK")) found = true;
+            }
+            ok(found, "a rack saved to disk is offered by the host's chooser");
+            std::printf("        (last entry: %s)\n", last);
+
+            /* And choosing it has to actually load the file. The rebuild is a
+             * main-thread job, so this drives the callback the way a host
+             * does and then asks what the plugin thinks it is showing. */
+            g_callbackRequested = false;
+            evs.clear();
+            evs.param(0, 8, info.max_value);
+            p->process(p, &proc);
+            if (g_callbackRequested) p->on_main_thread(p);
+            double v = 0;
+            ok(pa->get_value(p, 8, &v) && (int)(v + 0.5) == (int)info.max_value,
+               "and selecting it sticks - the file loaded");
+        }
     }
 
     /* --- changing the rack happens on the main thread, not in process() --- */

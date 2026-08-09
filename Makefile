@@ -34,7 +34,8 @@ endif
 CORE_SRC := src/core/bs_patch.cpp \
             src/core/bs_modules.cpp \
             src/core/bs_engine.cpp \
-            src/core/bs_patchfile.cpp
+            src/core/bs_patchfile.cpp \
+            src/core/bs_racklib.cpp
 CORE_OBJ := $(CORE_SRC:.cpp=.o)
 CORE_LIB := libbencsynth.a
 
@@ -182,6 +183,7 @@ endif
 # as a comment, truncates the line and reports "unterminated call to function
 # shell". See tools/version.sh.
 BS_VERSION := $(shell tools/version.sh)
+BS_PATCH_EXT := bencsynth
 
 CLAP_SRC     := src/clap/bencsynth_clap.cpp $(PLUGIN_SRC)
 CLAP_VERSION := 1.2.10
@@ -500,9 +502,18 @@ $(IPCTEST): tools/ipc_test.cpp $(PLUGIN_SRC) $(PLUGIN_HDR) $(CORE_LIB)
 	    $(PLUGIN_SRC) $(CORE_LIB) $(CLAP_RT) $(IPC_X11)
 
 CLAPHOST := bencsynth-clap-host$(EXE)
+SAVERACK := bencsynth-save-rack$(EXE)
 
-clap-test: clap $(CLAPHOST)
-	./$(CLAPHOST) $(CLAP_BINARY)
+$(SAVERACK): tools/save_rack.cpp $(CORE_LIB)
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ $< $(CORE_LIB) -lm
+
+# A rack in a folder of its own, so the host test can check that the Rack
+# chooser lists what a person saved and not only what was compiled in.
+# BENCSYNTH_RACKS overrides the per-user folder, which is the point of it.
+clap-test: clap $(CLAPHOST) $(SAVERACK)
+	@rm -rf build/testracks && mkdir -p build/testracks
+	@./$(SAVERACK) CLASSIC build/testracks/ZZ_TEST_RACK.$(BS_PATCH_EXT) >/dev/null
+	BENCSYNTH_RACKS="$(CURDIR)/build/testracks" ./$(CLAPHOST) $(CLAP_BINARY)
 
 $(CLAPHOST): tools/clap_host.cpp
 	$(CXX) $(CXXFLAGS) -I$(CLAP_INCLUDE) -o $@ $< -ldl $(IPC_X11)

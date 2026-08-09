@@ -38,6 +38,7 @@
 #define BS_CLAP_ID "net.ropple.bencsynth"
 
 #include "bs_version.h"
+#include "bs_racklib.h"
 
 /* Where the .clap itself lives, filled in by entry_init. The editor is a
  * different file and nothing guarantees the two were installed together, so
@@ -357,6 +358,29 @@ static double slotToNorm(const bs::Param *p, float v)
     return span > 1e-9f ? (double)((v - p->lo) / span) : 0.0;
 }
 
+/* The Rack chooser covers the built-in presets and then the racks a person
+ * saved. Built-in indices never move, so a project that stored one still finds
+ * it; user racks are appended in sorted order after them.
+ *
+ * A user rack that has been deleted since the project was saved leaves the
+ * index pointing at a different name, or past the end. Neither loses any
+ * sound: the plugin's state carries the whole rack as text, so what a project
+ * reopens with is what it was saved with, and the chooser is only a label. */
+static int rackTotal()
+{
+    return bs::rackPresetCount() + bs::userRackCount();
+}
+
+static const char *rackNameAt(int i)
+{
+    if (i >= 0 && i < bs::rackPresetCount()) {
+        const bs::RackPreset *rp = bs::rackPresetAt(i);
+        return rp ? rp->name : 0;
+    }
+    const bs::UserRack *ur = bs::userRackAt(i - bs::rackPresetCount());
+    return ur ? ur->name.c_str() : 0;
+}
+
 static bool pa_get_info(const clap_plugin_t *p, uint32_t index,
                         clap_param_info_t *info)
 {
@@ -371,7 +395,7 @@ static bool pa_get_info(const clap_plugin_t *p, uint32_t index,
         info->flags = CLAP_PARAM_IS_STEPPED | CLAP_PARAM_IS_AUTOMATABLE;
         std::snprintf(info->name, sizeof info->name, "Rack");
         info->min_value     = 0;
-        info->max_value     = bs::rackPresetCount() - 1;
+        info->max_value     = rackTotal() - 1;
         info->default_value = 0;
         return true;
     }
@@ -423,12 +447,11 @@ static bool pa_value_to_text(const clap_plugin_t *p, clap_id id, double value,
                              char *out, uint32_t cap)
 {
     if (id == PARAM_PRESET) {
-        const int i = (int)(value + 0.5);
-        const bs::RackPreset *rp = bs::rackPresetAt(i);
+        const char *name = rackNameAt((int)(value + 0.5));
         if (self_of(p)->custom)
-            std::snprintf(out, cap, "%s (edited)", rp ? rp->name : "Custom");
+            std::snprintf(out, cap, "%s (edited)", name ? name : "Custom");
         else
-            std::snprintf(out, cap, "%s", rp ? rp->name : "?");
+            std::snprintf(out, cap, "%s", name ? name : "?");
         return true;
     }
     if (id >= (uint32_t)PARAM_SLOT_0) {
@@ -449,9 +472,9 @@ static bool pa_text_to_value(const clap_plugin_t *, clap_id id,
                              const char *text, double *out)
 {
     if (id == PARAM_PRESET) {
-        for (int i = 0; i < bs::rackPresetCount(); i++) {
-            const bs::RackPreset *rp = bs::rackPresetAt(i);
-            if (rp && std::strcmp(rp->name, text) == 0) { *out = i; return true; }
+        for (int i = 0; i < rackTotal(); i++) {
+            const char *n = rackNameAt(i);
+            if (n && std::strcmp(n, text) == 0) { *out = i; return true; }
         }
         return false;
     }
@@ -857,11 +880,27 @@ static void pl_on_main_thread(const clap_plugin_t *p)
 
     const int want = s->wantPreset.load();
     if (want == s->havePreset && !s->custom) return;
-    if (want < 0 || want >= bs::rackPresetCount()) return;
+    if (want < 0 || want >= rackTotal()) return;
 
     /* Engine::clear() takes the graph lock, so this is safe against a render
      * in flight - it is the same path the standalone's preset menu uses. */
-    s->engine.buildPreset(want);
+    if (want < bs::rackPresetCount()) {
+        s->engine.buildPreset(want);
+    } else {
+        /* A file this time. If it will not load - deleted, or moved, or
+         * written by something else - say so and leave the rack alone rather
+         * than dropping the player into silence mid-song. */
+        const bs::UserRack *ur = bs::userRackAt(want - bs::rackPresetCount());
+        char status[256] = "";
+        if (!ur || !bs_patch_load(&s->engine, ur->path.c_str(),
+                                  status, sizeof status)) {
+            bs::bs_log("  rack %d (%s) did not load: %s", want,
+                       ur ? ur->path.c_str() : "?", status);
+            s->wantPreset.store(s->havePreset);
+            return;
+        }
+        bs::bs_log("  loaded user rack %s", ur->path.c_str());
+    }
     s->havePreset = want;
     s->custom     = false;
 
@@ -1243,6 +1282,25 @@ static const clap_plugin_t *createPlugin(const clap_host_t *host)
     s->rate = 48000.0f;
     s->pendingEdit.store(0);
     s->bundleDir   = g_bundleDir;
+
+    /* The racks a person saved, found once per instance.
+     *
+     * Once, not on every list: a host asks for parameter info constantly, and
+     * a chooser whose length changed under it would be worse than one that
+     * needs the plugin reopening to notice a new file. Beside the plugin as
+     * well as in the per-user folder, because a portable Windows install puts
+     * the editor - and so its patches folder - next to the .clap. */
+    {
+        std::string beside = g_bundleDir;
+        if (!beside.empty()) {
+            const char sep = beside.find('\\') != std::string::npos ? '\\' : '/';
+            if (beside[beside.size() - 1] != sep) beside += sep;
+            beside += "patches";
+        }
+        const int n = bs::scanUserRacks(beside.empty() ? 0 : beside.c_str());
+        bs::bs_log("  %d built-in racks, %d of the user's", bs::rackPresetCount(), n);
+    }
+
     s->havePreset = 0;
     s->custom     = false;
     s->wantPreset.store(0);

@@ -14,6 +14,7 @@
 #include "bs_rack.h"
 #include "bs_keyboard.h"
 #include "bs_patchfile.h"
+#include "bs_racklib.h"
 #include "bs_shm.h"
 #include "bs_embed.h"
 #include "bs_log.h"
@@ -291,12 +292,34 @@ static void say(bs_app *app, const char *msg)
 }
 
 /* Where the dialogs start, and where a rack goes when there is no dialog to
- * ask with. Beside the program rather than in a home directory: this is a
- * portable folder someone unzipped, and the racks belong with it. */
+ * ask with.
+ *
+ * Beside the program by preference: this is a portable folder someone
+ * unzipped, and the racks belong with it. The plugin looks there too, next to
+ * the .clap, which is where the Windows installer puts this binary.
+ *
+ * Except inside an application bundle. On macOS the program is
+ * /Applications/BENCsynth.app/Contents/MacOS/bencsynth, and writing a person's
+ * work into that is wrong twice over - it is not theirs to keep, and the next
+ * install replaces the bundle and takes the racks with it. There, and anywhere
+ * else the program's own folder cannot be written, the racks go to the
+ * per-user folder that bs_racklib defines and the plugin also scans. */
 static const char *patch_dir(void)
 {
     static char dir[BS_PATH];
-    if (!dir[0]) std::snprintf(dir, sizeof dir, "%spatches", GetApplicationDirectory());
+    if (dir[0]) return dir;
+
+    const char *app = GetApplicationDirectory();
+    const bool inBundle = app && std::strstr(app, ".app/Contents/") != 0;
+    if (!inBundle) {
+        std::snprintf(dir, sizeof dir, "%spatches", app ? app : "");
+        /* Writable? If the folder cannot be made here, fall through. */
+        if (DirectoryExists(dir) || MakeDirectory(dir) == 0) return dir;
+    }
+
+    const char *user = bs::userRackDir(true);
+    if (user && *user) std::snprintf(dir, sizeof dir, "%s", user);
+    else std::snprintf(dir, sizeof dir, "%spatches", app ? app : "");
     return dir;
 }
 

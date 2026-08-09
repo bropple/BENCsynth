@@ -49,3 +49,5 @@ bencsynth-*-test
 # intentions that live in git turn into promises.
 ROADMAP.txt
 bencsynth-gen-racks
+bencsynth-save-rack
+build/testracks/
