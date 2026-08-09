@@ -117,6 +117,15 @@ public:
      * knob row drives a whole rack. Read from the rack, because that is where
      * it is set and where it is saved. */
     int macroCcBase() const;
+
+    /* Which CC drives a macro, and the reverse. A macro's own assignment wins
+     * over its place in the CC BASE run; 0 and -1 mean nothing is assigned. */
+    int macroCcFor(int macro) const;
+    int macroForCc(int cc) const;
+
+    /* Point a macro at a CC. Writes the knob on the MACRO panel, so it saves
+     * with the rack and reaches the plugin like any other knob turn. */
+    void setMacroCc(int macro, int cc);
     float macroValue(int index) const;
 
     /* A complete subtractive voice, patched the way the front of a Moog manual

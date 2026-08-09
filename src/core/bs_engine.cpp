@@ -118,6 +118,52 @@ void Engine::setSustain(bool on, int atFrame)
     events.push(ev(NE_SUSTAIN, 0, on ? 1.0f : 0.0f, atFrame));
 }
 
+/* Which CC drives a given macro, or 0 for none.
+ *
+ * A macro's own assignment wins; otherwise it takes its place in the run of
+ * eight that CC BASE starts. Reading the rack rather than a table means there
+ * is nothing to keep in step and nothing extra to save. */
+int Engine::macroCcFor(int macro) const
+{
+    if (macro < 0 || macro >= BS_MACROS) return 0;
+    for (int i = 0; i < patch.slotCount(); i++) {
+        const Module *m = patch.module(i);
+        if (!m || m->typeId != "MACRO") continue;
+        if (m->paramCount() > BS_MACROS + 1 + macro) {
+            const int own = (int)(m->params[(size_t)(BS_MACROS + 1 + macro)].value + 0.5f);
+            if (own > 0) return own;
+        }
+        if (m->paramCount() > BS_MACROS) {
+            const int base = (int)(m->params[(size_t)BS_MACROS].value + 0.5f);
+            if (base > 0) return base + macro;
+        }
+        return 0;
+    }
+    return 0;
+}
+
+void Engine::setMacroCc(int macro, int cc)
+{
+    if (macro < 0 || macro >= BS_MACROS) return;
+    std::lock_guard<std::mutex> g(mutex);
+    for (int i = 0; i < patch.slotCount(); i++) {
+        Module *m = patch.module(i);
+        if (!m || m->typeId != "MACRO") continue;
+        if (m->paramCount() > BS_MACROS + 1 + macro)
+            m->params[(size_t)(BS_MACROS + 1 + macro)].value = (float)cc;
+        return;
+    }
+}
+
+/* The macro a CC drives, or -1. */
+int Engine::macroForCc(int cc) const
+{
+    if (cc <= 0) return -1;
+    for (int i = 0; i < BS_MACROS; i++)
+        if (macroCcFor(i) == cc) return i;
+    return -1;
+}
+
 int Engine::macroCcBase() const
 {
     /* The first MACRO panel wins. Two of them with different assignments is

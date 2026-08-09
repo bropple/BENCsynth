@@ -780,8 +780,29 @@ int main(int argc, char **argv)
          * of not putting two writers on a queue built for one. */
         {
             unsigned char msg[3];
-            while (bs::midiInPop(msg))
+            while (bs::midiInPop(msg)) {
+                /* A CC a MACRO panel has claimed drives that macro and does
+                 * nothing else - the fixed meanings are checked after, so
+                 * assigning over CC 1 does not also move the mod wheel. The
+                 * plugin makes the same decision in the same order. */
+                if ((msg[0] & 0xf0) == 0xb0) {
+                    if (bs_rack_learn_macro >= 0 && msg[1] > 0) {
+                        g_engine.setMacroCc(bs_rack_learn_macro, msg[1]);
+                        char m2[128];
+                        std::snprintf(m2, sizeof m2, "MACRO %d takes CC %d",
+                                      bs_rack_learn_macro + 1, (int)msg[1]);
+                        say(&app, m2);
+                        bs_rack_learn_macro = -1;
+                        continue;
+                    }
+                    const int which = g_engine.macroForCc(msg[1]);
+                    if (which >= 0) {
+                        g_engine.setMacro(which, (float)msg[2] / 127.0f);
+                        continue;
+                    }
+                }
                 bs::applyMidi(g_engine, g_mpe, msg, 3, 0, 0, 0);
+            }
         }
 
         /* ---- editor: take whatever the plugin changed ---------------- */

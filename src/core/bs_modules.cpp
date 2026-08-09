@@ -2247,7 +2247,9 @@ class ModuleMacro : public Module {
 public:
     ModuleMacro()
     {
-        configure("MACRO", "MACRO", 7, 2);
+        /* Four columns and a unit wider: seventeen knobs at two
+         * columns is nine rows of panel. */
+        configure("MACRO", "MACRO", 8, 4);
         static const char *NAMES[BS_MACROS] = {
             "1", "2", "3", "4", "5", "6", "7", "8"
         };
@@ -2266,6 +2268,25 @@ public:
          * off, and zero is bank select, which nobody assigns to a knob.
          * Stops at 120 so the eighth macro still has a CC to land on. */
         addKnob("CC BASE", 0.0f, 120.0f, 0.0f, "%.0f", PC_LIN, 1.0f);
+
+        /* And one each, for when a row is not what the controller sends.
+         *
+         * Zero means "use CC BASE", so a rack that only sets the base keeps
+         * behaving exactly as it did and these stay out of the way. Appended
+         * after it for the same reason it was appended after the macros:
+         * every parameter number a saved rack refers to still means what it
+         * meant.
+         *
+         * Eight more knobs is a lot to put on a panel, and the alternative was
+         * a table living somewhere else with its own file format and its own
+         * synchronisation between the editor and the plugin. These are
+         * ordinary knobs. They save with the rack and they arrive at the
+         * plugin already, for nothing. */
+        static const char *CCN[BS_MACROS] = {
+            "CC 1", "CC 2", "CC 3", "CC 4", "CC 5", "CC 6", "CC 7", "CC 8"
+        };
+        for (int i = 0; i < BS_MACROS; i++)
+            addKnob(CCN[i], 0.0f, 127.0f, 0.0f, "%.0f", PC_LIN, 1.0f);
 
         for (int i = 0; i < BS_MACROS; i++)
             addOutput(NAMES[i]);

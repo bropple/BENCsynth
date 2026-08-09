@@ -21,6 +21,18 @@ static const char *KNOB_ITEMS_FREE[]  = { "EXPOSE TO DAW" };
 static const char *KNOB_ITEMS_TAKEN[] = { "STOP EXPOSING" };
 static const char *KNOB_ITEMS_FULL[]  = { "ALL 16 SLOTS USED" };
 
+/* A MACRO's own knobs get one more entry. Nobody knows which CC their
+ * controller's third knob sends, and looking it up is a worse experience than
+ * turning it - so the menu arms it and the next CC to arrive claims it. */
+static const char *MACRO_ITEMS_FREE[]  = { "EXPOSE TO DAW", "LEARN MIDI CC" };
+static const char *MACRO_ITEMS_TAKEN[] = { "STOP EXPOSING", "LEARN MIDI CC" };
+static const char *MACRO_ITEMS_FULL[]  = { "ALL 16 SLOTS USED", "LEARN MIDI CC" };
+
+/* Set when a menu asks to learn; the interface loop reads and clears it.
+ * Here rather than in the rack struct because the MIDI that answers it arrives
+ * in main(), and one integer is not worth threading through both. */
+int bs_rack_learn_macro = -1;
+
 static bool anySlotFree(const bs::Patch &p)
 {
     for (int i = 0; i < bs::BS_EXPOSED; i++)
@@ -422,10 +434,16 @@ void bs_rack_frame(bs_rack *r, bs_ui *ui, bs::Engine *eng, Rectangle view, float
                 const int held = patch.exposedSlotOf(id, i);
                 /* Asked, not attempted. An earlier version called expose() to
                  * find out whether a slot was free, which takes one. */
-                const char **items = held >= 0 ? KNOB_ITEMS_TAKEN
-                                   : anySlotFree(patch) ? KNOB_ITEMS_FREE
-                                                        : KNOB_ITEMS_FULL;
-                bs_menu_open(ui, sm, items, 1, MENU_KNOB);
+                /* Only the eight value knobs, not the CC assignments
+                 * beside them - learning a CC for the knob that holds a CC
+                 * number is not a thing. */
+                const bool macroKnob = mod->typeId == "MACRO" && i < bs::BS_MACROS;
+                const char **items = held >= 0
+                    ? (macroKnob ? MACRO_ITEMS_TAKEN : KNOB_ITEMS_TAKEN)
+                    : anySlotFree(patch)
+                        ? (macroKnob ? MACRO_ITEMS_FREE : KNOB_ITEMS_FREE)
+                        : (macroKnob ? MACRO_ITEMS_FULL : KNOB_ITEMS_FULL);
+                bs_menu_open(ui, sm, items, macroKnob ? 2 : 1, MENU_KNOB);
             }
 
             /* A small number on an exposed knob, so which ones the host can
@@ -733,6 +751,13 @@ int bs_rack_menu(bs_rack *r, bs_ui *ui, bs::Engine *eng)
 
     if (tag == MENU_KNOB) {
         if (knobMenuModule < 0) return 0;
+
+        /* The second row, when there is one, is always LEARN. */
+        if (hit == 1) {
+            bs_rack_learn_macro = knobMenuParam;
+            knobMenuModule = -1;
+            return 1;
+        }
         /* The full-slots row is a statement, not a choice. */
         if (eng->patch.exposedSlotOf(knobMenuModule, knobMenuParam) < 0 &&
             !anySlotFree(eng->patch)) { knobMenuModule = -1; return 0; }

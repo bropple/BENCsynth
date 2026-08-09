@@ -113,4 +113,9 @@ void bs_rack_preset_menu(bs_rack *r, bs_ui *ui, Vector2 screenAt);
  * point at one. */
 Vector2 bs_rack_jack_pos(const bs::Module *m, int port, int isOutput);
 
+
+/* Which MACRO knob is waiting to be told what drives it, or -1. Set by the
+ * knob's right-click menu; main() clears it when a CC arrives. */
+extern int bs_rack_learn_macro;
+
 #endif /* BS_RACK_H */

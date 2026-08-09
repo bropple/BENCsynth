@@ -749,9 +749,8 @@ static void handleEvent(BencSynthClap *s, const clap_event_header_t *h, int at,
          * been assigned, that is what it does, and the fixed meanings do not
          * also fire. */
         if ((m[0] & 0xf0) == 0xb0) {
-            const int base = s->engine.macroCcBase();
-            if (base > 0 && m[1] >= base && m[1] < base + bs::BS_MACROS) {
-                const int which = m[1] - base;
+            const int which = s->engine.macroForCc(m[1]);
+            if (which >= 0) {
                 const double v = (double)m[2] / 127.0;
                 applyParam(s, (clap_id)which, v);
                 s->macro[which] = (float)v;

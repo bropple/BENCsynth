@@ -11,6 +11,7 @@
 
 #include "bs_engine.h"
 #include "bs_midimsg.h"
+#include "bs_patchfile.h"
 #include "bs_modules.h"
 #include "test_util.h"
 
@@ -937,6 +938,63 @@ static void test_grand_tour()
  * is two places for it to be wrong, and the MPE rule - a bend on a channel
  * carrying one note belongs to that note, anywhere else it is the wheel - is
  * not obvious enough to write twice. */
+
+/* Which CC drives which macro.
+ *
+ * CC BASE claims a run of eight, which is what a controller's knob row sends.
+ * A macro's own assignment overrides its place in that run, which is what
+ * "learn this knob" writes. Both are ordinary knobs on the panel, so both save
+ * with the rack and reach the plugin with no table to keep in step. */
+static void test_macro_cc()
+{
+    std::printf("macro CC assignment\n");
+
+    Engine e;
+    e.init(48000.0f);
+    int gt = 0;
+    for (int i = 0; i < rackPresetCount(); i++)
+        if (std::strcmp(rackPresetAt(i)->name, "GRAND TOUR") == 0) gt = i;
+    e.buildPreset(gt);
+
+    okf(e.macroForCc(20) == -1, "nothing is assigned to begin with: %.0f, "
+        "wanted %.0f", (double)e.macroForCc(20), -1.0);
+
+    /* A row, the way a controller with eight knobs sends one. */
+    for (int i = 0; i < e.patch.slotCount(); i++) {
+        Module *m = e.patch.module(i);
+        if (m && m->typeId == "MACRO") { m->params[BS_MACROS].value = 20.0f; break; }
+    }
+    okf(e.macroForCc(20) == 0, "CC BASE claims the first: %.0f, wanted %.0f",
+        (double)e.macroForCc(20), 0.0);
+    okf(e.macroForCc(27) == 7, "and the eighth: %.0f, wanted %.0f",
+        (double)e.macroForCc(27), 7.0);
+    okf(e.macroForCc(28) == -1, "and stops there: %.0f, wanted %.0f",
+        (double)e.macroForCc(28), -1.0);
+
+    /* Learn, which is what the knob's menu does. */
+    e.setMacroCc(3, 91);
+    okf(e.macroCcFor(3) == 91, "a learned CC wins over the row: %.0f, wanted "
+        "%.0f", (double)e.macroCcFor(3), 91.0);
+    okf(e.macroForCc(91) == 3, "and CC 91 finds it: %.0f, wanted %.0f",
+        (double)e.macroForCc(91), 3.0);
+    okf(e.macroForCc(23) == -1, "so the row no longer covers that one: %.0f, "
+        "wanted %.0f", (double)e.macroForCc(23), -1.0);
+    okf(e.macroForCc(22) == 2, "while the rest of the row is untouched: %.0f, "
+        "wanted %.0f", (double)e.macroForCc(22), 2.0);
+
+    /* It is a knob, so it is in the file. */
+    const std::string text = bs_patch_to_string(&e);
+    Engine e2;
+    e2.init(48000.0f);
+    char status[128] = "";
+    ok(bs_patch_from_string(&e2, text.c_str(), status, sizeof status) != 0,
+       "the rack round-trips through a patch file");
+    okf(e2.macroForCc(91) == 3, "and the learned CC came back: %.0f, wanted "
+        "%.0f", (double)e2.macroForCc(91), 3.0);
+    okf(e2.macroForCc(22) == 2, "along with the row: %.0f, wanted %.0f",
+        (double)e2.macroForCc(22), 2.0);
+}
+
 static void test_midi_decode()
 {
     std::printf("midi decoding\n");
@@ -1242,6 +1300,7 @@ int main()
     test_arp();
     test_clock_and_func();
     test_grand_tour();
+    test_macro_cc();
     test_midi_decode();
     test_voice_module();
     test_string_exciters();
