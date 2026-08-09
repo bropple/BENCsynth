@@ -25,7 +25,7 @@ style only — do not copy code from it.
 ## Before you commit anything
 
 ```sh
-make && make test                     # 488 checks
+make && make test                     # 532 checks
 make clap  && make clap-test          #  65
 make lv2   && make lv2-test           #  27
 make ipc-test && xvfb-run -a --server-args="-screen 0 1400x900x24" \
@@ -215,6 +215,20 @@ and every saved project stops finding it.
 **A plugin that changes its own parameter must say so in the output event
 list.** Otherwise the hardware moves the sound, the host's knob stays put, the
 project saves the old value, and the next automation point snaps it back.
+
+**ALSA reads into a buffer of its own.** One `snd_seq_event_input` per poll
+loses everything queued behind the first event, and it looks exactly like MIDI
+not working. Drain with `snd_seq_event_input_pending`. And join a reader thread
+*before* closing the sequencer it reads through — closing it first is a
+use-after-free that aborts on shutdown.
+
+**A polyphonic oscillator's idle channels are not silent.** They free-run at
+0 V, which is middle C. Any measurement of a polyphonic rack needs a gated VCA
+or the silent voices drown the one playing — this cost an hour on the MPE work.
+
+**Goertzel drifts over a long window.** It reported 261 Hz for a note an octave
+up. Use direct sin/cos correlation for pitch over more than a few thousand
+samples.
 
 **CLAP parameter IDs are permanent.** There are 16 exposed slots whose *names*
 change via `rescan(INFO|TEXT)`; the IDs never do.

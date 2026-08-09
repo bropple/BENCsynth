@@ -99,7 +99,30 @@ directions.
 
 **A hardware knob row can drive the macros.** Set `CC BASE` on a MACRO panel
 to the first CC your controller sends and its eight knobs take the eight
-macros. It saves with the rack.
+macros. Or assign one at a time: right-click a macro knob, choose **LEARN MIDI
+CC**, and turn the control you want. Either way it saves with the rack.
+
+**The standalone takes MIDI now.** Plug a keyboard in and play it; there is
+nothing to configure, and the status line says what it connected to.
+
+### New in v0.4.0
+
+- **MIDI in, for the standalone.** A keyboard plugged into the machine used to
+  do nothing at all — MIDI only reached BENCsynth through a host. ALSA on
+  Linux, winmm on Windows, CoreMIDI on macOS; no new dependency and nothing to
+  install. The status line names what it found.
+- **A bow and a reed**, on the same waveguide as the piano. `EXCITE` on STRING
+  picks between HAMMER, BOW and BLOW. A struck string decays; a bowed or blown
+  one keeps going for as long as you hold the key, because you are still
+  putting energy into it. New rack: **BOWED**.
+- **VOICE** — a different number for every voice. The one thing a rack of
+  hardware cannot do: there a module is a voice, so making the third note
+  behave unlike the first means patching it differently. `IDX`, a per-note
+  `RND` fixed when the note lands, `AGE`, and `PRESS`. It is what lets a
+  sequencer play expressively rather than evenly.
+- **Learn a MIDI CC per knob.** Right-click a MACRO knob → **LEARN MIDI CC**,
+  turn something on your controller, done. `CC BASE` still claims a whole row
+  of eight for a controller that sends one.
 
 ### New in v0.3.0
 
