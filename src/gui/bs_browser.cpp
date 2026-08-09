@@ -29,12 +29,20 @@ struct Browser {
     bool                saving;   /* a name to type, and OPEN becomes SAVE */
     std::string         name;
     bs_edit             nameEdit;
+    /* The path, typed rather than only clicked. A browser that can only walk
+     * down from where it started cannot reach a sample that lives somewhere
+     * else on the disk without a lot of clicking. */
+    std::string         pathText;
+    bs_edit             pathEdit;
     double              lastClickAt;
     int                 lastClickRow;
 
     Browser() : active(false), sel(-1), top(0), saving(false),
                 lastClickAt(-1.0), lastClickRow(-1)
-    { std::memset(&nameEdit, 0, sizeof nameEdit); }
+    {
+        std::memset(&nameEdit, 0, sizeof nameEdit);
+        std::memset(&pathEdit, 0, sizeof pathEdit);
+    }
 };
 
 Browser g;
@@ -54,6 +62,25 @@ bool matches(const std::string &name, const std::string &ext)
 {
     if (ext.empty()) return true;
     return IsFileExtension(name.c_str(), ("." + ext).c_str());
+}
+
+/* Whatever a click or a button did, the field says where we are. */
+void syncPathText()
+{
+    g.pathText = g.dir;
+    std::memset(&g.pathEdit, 0, sizeof g.pathEdit);
+    g.pathEdit.caret = g.pathEdit.sel = (int)g.pathText.size();
+}
+
+/* Trailing and leading blanks, and any newline a paste brought with it. */
+std::string tidy(const std::string &in)
+{
+    std::string t;
+    for (size_t i = 0; i < in.size(); i++)
+        if (in[i] != '\n' && in[i] != '\r') t += in[i];
+    while (!t.empty() && t[0] == ' ') t.erase(0, 1);
+    while (!t.empty() && t[t.size() - 1] == ' ') t.erase(t.size() - 1);
+    return t;
 }
 
 void scan()
@@ -95,6 +122,7 @@ void scan()
                   if (a.dir != b.dir) return a.dir;
                   return a.name < b.name;
               });
+    syncPathText();
 }
 
 const char *homeDir()
@@ -153,17 +181,53 @@ int bs_browser_frame(bs_ui *ui, Rectangle screen, char *out, int cap)
     const float pad = 12.0f;
     bs_text(ui, BS_F_SMALL, g.title.c_str(), box.x + pad, box.y + 10.0f, BS_TEXT);
 
-    /* The path, trimmed from the left - the end of it is the part that says
-     * where you are. */
-    std::string shown = g.dir;
-    while (bs_measure(ui, BS_F_TINY, shown.c_str(), 1.0f) > w - pad * 2 &&
-           shown.size() > 4)
-        shown = "..." + shown.substr(4);
-    bs_text(ui, BS_F_TINY, shown.c_str(), box.x + pad, box.y + 32.0f, BS_DIM);
+    /* The path, typed as well as walked. GO rather than Enter, because the
+     * field is the same multi-line widget the notepad uses and Enter there
+     * means a newline. */
+    const float goW = 46.0f, mkW = 96.0f;
+    const Rectangle pf = { box.x + pad, box.y + 30.0f,
+                           w - pad * 2 - goW - mkW - 12.0f, 22.0f };
+    bs_textarea(ui, 9111, pf, g.pathText, &g.pathEdit, 1);
+
+    int navigate = 0;
+    if (bs_button(ui, 9112, (Rectangle){ pf.x + pf.width + 6.0f, pf.y, goW, 22.0f },
+                  "GO", 1))
+        navigate = 1;
+
+    /* mkdir -p, which is what raylib's MakeDirectory does - so typing a path
+     * two levels deep that does not exist yet works in one go. */
+    if (bs_button(ui, 9113,
+                  (Rectangle){ pf.x + pf.width + 6.0f + goW + 6.0f, pf.y,
+                               mkW, 22.0f },
+                  "NEW FOLDER", 1)) {
+        const std::string want = tidy(g.pathText);
+        if (!want.empty() && !DirectoryExists(want.c_str())) {
+            if (MakeDirectory(want.c_str()) == 0) navigate = 1;
+            else syncPathText();          /* refused: put the real one back */
+        } else {
+            navigate = 1;
+        }
+    }
+
+    if (navigate) {
+        const std::string want = tidy(g.pathText);
+        if (DirectoryExists(want.c_str())) {
+            g.dir = want;
+            scan();
+        } else if (!want.empty() && IsPathFile(want.c_str()) && !g.saving) {
+            /* A full path to a file, typed or pasted: take it and be done. */
+            std::snprintf(out, (size_t)cap, "%s", want.c_str());
+            g.active = false;
+            return 1;
+        } else {
+            syncPathText();               /* nowhere: say where we still are */
+        }
+        return 0;
+    }
 
     const float rowH   = 22.0f;
-    const float listY  = box.y + 52.0f;
-    const float listH  = h - 52.0f - 46.0f - (g.saving ? 34.0f : 0.0f);
+    const float listY  = box.y + 58.0f;
+    const float listH  = h - 58.0f - 46.0f - (g.saving ? 34.0f : 0.0f);
     const int   rows   = (int)(listH / rowH);
     const Rectangle list = { box.x + pad, listY, w - pad * 2, listH };
     bs_panel(list, BS_PANEL_HI, BS_BORDER);

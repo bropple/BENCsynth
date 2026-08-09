@@ -107,6 +107,12 @@ rack.
 **The standalone takes MIDI now.** Plug a keyboard in and play it; there is
 nothing to configure, and the status line says what it connected to.
 
+### New in v0.5.2
+
+- **The file browser takes a typed path**, so a sample living somewhere else on
+  the disk is one paste away rather than a lot of clicking, and **NEW FOLDER**
+  makes one — the whole path if you typed several levels that do not exist yet.
+
 ### New in v0.5.1
 
 - **A file picker that works everywhere.** BENCsynth draws its own now, in its
