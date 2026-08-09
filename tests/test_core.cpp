@@ -946,6 +946,133 @@ static void test_grand_tour()
  * A macro's own assignment overrides its place in that run, which is what
  * "learn this knob" writes. Both are ordinary knobs on the panel, so both save
  * with the rack and reach the plugin with no table to keep in step. */
+
+/* SAMPLE - the one source here that is not arithmetic.
+ *
+ * The path lives in the module's text, which is the field the scratchpad uses.
+ * That was the point of putting it there: text is already written to the patch
+ * file and already crosses to the plugin with the rack, so a sampler in a
+ * saved project finds its file again with nothing added to either. */
+static void test_sample_module()
+{
+    std::printf("sampler\n");
+
+    /* A fixture, written here so the test carries its own audio: a second of
+     * 440 Hz at 44100, which is deliberately not the engine's rate. */
+    const char *path = "build/test-sample.wav";
+    {
+        const int rate = 44100, n = rate;
+        std::vector<short> pcm((size_t)n * 2);
+        for (int i = 0; i < n; i++) {
+            const double v = std::sin(2.0 * 3.14159265358979 * 440.0 * i / rate);
+            pcm[(size_t)i * 2 + 0] = (short)(v * 20000.0);
+            pcm[(size_t)i * 2 + 1] = (short)(v * 20000.0);
+        }
+        std::FILE *f = std::fopen(path, "wb");
+        if (f) {
+            const unsigned data = (unsigned)(pcm.size() * 2);
+            struct P {
+                static void u32(std::FILE *g, unsigned v)
+                { unsigned char b[4] = { (unsigned char)v, (unsigned char)(v >> 8),
+                                         (unsigned char)(v >> 16), (unsigned char)(v >> 24) };
+                  std::fwrite(b, 1, 4, g); }
+                static void u16(std::FILE *g, unsigned v)
+                { unsigned char b[2] = { (unsigned char)v, (unsigned char)(v >> 8) };
+                  std::fwrite(b, 1, 2, g); }
+            };
+            std::fwrite("RIFF", 1, 4, f); P::u32(f, 36 + data);
+            std::fwrite("WAVEfmt ", 1, 8, f); P::u32(f, 16);
+            P::u16(f, 1); P::u16(f, 2); P::u32(f, (unsigned)rate);
+            P::u32(f, (unsigned)rate * 4); P::u16(f, 4); P::u16(f, 16);
+            std::fwrite("data", 1, 4, f); P::u32(f, data);
+            std::fwrite(&pcm[0], 2, pcm.size(), f);
+            std::fclose(f);
+        }
+    }
+
+    Engine e;
+    e.init(48000.0f);
+    e.clear();
+    const int smp = e.addModule("SAMPLE", 20, 20);
+    const int out = e.addModule("OUT", 300, 20);
+    e.patch.connect(smp, 0, out, 0);
+
+    std::string err;
+    ok(e.loadSample(smp, path, &err), "a wav loads");
+
+    Module *m = e.patch.module(smp);
+    m->params[4].value = 1.0f;         /* LOOP, so there is always something */
+
+    struct L {
+        static double mag(const std::vector<float> &x, double f)
+        {
+            double re = 0, im = 0;
+            const double w = 2 * 3.14159265358979 * f / 48000.0;
+            for (size_t i = 0; i < x.size(); i++) {
+                re += x[i] * std::cos(w * (double)i);
+                im -= x[i] * std::sin(w * (double)i);
+            }
+            return std::sqrt(re * re + im * im) / (double)x.size();
+        }
+        static void render(Engine &en, std::vector<float> &mono)
+        {
+            std::vector<float> b(512);
+            mono.clear();
+            for (int i = 0; i < 9600; i += 256) {
+                en.render(&b[0], 256);
+                for (int k = 0; k < 256; k++) mono.push_back(b[(size_t)k * 2]);
+            }
+            mono.erase(mono.begin(), mono.begin() + 2048);
+            mono.resize(4096);
+        }
+    };
+
+    std::vector<float> mono;
+    L::render(e, mono);
+
+    /* The file is 44100 and the engine is 48000, so playing it back unchanged
+     * means reading it faster - if that ratio were ignored it would come out
+     * flat by a tone and a bit. */
+    okf(L::mag(mono, 440.0) > L::mag(mono, 404.0) * 4.0,
+        "it plays at the pitch it was recorded at, not at the engine's rate: "
+        "%.4f at 440 against %.4f at 404", L::mag(mono, 440.0), L::mag(mono, 404.0));
+
+    /* One volt per octave, like everything else. */
+    m->params[0].value = 12.0f;        /* TUNE, an octave up */
+    L::render(e, mono);
+    okf(L::mag(mono, 880.0) > L::mag(mono, 440.0) * 4.0,
+        "and transposes: %.4f at 880 against %.4f at 440",
+        L::mag(mono, 880.0), L::mag(mono, 440.0));
+    m->params[0].value = 0.0f;
+
+    /* A file that is not one says so, and leaves what was there alone. */
+    std::string why;
+    ok(!e.loadSample(smp, "src/core/bs_engine.h", &why),
+       "a file that is not a wav is refused");
+    ok(!why.empty(), "and says why");
+    L::render(e, mono);
+    okf(L::mag(mono, 440.0) > 0.001,
+       "and the sample that was loaded is still there: %.4f, wanted over %.3f",
+       L::mag(mono, 440.0), 0.001);
+
+    /* The path is in the patch file, which is what makes a saved rack find its
+     * audio again. */
+    const std::string text = bs_patch_to_string(&e);
+    ok(text.find("test-sample.wav") != std::string::npos,
+       "the path is written into the rack");
+
+    Engine e2;
+    e2.init(48000.0f);
+    char st[128] = "";
+    ok(bs_patch_from_string(&e2, text.c_str(), st, sizeof st) != 0,
+       "the rack loads back");
+    std::vector<float> mono2;
+    L::render(e2, mono2);
+    okf(L::mag(mono2, 440.0) > 0.001,
+        "and the sampler is playing its file again: %.4f, wanted over %.3f",
+        L::mag(mono2, 440.0), 0.001);
+}
+
 static void test_macro_cc()
 {
     std::printf("macro CC assignment\n");
@@ -1410,6 +1537,7 @@ int main()
     test_arp();
     test_clock_and_func();
     test_grand_tour();
+    test_sample_module();
     test_macro_cc();
     test_midi_decode();
     test_voice_module();

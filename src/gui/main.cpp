@@ -281,6 +281,17 @@ typedef struct {
 
 /* The name shown in the title bar and on the SAVE button's tooltip-in-spirit.
  * Everything after the last separator, or a reminder that there is not one. */
+/* The last component of a path, for saying which file without the ten
+ * directories above it. */
+static const char *app_base_name(const char *path)
+{
+    if (!path || !*path) return "";
+    const char *a = std::strrchr(path, '/');
+    const char *b = std::strrchr(path, '\\');
+    const char *s = a > b ? a : b;
+    return s ? s + 1 : path;
+}
+
 static const char *app_name(const bs_app *app)
 {
     if (!app->path[0]) return "untitled";
@@ -791,6 +802,38 @@ int main(int argc, char **argv)
                 if (editing && shm.block)
                     shm.block->learnMacro.store(-1, std::memory_order_release);
                 say(&app, "nothing arrived - stopped listening");
+            }
+        }
+
+        /* ---- a sampler asking for a file ------------------------------
+         *
+         * The dialog is opened here rather than in the rack, which has no
+         * business knowing what a file dialog is - and on some platforms it
+         * blocks, which is a thing the drawing code should not be doing in
+         * the middle of a frame either. */
+        if (bs_rack_load_sample >= 0) {
+            const int which = bs_rack_load_sample;
+            bs_rack_load_sample = -1;
+            char chosen[BS_PATH] = "";
+            const int r = bs_open_dialog(GetWindowHandle(), "Load a sample",
+                                         patch_dir(), "WAV audio", "wav",
+                                         chosen, sizeof chosen);
+            if (r == BS_DLG_OK && chosen[0]) {
+                std::string why;
+                if (g_engine.loadSample(which, chosen, &why)) {
+                    char m2[224];
+                    std::snprintf(m2, sizeof m2, "loaded %s%s%s",
+                                  app_base_name(chosen),
+                                  why.empty() ? "" : " - ", why.c_str());
+                    say(&app, m2);
+                    rack.edited = 1;
+                } else {
+                    char m2[224];
+                    std::snprintf(m2, sizeof m2, "%s", why.c_str());
+                    say(&app, m2);
+                }
+            } else if (r == BS_DLG_UNAVAILABLE) {
+                say(&app, "no file dialog here - install zenity or kdialog");
             }
         }
 

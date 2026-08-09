@@ -142,6 +142,32 @@ int Engine::macroCcFor(int macro) const
     return 0;
 }
 
+bool Engine::loadSample(int moduleId, const char *path, std::string *err)
+{
+    std::lock_guard<std::mutex> g(mutex);
+    Module *m = patch.module(moduleId);
+    if (!m) { if (err) *err = "no such module"; return false; }
+    std::string *buf = m->textBuffer();
+    if (!buf) { if (err) *err = "that module does not take a file"; return false; }
+
+    const std::string was = *buf;
+    *buf = path ? path : "";
+    m->onTextChanged();
+
+    /* onTextChanged has no way to report, so ask the module whether anything
+     * came of it. A path that does not open leaves the old one in place rather
+     * than silently emptying the module. */
+    if (!m->textLoaded()) {
+        const char *why = m->textStatus();
+        if (err) *err = (why && *why) ? why : "that file would not load";
+        *buf = was;
+        m->onTextChanged();
+        return false;
+    }
+    if (err) *err = m->textStatus();
+    return true;
+}
+
 bool Engine::setMacroCc(int macro, int cc)
 {
     if (macro < 0 || macro >= BS_MACROS) return false;
@@ -2482,6 +2508,10 @@ void presetGrandTour(Builder &b)
     /* A different number for every voice - the thing a rack of hardware
      * cannot do, because there one module is one voice. */
     const int voice  = b.put("VOICE");
+    /* Empty until someone loads a file into it: right-click its title bar and
+     * choose LOAD SAMPLE. Everything else in this rack makes its sound from
+     * arithmetic, and this is the one thing that does not. */
+    const int smp    = b.put("SAMPLE");
 
     b.row(R4);
     const int func   = b.put("FUNC");
@@ -2493,6 +2523,12 @@ void presetGrandTour(Builder &b)
     const int pan    = b.put("PAN");
     const int mixL   = b.put("MIX");
     const int mixR   = b.put("MIX");
+
+    /* The sampler plays whatever is loaded at the pitch being played, and
+     * goes through the same filter as everything else. Silent with no file,
+     * which is how it ships. */
+    b.wire(kbd, KBD_PITCH, smp, 0);
+    b.wire(kbd, KBD_GATE,  smp, 1);
 
     /* Every voice gets its own small detune, so a chord is eight strings
      * rather than one string played eight times. */

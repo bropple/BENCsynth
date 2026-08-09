@@ -314,6 +314,17 @@ public:
      * everything else, which is everything else. */
     virtual std::string *textBuffer() { return 0; }
 
+    /* Called after something outside has written to that buffer - the patch
+     * loader, or the interface. A module whose text names a file on disk
+     * reloads here, on whatever thread did the writing, which is never the
+     * audio thread. */
+    virtual void onTextChanged() {}
+
+    /* Whether that worked, for a module whose text names a file. Empty means
+     * nothing to report; a module with no file always says nothing. */
+    virtual bool        textLoaded() const { return true; }
+    virtual const char *textStatus() const { return ""; }
+
     int inputCount() const  { return (int)inInfo.size(); }
     int outputCount() const { return (int)outInfo.size(); }
     int paramCount() const  { return (int)params.size(); }

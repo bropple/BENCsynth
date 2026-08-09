@@ -36,7 +36,8 @@ CORE_SRC := src/core/bs_patch.cpp \
             src/core/bs_engine.cpp \
             src/core/bs_patchfile.cpp \
             src/core/bs_racklib.cpp \
-            src/core/bs_midimsg.cpp
+            src/core/bs_midimsg.cpp \
+            src/core/bs_wav.cpp
 CORE_OBJ := $(CORE_SRC:.cpp=.o)
 CORE_LIB := libbencsynth.a
 

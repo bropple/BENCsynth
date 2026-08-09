@@ -127,6 +127,12 @@ public:
      * with the rack and reaches the plugin like any other knob turn. */
     /* Returns false when there is no MACRO panel to put it on. */
     bool setMacroCc(int macro, int cc);
+
+    /* Point a sampler at a file. Takes the graph lock and does the reading
+     * itself, so the caller can be the interface thread and the audio thread
+     * never sees a half-loaded buffer. False, with a reason, if it will not
+     * open. */
+    bool loadSample(int moduleId, const char *path, std::string *err);
     float macroValue(int index) const;
 
     /* A complete subtractive voice, patched the way the front of a Moog manual

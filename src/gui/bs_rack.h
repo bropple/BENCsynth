@@ -118,4 +118,8 @@ Vector2 bs_rack_jack_pos(const bs::Module *m, int port, int isOutput);
  * knob's right-click menu; main() clears it when a CC arrives. */
 extern int bs_rack_learn_macro;
 
+/* Which sampler is waiting for a file, or -1. Set by the module's menu; the
+ * interface loop opens the dialog and clears it. */
+extern int bs_rack_load_sample;
+
 #endif /* BS_RACK_H */

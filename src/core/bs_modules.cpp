@@ -14,6 +14,7 @@
  */
 
 #include "bs_modules.h"
+#include "bs_wav.h"
 #include "bs_keys.h"
 
 #include <cstring>
@@ -2058,6 +2059,166 @@ private:
 };
 
 /* ================================================================== *
+ * SAMPLE - a recording, played like an oscillator
+ *
+ * The one source in this rack that is not generated. Everything else here
+ * makes its sound from arithmetic; this one reads it off a disk, and then it
+ * is a voltage like any other - through a filter, through the string as an
+ * exciter, chopped by the sequencer, whatever the cables say.
+ *
+ * The path lives in the module's text, which is the same field the scratchpad
+ * uses. That is not a convenience: text is already saved in the patch file and
+ * already crosses to the plugin with the rack, so a sampler in a DAW project
+ * finds its file again with nothing added to either.
+ *
+ * Polyphonic, and pitched. Each voice has its own position, so a chord plays
+ * one file at several speeds at once, which is what a sampler is.
+ * ================================================================== */
+
+class ModuleSample : public Module {
+public:
+    ModuleSample() : loaded(false)
+    {
+        configure("SAMPLE", "SAMPLE", 6, 3);
+        addKnob("TUNE",  -24.0f, 24.0f, 0.0f, "%+.0f st", PC_LIN, 1.0f);
+        addKnob("FINE",  -50.0f, 50.0f, 0.0f, "%+.0f c");
+        addKnob("START",   0.0f, 1.0f, 0.0f, "%.2f");
+        addKnob("LEVEL",   0.0f, 2.0f, 1.0f, "%.2f");
+        addToggle("LOOP", 0.0f);
+
+        addInput("V/OCT");
+        addInput("TRIG");
+        addInput("START");
+        addOutput("L");
+        addOutput("R");
+        /* A pulse when a voice reaches the end, so one sample can start the
+         * next thing - which is most of what a modular is for. */
+        addOutput("EOS");
+    }
+
+    std::string *textBuffer() { return &path; }
+
+    /* Whatever wrote the path - the patch loader, or the interface - and never
+     * the audio thread. process() only ever reads what this leaves behind. */
+    void onTextChanged()
+    {
+        wav = WavData();
+        loaded = false;
+        status.clear();
+        if (path.empty()) return;
+        std::string err;
+        loaded = wavLoad(path.c_str(), &wav, &err);
+        status = err;
+        reset();
+
+        /* The panel says which file, because otherwise a rack with three
+         * samplers in it is three identical grey boxes. The title bar is
+         * already drawn and already sized to fit, so it costs nothing. */
+        if (loaded) {
+            const size_t a = path.find_last_of("/\\");
+            std::string base = a == std::string::npos ? path : path.substr(a + 1);
+            const size_t dot = base.find_last_of('.');
+            if (dot != std::string::npos && dot > 0) base = base.substr(0, dot);
+            title = base.empty() ? std::string("SAMPLE") : base;
+        } else {
+            title = "SAMPLE";
+        }
+    }
+
+    bool        textLoaded() const { return loaded && wav.frames > 1; }
+    const char *textStatus() const { return status.c_str(); }
+    int         sampleFrames() const { return loaded ? wav.frames : 0; }
+
+    void reset()
+    {
+        for (int c = 0; c < BS_MAX_POLY; c++) {
+            pos[c] = 0.0; playing[c] = false; last[c] = 0.0f; eos[c] = 0.0f;
+        }
+    }
+
+    void process()
+    {
+        const int ch = polyIn();
+        setAllOutputChannels(ch);
+
+        if (!loaded || wav.frames < 2) {
+            for (size_t i = 0; i < outs.size(); i++) outs[i].clear();
+            return;
+        }
+
+        const float tune = pv(0) + pv(1) / 100.0f;
+        const float start = pv(2), level = pv(3);
+        const bool  loop = pv(4) >= 0.5f;
+        const int   n = wav.frames;
+
+        /* The file's rate against the engine's: a 44.1 kHz file played on a
+         * 48 kHz engine has to be read slightly faster to come out at the
+         * pitch it was recorded at. */
+        const double rateRatio = wav.rate > 1.0 ? wav.rate / (double)sr : 1.0;
+
+        /* Nothing patched to TRIG means play, rather than wait forever for a
+         * trigger that is not coming. Dropping this in and patching L and R
+         * to the output should make a sound. */
+        const bool triggered = patched(1);
+
+        for (int c = 0; c < ch; c++) {
+            for (int i = 0; i < BS_BLOCK; i++) {
+                const float startCv = clampf(start + in(2).get(c, i) * 0.1f, 0.0f, 1.0f);
+
+                if (triggered) {
+                    const float g = in(1).get(c, i);
+                    if (g > 1.0f && last[c] <= 1.0f) {
+                        pos[c] = (double)startCv * (double)(n - 1);
+                        playing[c] = true;
+                    }
+                    last[c] = g;
+                } else if (!playing[c]) {
+                    pos[c] = (double)startCv * (double)(n - 1);
+                    playing[c] = true;
+                }
+
+                float l = 0.0f, r = 0.0f;
+                if (playing[c]) {
+                    const int i0 = (int)pos[c];
+                    const int i1 = i0 + 1 < n ? i0 + 1 : (loop ? 0 : i0);
+                    const float t = (float)(pos[c] - (double)i0);
+                    const float *a = &wav.samples[(size_t)i0 * 2];
+                    const float *b = &wav.samples[(size_t)i1 * 2];
+                    l = (a[0] + (b[0] - a[0]) * t) * level;
+                    r = (a[1] + (b[1] - a[1]) * t) * level;
+
+                    /* One volt per octave, as everything else here is, with
+                     * the knobs as a fixed offset on top. */
+                    const double step = std::pow(2.0,
+                        (double)in(0).get(c, i) + (double)tune / 12.0) * rateRatio;
+                    pos[c] += step;
+
+                    if (pos[c] >= (double)(n - 1)) {
+                        eos[c] = sr * 0.002f;          /* a 2 ms pulse */
+                        if (loop) pos[c] = (double)startCv * (double)(n - 1);
+                        else      playing[c] = false;
+                    }
+                }
+
+                outs[0].v[c][i] = l * VOLT;
+                outs[1].v[c][i] = r * VOLT;
+                outs[2].v[c][i] = eos[c] > 0.0f ? GATE_HI : 0.0f;
+                if (eos[c] > 0.0f) eos[c] -= 1.0f;
+            }
+        }
+    }
+
+private:
+    std::string path;
+    std::string status;
+    WavData     wav;
+    bool        loaded;
+    double      pos[BS_MAX_POLY];
+    bool        playing[BS_MAX_POLY];
+    float       last[BS_MAX_POLY], eos[BS_MAX_POLY];
+};
+
+/* ================================================================== *
  * SCOPE
  * ================================================================== */
 
@@ -2507,6 +2668,7 @@ static const ModuleType TYPES[] = {
     { "ARP",   "ARP",        "SOURCE", makeT<ModuleArp>   },
     { "MACRO", "MACRO",      "UTILITY",makeT<ModuleMacro> },
     { "VOICE", "VOICE",      "UTILITY",makeT<ModuleVoice> },
+    { "SAMPLE","SAMPLE",     "SOURCE", makeT<ModuleSample> },
     { "SCOPE", "SCOPE",      "UTILITY",makeT<ModuleScope> },
     { "TEXT",  "TEXT / NOTES","UTILITY",makeT<ModuleText> },
     { "FOLD",  "FOLD",       "SHAPE",  makeT<ModuleFold>  },

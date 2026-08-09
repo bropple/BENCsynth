@@ -166,6 +166,13 @@ static void buildAddMenu()
 }
 
 static const char *MODULE_ITEMS[] = { "UNPATCH", "RESET KNOBS", "REMOVE" };
+/* One more row for a sampler, which is the only module with a file behind it. */
+static const char *SAMPLE_ITEMS[] = { "UNPATCH", "RESET KNOBS", "REMOVE",
+                                      "LOAD SAMPLE" };
+
+/* Set when a sampler's menu asks for a file; the interface loop opens the
+ * dialog, because the rack has no business knowing what a file dialog is. */
+int bs_rack_load_sample = -1;
 
 /* Room for every rack there is, with headroom. The old array held 32 and the
  * loop that filled it stopped there too, so once there were 37 racks the last
@@ -406,7 +413,9 @@ void bs_rack_frame(bs_rack *r, bs_ui *ui, bs::Engine *eng, Rectangle view, float
         }
         if (tbHot && IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
             r->menuModule = id;
-            bs_menu_open(ui, sm, MODULE_ITEMS, 3, MENU_MODULE);
+            const bool isSampler = mod->typeId == "SAMPLE";
+            bs_menu_open(ui, sm, isSampler ? SAMPLE_ITEMS : MODULE_ITEMS,
+                         isSampler ? 4 : 3, MENU_MODULE);
         }
 
         /* ---- knobs ---- */
@@ -814,6 +823,9 @@ int bs_rack_menu(bs_rack *r, bs_ui *ui, bs::Engine *eng)
         case 2:     /* REMOVE */
             eng->removeModule(r->menuModule);
             r->menuModule = -1;
+            break;
+        case 3:     /* LOAD SAMPLE - only a sampler has this row */
+            bs_rack_load_sample = r->menuModule;
             break;
         default: break;
         }

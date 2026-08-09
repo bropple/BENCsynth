@@ -192,6 +192,9 @@ int bs_patch_from_string(bs::Engine *eng, const char *text,
                 else                 note->push_back(*q);
             }
 
+            /* A path is not a note: whatever it names has to be
+             * opened before the next block asks for its audio. */
+            m->onTextChanged();
         } else if (l[0] == 'C') {
             int s = 0, sp = 0, d = 0, dp = 0, col = 0;
             if (std::sscanf(l, "C %d %d %d %d %d", &s, &sp, &d, &dp, &col) < 4) continue;
