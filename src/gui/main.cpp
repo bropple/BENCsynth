@@ -16,6 +16,8 @@
 #include "bs_patchfile.h"
 #include "bs_racklib.h"
 #include "bs_record.h"
+#include "bs_midimsg.h"
+#include "bs_midiin.h"
 
 #include <ctime>
 #include "bs_shm.h"
@@ -49,6 +51,9 @@ enum {
  * comes through here. One synthesizer per process; there is no arrangement
  * under which a second would be useful. */
 static bs::Engine g_engine;
+/* One note per channel is all MPE is, and this is where that is remembered.
+ * A controller that never sends a note on channels 2-16 leaves it untouched. */
+static bs::MpeState g_mpe;
 
 static void audio_cb(void *buffer, unsigned int frames)
 {
@@ -733,6 +738,17 @@ int main(int argc, char **argv)
         PlayAudioStream(stream);
         if (!IsAudioDeviceReady())
             say(&app, "no audio device - the rack still patches, it just cannot be heard");
+
+        /* A keyboard, if one is plugged in. Not in editor mode: there the
+         * host owns the MIDI and sends it to the plugin, and opening the
+         * ports here would play every note twice. */
+        const int nports = bs::midiInOpen();
+        if (nports > 0) {
+            char m[192];
+            std::snprintf(m, sizeof m, "MIDI in: %s%s", bs::midiInName(),
+                          nports > 1 ? " (and others)" : "");
+            say(&app, m);
+        }
     }
 
     /* A screenshot of an idle rack shows a dead meter and a flat scope, which
@@ -755,6 +771,19 @@ int main(int argc, char **argv)
         /* Before anything asks. Turns the events that arrived since the last
          * frame into the held-and-edge state the interface expects. */
         bs_input_frame();
+
+        /* ---- whatever a keyboard sent since the last frame ------------
+         *
+         * Drained here rather than on the thread that received it: the
+         * engine's note queue has one producer by design, and this thread is
+         * already it. The cost is up to a frame of delay, which is the price
+         * of not putting two writers on a queue built for one. */
+        {
+            unsigned char msg[3];
+            while (bs::midiInPop(msg))
+                bs::applyMidi(g_engine, g_mpe, msg, 3, 0, 0, 0);
+        }
+
         /* ---- editor: take whatever the plugin changed ---------------- */
         if (editing) {
             bs::ShmBlock *b = shm.block;
@@ -1082,6 +1111,7 @@ int main(int argc, char **argv)
          * header and most things will refuse to open it. Closing the window
          * mid-take should still leave a file that plays. */
         if (bs::recActive()) bs::recStop();
+        bs::midiInClose();
         UnloadAudioStream(stream);
         CloseAudioDevice();
     }

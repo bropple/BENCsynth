@@ -35,7 +35,8 @@ CORE_SRC := src/core/bs_patch.cpp \
             src/core/bs_modules.cpp \
             src/core/bs_engine.cpp \
             src/core/bs_patchfile.cpp \
-            src/core/bs_racklib.cpp
+            src/core/bs_racklib.cpp \
+            src/core/bs_midimsg.cpp
 CORE_OBJ := $(CORE_SRC:.cpp=.o)
 CORE_LIB := libbencsynth.a
 
@@ -70,7 +71,8 @@ GUI_SRC  := src/gui/main.cpp \
             src/gui/bs_keyboard.cpp \
             src/gui/bs_filedlg.cpp \
             src/gui/bs_input.cpp \
-            src/gui/bs_record.cpp
+            src/gui/bs_record.cpp \
+            src/gui/bs_midiin.cpp
 # The standalone is also the plugin's editor (--editor), so it carries the
 # same shared-memory half the plugin does.
 GUI_SRC  += $(PLUGIN_SRC) $(EDITOR_SRC)
@@ -308,7 +310,17 @@ else
   RL_SYS := -lGL -lm -lpthread -ldl -lrt -lX11
 endif
 
-LDLIBS_GUI := $(RL_LIBS) $(RL_SYS)
+# MIDI in for the standalone. Nothing new to install: ALSA is already here for
+# audio, winmm is already linked, and CoreMIDI is a system framework.
+ifeq ($(UNAME_S),Linux)
+  MIDI_LIBS := -lasound
+else ifeq ($(UNAME_S),Darwin)
+  MIDI_LIBS := -framework CoreMIDI -framework CoreFoundation
+else
+  MIDI_LIBS := -lwinmm
+endif
+
+LDLIBS_GUI := $(RL_LIBS) $(RL_SYS) $(MIDI_LIBS)
 
 # Windows: compile the icon into the executable, link as a GUI subsystem binary
 # so double-clicking it does not also open a console behind the window, and

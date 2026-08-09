@@ -39,6 +39,7 @@
 
 #include "bs_version.h"
 #include "bs_racklib.h"
+#include "bs_midimsg.h"
 
 /* Where the .clap itself lives, filled in by entry_init. The editor is a
  * different file and nothing guarantees the two were installed together, so
@@ -675,6 +676,13 @@ static inline void mirror(BencSynthClap *s, uint8_t kind, uint8_t note, float v)
     if (s->shmOpen) bs::bs_shm_push_host_note(s->shm.block, kind, note, v);
 }
 
+/* The shared MIDI decoder reports what it did; the editor needs to know so its
+ * keyboard lights up, since it has no audio device of its own. */
+static void mirrorThunk(void *user, int kind, int note, float value)
+{
+    mirror((BencSynthClap *)user, kind, (uint8_t)note, value);
+}
+
 /* One event, already known to be due. */
 static void handleEvent(BencSynthClap *s, const clap_event_header_t *h, int at,
                         const clap_output_events_t *out)
@@ -734,49 +742,13 @@ static void handleEvent(BencSynthClap *s, const clap_event_header_t *h, int at,
     case CLAP_EVENT_MIDI: {
         const clap_event_midi_t *e = (const clap_event_midi_t *)h;
         const uint8_t *m = e->data;
-        switch (m[0] & 0xf0) {
-        case 0x90:
-            /* Note-on with zero velocity is a note-off, and has been since
-             * running status made that cheaper to send. */
-            if (m[2] > 0) {
-                s->mpe.noteOn(m[0] & 0x0f, m[1]);
-                s->engine.noteOn(m[1], (float)m[2] / 127.0f, at);
-                mirror(s, bs::NE_NOTE_ON, m[1], (float)m[2] / 127.0f);
-            } else {
-                s->mpe.noteOff(m[0] & 0x0f, m[1]);
-                s->engine.noteOff(m[1], at);
-                mirror(s, bs::NE_NOTE_OFF, m[1], 0.0f);
-            }
-            break;
-        case 0x80:
-            s->mpe.noteOff(m[0] & 0x0f, m[1]);
-            s->engine.noteOff(m[1], at);
-            mirror(s, bs::NE_NOTE_OFF, m[1], 0.0f);
-            break;
-        case 0xe0: {
-            const int raw = ((int)m[2] << 7) | (int)m[1];   /* 0..16383 */
-            const float bend = (float)(raw - 8192) / 8192.0f;
-            /* On a channel carrying one note, this bend is that note's -
-            * which is all MPE is. Anywhere else it is the wheel. */
-            const int mn = s->mpe.noteOn(m[0] & 0x0f);
-            if (mn >= 0) {
-                s->engine.noteExpression(mn, 0, bend * s->mpe.bendRange, at);
-            } else {
-                s->engine.setBend(bend, at);
-                mirror(s, bs::NE_BEND, 0, bend);
-            }
-            break;
-        }
-        case 0xd0: {   /* channel pressure - per-note under MPE */
-            const int mn = s->mpe.noteOn(m[0] & 0x0f);
-            if (mn >= 0) s->engine.noteExpression(mn, 1, (float)m[1] / 127.0f, at);
-            break;
-        }
-        case 0xb0: {
-            /* A MACRO panel can claim a run of eight CCs, which is how a
-             * controller's knob row ends up driving a whole rack. Checked
-             * first: if a CC has been assigned to a macro, that is what it
-             * does, and the fixed meanings below do not also fire. */
+
+        /* One case this decides for itself, before the shared decoder sees
+         * it: a MACRO panel can claim a run of eight CCs, which is how a
+         * controller's knob row ends up driving a whole rack. If a CC has
+         * been assigned, that is what it does, and the fixed meanings do not
+         * also fire. */
+        if ((m[0] & 0xf0) == 0xb0) {
             const int base = s->engine.macroCcBase();
             if (base > 0 && m[1] >= base && m[1] < base + bs::BS_MACROS) {
                 const int which = m[1] - base;
@@ -806,26 +778,9 @@ static void handleEvent(BencSynthClap *s, const clap_event_header_t *h, int at,
                 }
                 break;
             }
-            if (m[1] == 1) {
-                s->engine.setMod((float)m[2] / 127.0f, at);
-                mirror(s, bs::NE_MOD, 0, (float)m[2] / 127.0f);
-            } else if (m[1] == 74) {
-                /* The Y axis. MPE puts it here by convention. */
-                const int mn = s->mpe.noteOn(m[0] & 0x0f);
-                if (mn >= 0)
-                    s->engine.noteExpression(mn, 2, (float)m[2] / 127.0f, at);
-            } else if (m[1] == 64) {
-                s->engine.setSustain(m[2] >= 64, at);
-                mirror(s, bs::NE_SUSTAIN, 0, m[2] >= 64 ? 1.0f : 0.0f);
-            } else if (m[1] == 123 || m[1] == 120) {
-                s->engine.panic();
-                mirror(s, bs::NE_ALL_OFF, 0, 0.0f);
-            }
-            break;
         }
-        default:
-            break;
-        }
+
+        bs::applyMidi(s->engine, s->mpe, m, 3, at, mirrorThunk, s);
         break;
     }
     default:

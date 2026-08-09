@@ -10,6 +10,7 @@
  */
 
 #include "bs_engine.h"
+#include "bs_midimsg.h"
 #include "bs_modules.h"
 #include "test_util.h"
 
@@ -929,6 +930,76 @@ static void test_grand_tour()
  * The thing a rack of hardware cannot do: there, one module is one voice, so
  * making the third note behave unlike the first means patching it differently.
  * Here a cable carries all eight and one module can hand each its own value. */
+
+/* The MIDI decoder, which both the plugin and the standalone now use.
+ *
+ * One copy, because two copies of "note on with velocity zero is a note off"
+ * is two places for it to be wrong, and the MPE rule - a bend on a channel
+ * carrying one note belongs to that note, anywhere else it is the wheel - is
+ * not obvious enough to write twice. */
+static void test_midi_decode()
+{
+    std::printf("midi decoding\n");
+
+    Engine e;
+    e.init(48000.0f);
+    e.buildPreset(0);
+    MpeState mpe;
+    std::vector<float> buf(512);
+
+    struct L {
+        static void msg(Engine &en, MpeState &m, int a, int b, int c)
+        {
+            const unsigned char x[3] = { (unsigned char)a, (unsigned char)b,
+                                         (unsigned char)c };
+            applyMidi(en, m, x, 3, 0, 0, 0);
+        }
+    };
+
+    L::msg(e, mpe, 0x90, 60, 100);
+    e.render(&buf[0], 256);
+    ok(e.voicesSounding() > 0, "a note on starts a note");
+
+    /* The old convention, still in constant use. */
+    L::msg(e, mpe, 0x90, 60, 0);
+    e.render(&buf[0], 256);
+    okf(e.voicesSounding() == 0, "note on with velocity zero is a note off: "
+        "%.0f sounding, wanted %.0f", (double)e.voicesSounding(), 0.0);
+
+    /* MPE: a note on channel 2, then a bend on channel 2, belongs to that
+     * note and must not move the whole keyboard. */
+    L::msg(e, mpe, 0x91, 64, 100);      /* channel 2 */
+    L::msg(e, mpe, 0x90, 67, 100);      /* channel 1, the master channel */
+    e.render(&buf[0], 256);
+    L::msg(e, mpe, 0xe1, 0x00, 0x70);   /* a big bend, on channel 2 */
+    e.render(&buf[0], 256);
+
+    int v64 = -1, v67 = -1;
+    for (int i = 0; i < e.keys.channels(); i++) {
+        if (e.keys.v[i].note == 64) v64 = i;
+        if (e.keys.v[i].note == 67) v67 = i;
+    }
+    ok(v64 >= 0 && v67 >= 0, "both notes hold a voice");
+    if (v64 >= 0 && v67 >= 0) {
+        okf(e.keys.v[v64].bend > 1.0f, "a bend on a member channel bends that "
+            "note: %.2f semitones, wanted over %.1f", e.keys.v[v64].bend, 1.0);
+        okf(e.keys.v[v67].bend == 0.0f, "and leaves the other note alone: "
+            "%.2f, wanted %.2f", e.keys.v[v67].bend, 0.0);
+    }
+
+    /* A bend on the master channel is the wheel, and moves everything. */
+    L::msg(e, mpe, 0xe0, 0x00, 0x70);
+    e.render(&buf[0], 256);
+    okf(e.keys.bend > 0.5f, "a bend on the master channel is the wheel: %.2f, "
+        "wanted over %.1f", e.keys.bend, 0.5);
+
+    /* All notes off. */
+    L::msg(e, mpe, 0xb0, 123, 0);
+    e.render(&buf[0], 256);
+    okf(e.voicesSounding() == 0, "CC 123 stops everything: %.0f sounding, "
+        "wanted %.0f", (double)e.voicesSounding(), 0.0);
+}
+
 static void test_voice_module()
 {
     std::printf("per-voice values\n");
@@ -1171,6 +1242,7 @@ int main()
     test_arp();
     test_clock_and_func();
     test_grand_tour();
+    test_midi_decode();
     test_voice_module();
     test_string_exciters();
     test_note_expression();
