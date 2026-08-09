@@ -25,7 +25,7 @@ style only — do not copy code from it.
 ## Before you commit anything
 
 ```sh
-make && make test                     # 532 checks
+make && make test                     # 536 checks
 make clap  && make clap-test          #  68
 make lv2   && make lv2-test           #  27
 make ipc-test && xvfb-run -a --server-args="-screen 0 1400x900x24" \

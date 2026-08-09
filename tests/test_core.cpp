@@ -982,6 +982,40 @@ static void test_macro_cc()
     okf(e.macroForCc(22) == 2, "while the rest of the row is untouched: %.0f, "
         "wanted %.0f", (double)e.macroForCc(22), 2.0);
 
+    /* Two panels agree.
+     *
+     * setMacro writes every MACRO panel, so the eight values are mirrored
+     * across all of them. This wrote only the first, which meant learning on
+     * the second panel's knob silently changed the first panel's - and since
+     * the lookup also reads the first, it appeared to work while the knob that
+     * was right-clicked stayed at zero. */
+    {
+        Engine two;
+        two.init(48000.0f);
+        two.clear();
+        const int a = two.addModule("MACRO", 20, 20);
+        const int b = two.addModule("MACRO", 400, 20);
+        ok(two.setMacroCc(2, 55), "a rack with MACRO panels accepts a CC");
+        const Module *ma = two.patch.module(a), *mb = two.patch.module(b);
+        okf(ma->params[BS_MACROS + 1 + 2].value == 55.0f,
+            "the first panel took it: %.0f, wanted %.0f",
+            ma->params[BS_MACROS + 1 + 2].value, 55.0);
+        okf(mb->params[BS_MACROS + 1 + 2].value == 55.0f,
+            "and so did the second: %.0f, wanted %.0f",
+            mb->params[BS_MACROS + 1 + 2].value, 55.0);
+    }
+
+    /* And a rack with nowhere to put it says so, rather than swallowing the
+     * assignment and leaving the knob at zero. */
+    {
+        Engine none;
+        none.init(48000.0f);
+        none.clear();
+        none.addModule("VCO", 20, 20);
+        ok(!none.setMacroCc(0, 55),
+           "a rack with no MACRO panel refuses, so the caller can say so");
+    }
+
     /* It is a knob, so it is in the file. */
     const std::string text = bs_patch_to_string(&e);
     Engine e2;

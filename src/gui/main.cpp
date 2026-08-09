@@ -772,6 +772,28 @@ int main(int argc, char **argv)
          * frame into the held-and-edge state the interface expects. */
         bs_input_frame();
 
+        /* ---- learn gives up after a while -----------------------------
+         *
+         * Arm it, get distracted, and the next thing to send a CC claims the
+         * knob - which might be a sustain pedal an hour later, and by then
+         * nobody remembers arming anything. Ten seconds is long enough to
+         * reach a controller and short enough that it cannot surprise you. */
+        {
+            static int    armed   = -1;
+            static double armedAt = 0.0;
+            if (bs_rack_learn_macro != armed) {
+                armed   = bs_rack_learn_macro;
+                armedAt = GetTime();
+            }
+            if (armed >= 0 && GetTime() - armedAt > 10.0) {
+                bs_rack_learn_macro = -1;
+                armed = -1;
+                if (editing && shm.block)
+                    shm.block->learnMacro.store(-1, std::memory_order_release);
+                say(&app, "nothing arrived - stopped listening");
+            }
+        }
+
         /* ---- whatever a keyboard sent since the last frame ------------
          *
          * Drained here rather than on the thread that received it: the
@@ -787,12 +809,16 @@ int main(int argc, char **argv)
                  * plugin makes the same decision in the same order. */
                 if ((msg[0] & 0xf0) == 0xb0) {
                     if (bs_rack_learn_macro >= 0 && msg[1] > 0) {
-                        g_engine.setMacroCc(bs_rack_learn_macro, msg[1]);
                         char m2[128];
-                        std::snprintf(m2, sizeof m2, "MACRO %d takes CC %d",
-                                      bs_rack_learn_macro + 1, (int)msg[1]);
+                        if (g_engine.setMacroCc(bs_rack_learn_macro, msg[1]))
+                            std::snprintf(m2, sizeof m2, "MACRO %d takes CC %d",
+                                          bs_rack_learn_macro + 1, (int)msg[1]);
+                        else
+                            std::snprintf(m2, sizeof m2, "no MACRO panel in "
+                                          "this rack to assign a CC to");
                         say(&app, m2);
                         bs_rack_learn_macro = -1;
+                        rack.edited = 1;
                         continue;
                     }
                     const int which = g_engine.macroForCc(msg[1]);
@@ -825,10 +851,13 @@ int main(int argc, char **argv)
                      * every frame - so a frame already in flight would
                      * overwrite anything the plugin wrote and the learn would
                      * vanish with nothing said. One writer. */
-                    g_engine.setMacroCc(bs_rack_learn_macro, cc);
                     char m2[128];
-                    std::snprintf(m2, sizeof m2, "MACRO %d takes CC %d",
-                                  bs_rack_learn_macro + 1, cc);
+                    if (g_engine.setMacroCc(bs_rack_learn_macro, cc))
+                        std::snprintf(m2, sizeof m2, "MACRO %d takes CC %d",
+                                      bs_rack_learn_macro + 1, cc);
+                    else
+                        std::snprintf(m2, sizeof m2, "no MACRO panel in this "
+                                      "rack to assign a CC to");
                     say(&app, m2);
                     bs_rack_learn_macro = -1;
                     b->learnMacro.store(-1, std::memory_order_release);

@@ -125,7 +125,8 @@ public:
 
     /* Point a macro at a CC. Writes the knob on the MACRO panel, so it saves
      * with the rack and reaches the plugin like any other knob turn. */
-    void setMacroCc(int macro, int cc);
+    /* Returns false when there is no MACRO panel to put it on. */
+    bool setMacroCc(int macro, int cc);
     float macroValue(int index) const;
 
     /* A complete subtractive voice, patched the way the front of a Moog manual

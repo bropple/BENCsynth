@@ -107,6 +107,16 @@ rack.
 **The standalone takes MIDI now.** Plug a keyboard in and play it; there is
 nothing to configure, and the status line says what it connected to.
 
+### New in v0.4.2
+
+- **Learn stops listening after ten seconds.** Arming it and walking away used
+  to mean the next thing to send a CC claimed the knob — possibly a sustain
+  pedal, an hour later.
+- **Learn says so when there is nowhere to put it**, instead of swallowing the
+  assignment and leaving the knob at zero.
+- **A rack with two MACRO panels now agrees with itself.** Learning on the
+  second panel's knob was quietly writing the first panel's.
+
 ### New in v0.4.1
 
 - **MIDI learn works inside a DAW**, not only in the standalone. v0.4.0 shipped

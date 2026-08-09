@@ -142,17 +142,29 @@ int Engine::macroCcFor(int macro) const
     return 0;
 }
 
-void Engine::setMacroCc(int macro, int cc)
+bool Engine::setMacroCc(int macro, int cc)
 {
-    if (macro < 0 || macro >= BS_MACROS) return;
+    if (macro < 0 || macro >= BS_MACROS) return false;
     std::lock_guard<std::mutex> g(mutex);
+    bool wrote = false;
+    /* Every MACRO panel, not the first one.
+     *
+     * setMacro already writes them all, so the eight values are mirrored
+     * across every panel in a rack. This wrote only the first, which meant
+     * learning a CC on the second panel's knob silently changed the first
+     * panel's - and the lookup reads the first, so it appeared to work while
+     * the knob you right-clicked stayed at zero. */
     for (int i = 0; i < patch.slotCount(); i++) {
         Module *m = patch.module(i);
         if (!m || m->typeId != "MACRO") continue;
-        if (m->paramCount() > BS_MACROS + 1 + macro)
+        if (m->paramCount() > BS_MACROS + 1 + macro) {
             m->params[(size_t)(BS_MACROS + 1 + macro)].value = (float)cc;
-        return;
+            wrote = true;
+        }
     }
+    /* False when the rack has no MACRO panel to put it on - which the caller
+     * has to say out loud, or the assignment disappears without a word. */
+    return wrote;
 }
 
 /* The macro a CC drives, or -1. */
