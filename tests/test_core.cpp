@@ -923,6 +923,59 @@ static void test_grand_tour()
  * relaxation oscillator whose amplitude is set by where its nonlinearity
  * saturates rather than by how hard it is driven, and sat on the rail for an
  * eighth of every cycle no matter what the drive was set to. */
+
+/* VOICE - a different number for every voice.
+ *
+ * The thing a rack of hardware cannot do: there, one module is one voice, so
+ * making the third note behave unlike the first means patching it differently.
+ * Here a cable carries all eight and one module can hand each its own value. */
+static void test_voice_module()
+{
+    std::printf("per-voice values\n");
+
+    Engine e;
+    e.init(48000.0f);
+    e.clear();
+    const int kbd = e.addModule("KBD", 20, 20);
+    const int v   = e.addModule("VOICE", 200, 20);
+    const int out = e.addModule("OUT", 400, 20);
+    e.patch.connect(v, 1, out, 0);
+    e.patch.module(kbd)->params[3].value = 4.0f;   /* four voices */
+
+    std::vector<float> buf(512);
+    const int notes[3] = { 60, 64, 67 };
+    for (int n = 0; n < 3; n++) { e.noteOn(notes[n], 0.9f, 0); e.render(&buf[0], 256); }
+
+    Module *m = e.patch.module(v);
+    const double i0 = m->outs[0].v[0][0], i2 = m->outs[0].v[2][0];
+    okf(i2 > i0 + 1.0, "IDX separates the voices: %.2f against %.2f", i2, i0);
+
+    /* Three different random values, not three points on a line. The first
+     * version stepped an LCG once from adjacent seeds and produced a ramp -
+     * 2.110, 2.152, 2.193 - which sounds like nothing at all. */
+    const double r0 = m->outs[1].v[0][0];
+    const double r1 = m->outs[1].v[1][0];
+    const double r2 = m->outs[1].v[2][0];
+    const double d01 = r1 - r0, d12 = r2 - r1;
+    okf(std::fabs(d01 - d12) > 0.05,
+        "RND is random per voice, not a ramp: steps %.3f and %.3f", d01, d12);
+    okf(r0 != r1 && r1 != r2, "and the three differ: %.3f, %.3f", r0, r1);
+
+    /* A voice that is not playing says nothing. */
+    okf(m->outs[1].v[3][0] == 0.0f, "an idle voice reads %.2f, wanted %.2f",
+        m->outs[1].v[3][0], 0.0);
+
+    /* AGE counts up while a note is held, and the older note is older. */
+    for (int i = 0; i < 200; i++) e.render(&buf[0], 256);
+    const double a0 = m->outs[2].v[0][0], a2 = m->outs[2].v[2][0];
+    okf(a0 > 1.0, "AGE rises while a note is held: %.3f, wanted over %.1f", a0, 1.0);
+    okf(a0 > a2, "and the note pressed first is the older one: %.3f vs %.3f", a0, a2);
+
+    /* The random value is fixed at the note, not rolling. */
+    const double r0b = m->outs[1].v[0][0];
+    okf(r0b == r0, "RND holds for the length of the note: %.3f then %.3f", r0, r0b);
+}
+
 static void test_string_exciters()
 {
     std::printf("string exciters\n");
@@ -1118,6 +1171,7 @@ int main()
     test_arp();
     test_clock_and_func();
     test_grand_tour();
+    test_voice_module();
     test_string_exciters();
     test_note_expression();
     test_sample_rates();

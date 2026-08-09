@@ -1938,6 +1938,104 @@ private:
 };
 
 /* ================================================================== *
+ * VOICE - a different number for every voice
+ *
+ * The thing a hardware modular cannot do at all.
+ *
+ * There, one module is one voice: a polyphonic rig is four copies of the
+ * same rack, and making the third note behave unlike the first means
+ * physically patching it differently. Here a cable carries all eight, so a
+ * module can hand each of them its own value - and everything downstream
+ * stays one cable and one set of knobs.
+ *
+ * That is what makes a sequencer expressive. MPE gets per-note pressure from
+ * a player's fingers; this gets it from the rack, so a line that nobody is
+ * touching can still have every note sit differently.
+ * ================================================================== */
+
+class ModuleVoice : public Module {
+public:
+    ModuleVoice() : keys(0)
+    {
+        configure("VOICE", "VOICE", 5, 2);
+        addKnob("RND",   0.0f, 10.0f, 5.0f, "%.1f V");
+        addKnob("SPREAD", 0.0f, 10.0f, 10.0f, "%.1f V");
+        addKnob("AGE",   0.1f, 20.0f, 4.0f, "%.1f s", PC_EXP);
+
+        addOutput("IDX");    /* which voice this is, spread over SPREAD    */
+        addOutput("RND");    /* fixed when the note lands, held while held */
+        addOutput("AGE");    /* how long it has been down                  */
+        addOutput("PRESS");  /* what the player sent, if anything          */
+    }
+
+    void bindKeys(KeyboardState *k) { keys = k; }
+
+    void reset()
+    {
+        for (int c = 0; c < BS_MAX_POLY; c++) {
+            rnd[c] = 0.0f; age[c] = 0.0f; held[c] = false;
+            seed[c] = 22699u + (unsigned)c * 40503u;
+        }
+    }
+
+    void process()
+    {
+        if (!keys) {
+            setAllOutputChannels(1);
+            for (size_t i = 0; i < outs.size(); i++) outs[i].clear();
+            return;
+        }
+
+        const int ch = keys->channels();
+        setAllOutputChannels(ch);
+
+        const float rndAmt = pv(0), spread = pv(1), ageFull = pv(2);
+        const float denom = ch > 1 ? (float)(ch - 1) : 1.0f;
+
+        for (int c = 0; c < ch; c++) {
+            const KeyVoice &kv = keys->v[c];
+
+            /* A new note gets a new random number, and keeps it until it is
+             * let go. Rolling it per sample would be noise; rolling it per
+             * note is a different instrument for every key. */
+            if (kv.gate && !held[c]) {
+                /* Mixed, not one step of an LCG. Adjacent seeds one step
+                 * apart come out almost in a line - the first version handed
+                 * three voices 2.110, 2.152 and 2.193, which is a ramp, not a
+                 * set of different instruments. */
+                unsigned h = seed[c] * 1103515245u + 12345u;
+                h ^= h >> 16; h *= 0x7feb352du;
+                h ^= h >> 15; h *= 0x846ca68bu;
+                h ^= h >> 16;
+                seed[c] = h;
+                rnd[c]  = (float)(h >> 8 & 0xffffffu) / 16777215.0f;
+                age[c]  = 0.0f;
+            }
+            held[c] = kv.gate;
+            if (kv.gate) age[c] += st * (float)BS_BLOCK;
+
+            const float idxV   = (float)c / denom * spread;
+            const float rndV   = rnd[c] * rndAmt;
+            const float ageV   = clampf(age[c] / ageFull, 0.0f, 1.0f) * GATE_HI;
+            const float pressV = kv.press * GATE_HI;
+
+            for (int i = 0; i < BS_BLOCK; i++) {
+                outs[0].v[c][i] = idxV;
+                outs[1].v[c][i] = rndV;
+                outs[2].v[c][i] = ageV;
+                outs[3].v[c][i] = pressV;
+            }
+        }
+    }
+
+private:
+    KeyboardState *keys;
+    float    rnd[BS_MAX_POLY], age[BS_MAX_POLY];
+    bool     held[BS_MAX_POLY];
+    unsigned seed[BS_MAX_POLY];
+};
+
+/* ================================================================== *
  * SCOPE
  * ================================================================== */
 
@@ -2365,6 +2463,7 @@ static const ModuleType TYPES[] = {
     { "RVB",   "RVB",        "EFFECT", makeT<ModuleRvb>   },
     { "ARP",   "ARP",        "SOURCE", makeT<ModuleArp>   },
     { "MACRO", "MACRO",      "UTILITY",makeT<ModuleMacro> },
+    { "VOICE", "VOICE",      "UTILITY",makeT<ModuleVoice> },
     { "SCOPE", "SCOPE",      "UTILITY",makeT<ModuleScope> },
     { "TEXT",  "TEXT / NOTES","UTILITY",makeT<ModuleText> },
     { "FOLD",  "FOLD",       "SHAPE",  makeT<ModuleFold>  },

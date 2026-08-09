@@ -2415,6 +2415,9 @@ void presetGrandTour(Builder &b)
     const int slew   = b.put("SLEW");
     const int str    = b.put("STRING");
     const int svf    = b.put("SVF");
+    /* A different number for every voice - the thing a rack of hardware
+     * cannot do, because there one module is one voice. */
+    const int voice  = b.put("VOICE");
 
     b.row(R4);
     const int func   = b.put("FUNC");
@@ -2426,6 +2429,11 @@ void presetGrandTour(Builder &b)
     const int pan    = b.put("PAN");
     const int mixL   = b.put("MIX");
     const int mixR   = b.put("MIX");
+
+    /* Every voice gets its own small detune, so a chord is eight strings
+     * rather than one string played eight times. */
+    b.wire(voice, 1, str, 2);          /* RND into the string's own input */
+    b.set(voice, 0, 0.35f);            /* a little of it */
 
     /* Clock, and two divisions of it disagreeing with each other. */
     b.wire(clk, 0, seq, 0);
