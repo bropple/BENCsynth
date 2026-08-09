@@ -959,7 +959,10 @@ static void test_sample_module()
 
     /* A fixture, written here so the test carries its own audio: a second of
      * 440 Hz at 44100, which is deliberately not the engine's rate. */
-    const char *path = "build/test-sample.wav";
+    /* Beside wherever the test is run, not in build/ - the core job compiles
+     * with `make core` and never creates that directory, so the first CI run
+     * failed on a fixture it could not write. */
+    const char *path = "bencsynth-test-sample.wav";
     {
         const int rate = 44100, n = rate;
         std::vector<short> pcm((size_t)n * 2);
@@ -1071,6 +1074,8 @@ static void test_sample_module()
     okf(L::mag(mono2, 440.0) > 0.001,
         "and the sampler is playing its file again: %.4f, wanted over %.3f",
         L::mag(mono2, 440.0), 0.001);
+
+    std::remove(path);
 }
 
 static void test_macro_cc()
