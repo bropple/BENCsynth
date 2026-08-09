@@ -82,6 +82,7 @@ struct BencSynthClap {
      * actually running. Building a rack allocates, so process() may not do it:
      * it records the request and asks the host for a main-thread callback,
      * which is precisely what request_callback is for. */
+    bs::MpeState     mpe;
     std::atomic<int> wantPreset;
     int              havePreset;
 
@@ -697,6 +698,33 @@ static void handleEvent(BencSynthClap *s, const clap_event_header_t *h, int at)
                mirror(s, bs::NE_NOTE_OFF, (uint8_t)e->key, 0.0f); }
         break;
     }
+    /* Per-note expression - what a Seaboard, a Linnstrument or a Push sends,
+     * and what MPE exists to carry. CLAP hands it over directly rather than
+     * as a channel-per-note convention, so there is nothing to decode.
+     *
+     * Aimed at a note, not the keyboard: two fingers bending in opposite
+     * directions is the whole point, and a voltage model handles it without
+     * anything special, because a cable already carries all eight voices. */
+    case CLAP_EVENT_NOTE_EXPRESSION: {
+        const clap_event_note_expression_t *e =
+            (const clap_event_note_expression_t *)h;
+        if (e->key < 0) break;
+        switch (e->expression_id) {
+        case CLAP_NOTE_EXPRESSION_TUNING:
+            /* Already in semitones, and can exceed an octave on a controller
+             * that allows it. */
+            s->engine.noteExpression(e->key, 0, (float)e->value, at);
+            break;
+        case CLAP_NOTE_EXPRESSION_PRESSURE:
+            s->engine.noteExpression(e->key, 1, (float)e->value, at);
+            break;
+        case CLAP_NOTE_EXPRESSION_BRIGHTNESS:
+            s->engine.noteExpression(e->key, 2, (float)e->value, at);
+            break;
+        default: break;   /* volume, pan, vibrato, expression: not ours yet */
+        }
+        break;
+    }
     case CLAP_EVENT_PARAM_VALUE: {
         const clap_event_param_value_t *e = (const clap_event_param_value_t *)h;
         applyParam(s, e->param_id, e->value);
@@ -710,28 +738,48 @@ static void handleEvent(BencSynthClap *s, const clap_event_header_t *h, int at)
             /* Note-on with zero velocity is a note-off, and has been since
              * running status made that cheaper to send. */
             if (m[2] > 0) {
+                s->mpe.noteOn(m[0] & 0x0f, m[1]);
                 s->engine.noteOn(m[1], (float)m[2] / 127.0f, at);
                 mirror(s, bs::NE_NOTE_ON, m[1], (float)m[2] / 127.0f);
             } else {
+                s->mpe.noteOff(m[0] & 0x0f, m[1]);
                 s->engine.noteOff(m[1], at);
                 mirror(s, bs::NE_NOTE_OFF, m[1], 0.0f);
             }
             break;
         case 0x80:
+            s->mpe.noteOff(m[0] & 0x0f, m[1]);
             s->engine.noteOff(m[1], at);
             mirror(s, bs::NE_NOTE_OFF, m[1], 0.0f);
             break;
         case 0xe0: {
             const int raw = ((int)m[2] << 7) | (int)m[1];   /* 0..16383 */
             const float bend = (float)(raw - 8192) / 8192.0f;
-            s->engine.setBend(bend, at);
-            mirror(s, bs::NE_BEND, 0, bend);
+            /* On a channel carrying one note, this bend is that note's -
+            * which is all MPE is. Anywhere else it is the wheel. */
+            const int mn = s->mpe.noteOn(m[0] & 0x0f);
+            if (mn >= 0) {
+                s->engine.noteExpression(mn, 0, bend * s->mpe.bendRange, at);
+            } else {
+                s->engine.setBend(bend, at);
+                mirror(s, bs::NE_BEND, 0, bend);
+            }
+            break;
+        }
+        case 0xd0: {   /* channel pressure - per-note under MPE */
+            const int mn = s->mpe.noteOn(m[0] & 0x0f);
+            if (mn >= 0) s->engine.noteExpression(mn, 1, (float)m[1] / 127.0f, at);
             break;
         }
         case 0xb0:
             if (m[1] == 1) {
                 s->engine.setMod((float)m[2] / 127.0f, at);
                 mirror(s, bs::NE_MOD, 0, (float)m[2] / 127.0f);
+            } else if (m[1] == 74) {
+                /* The Y axis. MPE puts it here by convention. */
+                const int mn = s->mpe.noteOn(m[0] & 0x0f);
+                if (mn >= 0)
+                    s->engine.noteExpression(mn, 2, (float)m[2] / 127.0f, at);
             } else if (m[1] == 64) {
                 s->engine.setSustain(m[2] >= 64, at);
                 mirror(s, bs::NE_SUSTAIN, 0, m[2] >= 64 ? 1.0f : 0.0f);

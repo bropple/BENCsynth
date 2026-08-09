@@ -900,6 +900,106 @@ static void test_grand_tour()
     }
 }
 
+
+/* Per-note expression - MPE, and CLAP's note expressions.
+ *
+ * The point of it is two notes bending in opposite directions at the same
+ * time, which a single pitch wheel cannot express. A voltage model gets this
+ * almost for free, because a cable already carries every voice separately -
+ * so what is worth checking is that the per-voice number reaches the pitch and
+ * that it reaches only the voice it was aimed at. */
+static void test_note_expression()
+{
+    std::printf("per-note expression\n");
+
+    Engine e;
+    e.init(48000.0f);
+    e.clear();
+
+    /* Gated, deliberately. Without a VCA the unused polyphonic channels of the
+     * oscillator free-run at 0 V - which is middle C - and three silent voices
+     * drown the one actually playing. That cost an hour once. */
+    const int kbd = e.addModule("KBD", 20, 20), vco = e.addModule("VCO", 200, 20);
+    const int env = e.addModule("ADSR", 380, 20), vca = e.addModule("VCA", 560, 20);
+    const int out = e.addModule("OUT", 740, 20);
+    e.patch.connect(kbd, 0, vco, 0);
+    e.patch.connect(kbd, 1, env, 0);
+    e.patch.connect(vco, 3, vca, 0);      /* SIN, so one partial and no argument */
+    e.patch.connect(env, 0, vca, 1);
+    e.patch.connect(vca, 0, out, 0);
+    e.patch.module(vca)->params[2].value = 1.0f;
+
+    e.noteOn(60, 0.9f, 0);
+    e.noteOn(67, 0.9f, 0);
+    e.noteExpression(60, 0, -2.0f, 0);    /* a whole tone down */
+    e.noteExpression(67, 0, +2.0f, 0);    /* and the other one up */
+
+    std::vector<float> buf(512), mono;
+    for (int i = 0; i < 14000; i += 256) {
+        e.render(&buf[0], 256);
+        for (int k = 0; k < 256; k++) mono.push_back(buf[(size_t)k * 2]);
+    }
+    mono.erase(mono.begin(), mono.begin() + 6000);
+    mono.resize(8192);
+
+    /* Direct correlation, not Goertzel: its recurrence drifts over a window
+     * this long and cheerfully reports 261 Hz for a note an octave up. */
+    struct L {
+        static double mag(const std::vector<float> &x, double midi)
+        {
+            const double f = 440.0 * std::pow(2.0, (midi - 69.0) / 12.0);
+            const double w = 2 * 3.14159265358979 * f / 48000.0;
+            double re = 0, im = 0;
+            for (size_t i = 0; i < x.size(); i++) {
+                re += x[i] * std::cos(w * (double)i);
+                im -= x[i] * std::sin(w * (double)i);
+            }
+            return std::sqrt(re * re + im * im) / (double)x.size();
+        }
+    };
+
+    const double moved58 = L::mag(mono, 58), left60 = L::mag(mono, 60);
+    const double left67  = L::mag(mono, 67), moved69 = L::mag(mono, 69);
+    const double peak = moved58 > moved69 ? moved58 : moved69;
+
+    okf(left60 < peak * 0.1, "the bent-down note left 60: %.1f %% of the peak, "
+        "wanted under %.0f", 100.0 * left60 / peak, 10.0);
+    okf(left67 < peak * 0.1, "the bent-up note left 67: %.1f %% of the peak, "
+        "wanted under %.0f", 100.0 * left67 / peak, 10.0);
+    okf(moved58 > peak * 0.8, "and arrived at 58: %.1f %%, wanted over %.0f",
+        100.0 * moved58 / peak, 80.0);
+    okf(moved69 > peak * 0.8, "and at 69: %.1f %%, wanted over %.0f",
+        100.0 * moved69 / peak, 80.0);
+
+    /* Pressure and timbre reach their own voice and no other. */
+    e.noteExpression(60, 1, 0.75f, 0);
+    e.render(&buf[0], 256);
+    int v60 = -1, v67 = -1;
+    for (int i = 0; i < e.keys.channels(); i++) {
+        if (e.keys.v[i].note == 60) v60 = i;
+        if (e.keys.v[i].note == 67) v67 = i;
+    }
+    ok(v60 >= 0 && v67 >= 0, "both notes hold a voice");
+    if (v60 >= 0 && v67 >= 0) {
+        okf(e.keys.v[v60].press > 0.7f, "pressure reached the note it named: %.2f, "
+            "wanted over %.2f", e.keys.v[v60].press, 0.70);
+        okf(e.keys.v[v67].press < 0.01f, "and not the other one: %.2f, wanted under "
+            "%.2f", e.keys.v[v67].press, 0.01);
+    }
+
+    /* A voice reused for a new note must not inherit the last one's bend -
+     * it would sound as an instant detune on the attack. */
+    e.noteOff(60, 0);
+    e.render(&buf[0], 256);
+    e.noteOn(62, 0.9f, 0);
+    e.render(&buf[0], 256);
+    for (int i = 0; i < e.keys.channels(); i++)
+        if (e.keys.v[i].note == 62)
+            okf(e.keys.v[i].bend == 0.0f && e.keys.v[i].press == 0.0f,
+                "a reused voice starts clean: bend %.2f, press %.2f",
+                e.keys.v[i].bend, e.keys.v[i].press);
+}
+
 static void test_sample_rates()
 {
     std::printf("sample rates\n");
@@ -938,6 +1038,7 @@ int main()
     test_arp();
     test_clock_and_func();
     test_grand_tour();
+    test_note_expression();
     test_sample_rates();
     test_patchfile();
 

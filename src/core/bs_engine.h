@@ -81,6 +81,11 @@ public:
     void noteOn(int note, float velocity, int atFrame = 0);
     void noteOff(int note, int atFrame = 0);
     void setBend(float b, int atFrame = 0);          /* -1..1 */
+
+    /* Per-note expression. MPE and CLAP note expressions are the same idea:
+     * a value aimed at one sounding note rather than the whole keyboard.
+     * kind: 0 bend in semitones, 1 pressure 0..1, 2 timbre 0..1. */
+    void noteExpression(int note, int kind, float value, int atFrame = 0);
     void setMod(float m, int atFrame = 0);           /*  0..1 */
     void setSustain(bool on, int atFrame = 0);
 

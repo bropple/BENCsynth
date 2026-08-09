@@ -45,7 +45,12 @@ enum NoteEventKind {
     NE_ALL_OFF,
     NE_SUSTAIN,   /* value 0 or 1        */
     NE_BEND,      /* value -1..1         */
-    NE_MOD        /* value  0..1         */
+    NE_MOD,       /*  value  0..1        */
+    /* Per-note, addressed by note: MPE and CLAP note expressions both work
+     * this way. `note` is the sounding note, `value` the amount. */
+    NE_NOTE_BEND,   /* semitones, per note */
+    NE_NOTE_PRESS,  /* 0..1, per note      */
+    NE_NOTE_TIMBRE  /* 0..1, per note      */
 };
 
 struct NoteEvent {
@@ -110,12 +115,61 @@ private:
     NoteQueue &operator=(const NoteQueue &);
 };
 
+/* MPE, decoded.
+ *
+ * MPE is a convention on top of ordinary MIDI: one note per channel, and the
+ * channel's pitch bend, pressure and CC74 then belong to that note rather than
+ * to the keyboard. Channel 1 stays the master - what it sends still moves
+ * everything, which is how a sustain pedal and a mod wheel keep working.
+ *
+ * So all this has to do is remember which note is on which channel. Nothing
+ * here allocates or blocks; it is called from the same place the note events
+ * are, on the audio thread.
+ *
+ * A controller that is not MPE never sends a note on channels 2-16, so
+ * everything falls through to the global path and behaves as it always did.
+ */
+struct MpeState {
+    int note[16];        /* the note sounding on each channel, -1 for none */
+    float bendRange;     /* semitones at full deflection; MPE's default is 48 */
+
+    MpeState() { reset(); }
+    void reset()
+    {
+        for (int i = 0; i < 16; i++) note[i] = -1;
+        bendRange = 48.0f;
+    }
+
+    void noteOn(int ch, int n)  { if (ch > 0 && ch < 16) note[ch] = n; }
+    void noteOff(int ch, int n)
+    {
+        if (ch > 0 && ch < 16 && note[ch] == n) note[ch] = -1;
+    }
+
+    /* -1 when this channel is not carrying a note of its own, which means the
+     * message is for the whole keyboard. */
+    int noteOn(int ch) const { return (ch > 0 && ch < 16) ? note[ch] : -1; }
+};
+
 struct KeyVoice {
     int      note;     /* -1 when the channel has never been used         */
     float    vel;      /* 0..1                                            */
     bool     gate;
     bool     retrig;   /* set for exactly one block when a note lands      */
     uint64_t stamp;    /* press order, for stealing the oldest             */
+
+    /* Per-note expression - MPE, and CLAP's note expressions, which are the
+     * same idea with a sane transport. A voltage model is already the right
+     * shape for this: these are three more per-voice numbers, and a cable
+     * carries all eight voices' worth, so a rack patches them like anything
+     * else. All zero unless something sends them, which is what makes an
+     * ordinary MIDI keyboard behave exactly as it did.
+     *
+     * bend is in semitones, and is per-note - the global wheel is separate
+     * and adds to it. press and timbre are 0..1. */
+    float    bend;
+    float    press;
+    float    timbre;
 };
 
 class KeyboardState {
@@ -127,6 +181,7 @@ public:
         for (int i = 0; i < BS_MAX_POLY; i++) {
             v[i].note = -1; v[i].vel = 0.0f; v[i].gate = false;
             v[i].retrig = false; v[i].stamp = 0;
+            v[i].bend = v[i].press = v[i].timbre = 0.0f;
         }
         heldCount = 0;
         clock     = 1;
@@ -150,6 +205,9 @@ public:
         case NE_SUSTAIN:  setSustain(e.value >= 0.5f); break;
         case NE_BEND:     bend = clampf(e.value, -1.0f, 1.0f); break;
         case NE_MOD:      mod  = clampf(e.value,  0.0f, 1.0f); break;
+        case NE_NOTE_BEND:   noteExpression(e.note, 0, e.value); break;
+        case NE_NOTE_PRESS:  noteExpression(e.note, 1, clampf(e.value, 0.0f, 1.0f)); break;
+        case NE_NOTE_TIMBRE: noteExpression(e.note, 2, clampf(e.value, 0.0f, 1.0f)); break;
         default: break;
         }
     }
@@ -224,6 +282,26 @@ public:
         v[slot].gate   = true;
         v[slot].retrig = true;
         v[slot].stamp  = clock++;
+        /* A voice reused for a different note must not inherit the last
+         * one's bend - it would sound as an instant detune on the attack. */
+        v[slot].bend = v[slot].press = v[slot].timbre = 0.0f;
+    }
+
+    /* Per-note expression, addressed the way both MPE and CLAP address it:
+     * by the note that is sounding. Every voice playing that note gets it,
+     * which is one voice in every case that matters and the right answer if a
+     * rack is somehow playing a unison.
+     *
+     * kind: 0 bend (semitones), 1 pressure (0..1), 2 timbre (0..1). */
+    void noteExpression(int note, int kind, float value)
+    {
+        const int ch = channels();
+        for (int i = 0; i < ch; i++) {
+            if (!v[i].gate || v[i].note != note) continue;
+            if      (kind == 0) v[i].bend   = value;
+            else if (kind == 1) v[i].press  = value;
+            else if (kind == 2) v[i].timbre = value;
+        }
     }
 
     void noteOff(int note)

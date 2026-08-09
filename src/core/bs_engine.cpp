@@ -101,6 +101,13 @@ void Engine::setBend(float b, int atFrame)
     events.push(ev(NE_BEND, 0, clampf(b, -1.0f, 1.0f), atFrame));
 }
 
+void Engine::noteExpression(int note, int kind, float value, int atFrame)
+{
+    static const uint8_t KIND[3] = { NE_NOTE_BEND, NE_NOTE_PRESS, NE_NOTE_TIMBRE };
+    if (kind < 0 || kind > 2) return;
+    events.push(ev(KIND[kind], (uint8_t)note, value, atFrame));
+}
+
 void Engine::setMod(float m, int atFrame)
 {
     events.push(ev(NE_MOD, 0, clampf(m, 0.0f, 1.0f), atFrame));

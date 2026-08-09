@@ -53,6 +53,12 @@ ModuleKbd::ModuleKbd() : keys(0)
     addOutput("VEL");
     addOutput("MOD");
     addOutput("BEND");
+    /* Per-note expression - MPE, and CLAP's note expressions. Appended, so a
+     * saved rack keeps the port numbers it was written with, and silent
+     * unless the controller sends them. PRESS is per-note aftertouch; SLIDE
+     * is the Y axis, CC74 on an MPE controller. */
+    addOutput("PRESS");
+    addOutput("SLIDE");
 
     reset();
 }
@@ -97,14 +103,29 @@ void ModuleKbd::process()
         const float gate = kv.gate ? GATE_HI : 0.0f;
         const float vel  = kv.vel * GATE_HI;
 
+        /* The wheel moves every voice; a note's own bend moves only it. They
+         * add, so a controller that sends neither leaves this exactly where
+         * it was, and one that sends both behaves the way a player expects.
+         * A note's bend is in semitones already - the BEND knob is the
+         * wheel's range and has nothing to say about it. */
+        const float noteBendV = kv.bend / 12.0f;
+        const float pressV    = kv.press  * GATE_HI;
+        const float slideV    = kv.timbre * GATE_HI;
+
         for (int i = 0; i < BS_BLOCK; i++) {
             const float p = glide[c].step(target, glideTime, sr);
-            outs[0].v[c][i] = p + bendV;
+            outs[0].v[c][i] = p + bendV + noteBendV;
             outs[1].v[c][i] = gate;
             outs[2].v[c][i] = trigTimer[c] > 0.0f ? GATE_HI : 0.0f;
             outs[3].v[c][i] = vel;
             outs[4].v[c][i] = modV;
+            /* The wheel, unchanged and unscaled, because a rack already
+             * patching this expects what it always got. A note's own bend
+             * reaches the pitch through V/OCT above, which is where pitch
+             * belongs. */
             outs[5].v[c][i] = keys->bend * VOLT;
+            outs[6].v[c][i] = pressV;
+            outs[7].v[c][i] = slideV;
             if (trigTimer[c] > 0.0f) trigTimer[c] -= st;
         }
     }
