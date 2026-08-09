@@ -728,6 +728,78 @@ void presetPiano(Builder &b)
  * The rest is a room: a little chorus for the two-strings-per-note beating
  * that the model's own detuning starts, and a reverb for the soundboard.
  */
+
+/* A bowed string. The same waveguide as GRAND, driven continuously instead of
+ * struck - which is the whole demonstration: nothing about the string changes,
+ * only what is putting energy into it. */
+void presetBowed(Builder &b)
+{
+    b.row(R1);
+    const int kbd  = b.put("KBD");
+    const int str  = b.put("STRING");
+    const int svf  = b.put("SVF");
+    const int envA = b.put("ADSR");
+    const int vca  = b.put("VCA");
+
+    b.row(R2);
+    b.x = 560.0f;
+    const int lfo = b.put("LFO");
+    /* The vibrato has to be summed with the pitch, not plugged into the same
+     * jack. An input takes one cable and a second replaces the first - which
+     * is right at a patch bay and never what a preset means. The rack's own
+     * check caught this one the moment it was written. */
+    const int mix = b.put("MIX");
+    const int rvb = b.put("RVB");
+    const int out = b.put("OUT");
+
+    b.wire(kbd, KBD_PITCH, mix, 0);
+    b.wire(lfo, 0,         mix, 1);
+    b.wire(mix, 0,         str, 0);
+    /* The gate, not the trigger. A bow is not an event - the string is driven
+     * for as long as the key is down, and how far down the gate sits is how
+     * hard the hair presses. */
+    b.wire(kbd, KBD_GATE,  str, 1);
+    b.wire(kbd, KBD_GATE,  envA, ADSR_IN_GATE);
+    b.wire(kbd, KBD_TRIG,  envA, ADSR_IN_TRIG);
+    b.wire(kbd, KBD_VEL,   envA, ADSR_IN_VEL);
+
+    b.wire(str, 0, svf, 0);
+    b.wire(svf, 0, vca, VCA_IN);
+    b.wire(envA, ADSR_ENV, vca, VCA_IN_CV);
+    b.wire(vca, 0, rvb, 0);
+    b.wire(rvb, 0, out, 0);
+    b.wire(rvb, 1, out, 1);
+
+    b.set(kbd, KBD_VOICES, 4.0f);
+
+    b.set(str, 2, 0.55f);        /* DECAY - short; the bow supplies the rest  */
+    b.set(str, 3, 0.42f);        /* BRIGHT                                     */
+    b.set(str, 4, 0.06f);        /* INHARM - gut and steel, not piano wire     */
+    b.set(str, 5, 0.10f);        /* STRIKE - where the bow sits                */
+    b.set(str, 6, 1.2f);         /* SPREAD                                     */
+    b.set(str, 7, 1.0f);         /* EXCITE = BOW                               */
+    b.set(str, 8, 0.75f);        /* FORCE                                      */
+
+    b.set(svf, 0, 3400.0f);
+    b.set(svf, 1, 0.10f);
+
+    /* Slow in, slow out. A bow does not begin or end abruptly. */
+    b.set(envA, 0, 0.18f);
+    b.set(envA, 1, 0.20f);
+    b.set(envA, 2, 0.90f);
+    b.set(envA, 3, 0.35f);
+
+    /* Vibrato: a left hand, not an effect. Unity on the pitch and a hair of
+     * the oscillator - a few cents is all a player uses. */
+    b.set(mix, MIX_1, 1.0f);
+    b.set(mix, MIX_2, 0.004f);
+    b.set(mix, MIX_MASTER, 1.0f);
+    b.set(lfo, 0, 5.2f);         /* vibrato speed */
+
+    b.set(rvb, 0, 0.72f);
+    b.set(rvb, 2, 0.28f);
+}
+
 void presetGrand(Builder &b)
 {
     b.row(R1);
@@ -2502,6 +2574,8 @@ const PresetEntry PRESETS[] = {
       "SAW PAD\n\nEight voices, two saws pulled a few cents apart, and enough reverb to lose the edges. The slow attack is on both envelopes.\n\nTRY: hold a chord and turn VCF CV2 - that is the LFO on the cutoff, and it is what keeps a long note from standing still. The PAN before the reverb gives each of the eight voices its own place rather than stacking them in the middle. On a pad this wet the reverb is already doing most of the widening, so the difference is small here - PAN earns its keep on a dry patch, where the whole chord otherwise arrives from one point." }, presetPad },
     { { "PIANO",        "struck string - decays while held, brightness first", 0,
       "PIANO\n\nSubtractive synthesis cannot make a real piano: a struck string's partials are stretched sharp of the harmonic series and nothing here can be inharmonic. What it can copy is the three things the ear actually identifies a piano by, none of which are the waveform.\n\nOne: it decays while you hold it. Two: the brightness dies far faster than the loudness, so a note a second old is nearly a sine. Three: both scale with how hard you hit it and how high you play.\n\nSo the sound is in three envelopes, not the oscillators. Two saws a few cents apart are the strings, the pulse is the hollow midrange, and the 22 ms noise burst is the hammer.\n\nTRY: pull the NOISE mixer channel (IN4) to zero. The hammer disappears and it turns into an organ - that one twentieth of a second is most of the instrument. Then put it back and raise the amplifier envelope's S: it stops being a piano the moment it stops decaying." }, presetPiano },
+    { { "BOWED",        "the same string, bowed instead of struck", 0,
+      "BOWED\n\nThe same waveguide as GRAND, driven continuously instead of struck. Nothing about the string changed - only what is putting energy into it, which is the point of modelling a string rather than an instrument.\n\nA bow works by friction. The hair sticks to the string and drags it along, the string's tension pulls it back, the hair loses grip and slips, then catches again - hundreds of times a second, at the string's own frequency. That alternation is what sustains the note. It is also why the useful range of bow pressure is narrow: too little and the hair never grips, too much and it never slips, and both of those are silence rather than a quieter note.\n\nThe gate goes to TRIG rather than the trigger pulse. A hammer is an event and a bow is not - the string is driven for as long as the key is held, and how far the gate sits is how hard the hair presses.\n\nTRY: hold a note and turn FORCE down slowly. It does not fade - it stops, and the last thing you hear before it does is the scrape of the hair failing to catch. Then set EXCITE to HAMMER without changing anything else and play the same note: identical string, and now it is a harpsichord.\n\nAlso: DECAY is much shorter here than on GRAND. A struck string has to ring for seven seconds on its own; a bowed one only has to hold its shape between one slip and the next, and a long decay just makes it woolly." }, presetBowed },
     { { "GRAND",        "a modelled string - stretched partials, felt hammer", 0,
       "GRAND\n\nA piano the way a piano works, rather than an imitation of one.\n\nPIANO next door is subtractive, and gets remarkably close on gesture: it decays while held, its brightness dies faster than its loudness, and both scale with velocity. What it cannot do is INHARMONICITY. A real string is stiff, so wave speed depends on frequency and the partials are stretched sharp of the harmonic series - f(n) = n f0 sqrt(1 + B n^2). Every oscillator in this rack is exactly harmonic and no filter introduces stretch. That is the whole difference.\n\nThis is a modelled string: a delay line whose length is the pitch, with allpasses in the loop making the delay depend on frequency. That is the stiffness. The hammer is a smooth force pulse a few milliseconds long, and its length is the point: a partial whose period is shorter than the contact gets almost no energy, so contact time is a lowpass. Hard playing compresses the felt and shortens it, which is why loud is also bright. An earlier version used a noise burst instead and the whole thing sounded like a guitar - 62 percent of the energy was landing between the partials rather than on them.\n\nTRY: turn INHARM to 0 and play. It becomes a guitar harmonic - the partials are where the maths says they should be and it sounds wrong for a piano. Put it back to 0.5, which measures at B = 1.2e-4, about a real piano midrange. Then take it to 1.0 for a bell.\n\nAlso: DECAY is how long the note rings in seconds rather than an arbitrary number - the two strings per note are given different decay times, which is what produces a piano's double decay, a quick fall then a quiet aftersound underneath. STRIKE is where along the string the hammer lands, and a string cannot sound a partial with a node there. SPREAD is how far apart the two strings are, in cents." }, presetGrand },
     { { "WEST COAST",   "a sine, folded - no filter anywhere", 0,

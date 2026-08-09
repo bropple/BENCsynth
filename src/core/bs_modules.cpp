@@ -668,6 +668,21 @@ public:
         addKnob("STRIKE",  0.02f, 0.5f, 0.13f, "%.2f");
         addKnob("SPREAD",  0.0f, 12.0f, 2.2f, "%.1f c");
 
+        /* What sets it going.
+         *
+         * The waveguide does not care what excites it - that is the whole
+         * point of modelling the string rather than the instrument. A hammer
+         * is a brief force, a bow is a continuous one that sticks and slips,
+         * and a reed is a valve the string's own pressure keeps closing. Same
+         * loop, three drives, and the difference between a piano and a cello
+         * is which one is connected.
+         *
+         * Appended, so a saved rack keeps its parameter numbers and comes
+         * back a hammer, which is what it was. */
+        static const char *EXC[] = { "HAMMER", "BOW", "BLOW" };
+        addSwitch("EXCITE", EXC, 3, 0);
+        addKnob("FORCE",   0.0f, 1.0f, 0.5f, "%.2f");
+
         addInput("V/OCT");
         addInput("TRIG");
         addInput("IN");        /* excite it with anything at all */
@@ -694,7 +709,8 @@ public:
                 damp[c][k].reset();
                 for (int a = 0; a < AP; a++) ap1[c][k][a] = ap2[c][k][a] = 0.0f;
             }
-            last[c] = 0.0f; burst[c] = 0; burstLen[c] = 1;
+            last[c] = 0.0f; burst[c] = 0; burstLen[c] = 1; gate01[c] = 0.0f;
+            for (int k = 0; k < 2; k++) { excDc[c][k] = DCBlock(); excDc[c][k].setSampleRate(sr); }
             vel[c] = 0.0f; nz[c] = 12345 + c * 7919;
         }
     }
@@ -707,6 +723,8 @@ public:
         const float oct = pv(0), fine = pv(1);
         const float decay = pv(2), bright = pv(3);
         const float inh = pv(4), strike = pv(5), spread = pv(6);
+        const int   excite = pi(7);
+        const float force  = pv(8);
 
         /* Negative: high partials round the loop sooner and land sharp. */
         const float a = -0.72f * inh;
@@ -730,6 +748,9 @@ public:
         for (int c = 0; c < ch; c++) {
             for (int i = 0; i < BS_BLOCK; i++) {
                 const float g = in(1).get(c, i);
+                /* A hammer wants the edge; a bow and a reed want the whole
+                 * time the gate is up, and how far up it is. */
+                gate01[c] = clampf(g * 0.1f, 0.0f, 1.0f);
                 if (g > 1.0f && last[c] <= 1.0f) {
                     vel[c] = clampf(g * 0.1f, 0.05f, 1.0f);
                     /* How long the felt stays in contact, which is the most
@@ -814,7 +835,71 @@ public:
                     x *= loopGain[k];
 
                     float e = in(2).get(c, i) * 0.2f;
-                    if (burst[c] > 0) {
+
+                    if (excite == 1) {
+                        /* A bow. Friction against the string's own motion:
+                         * the hair sticks while their speeds are close and
+                         * slips when they are not, and that alternation is
+                         * what sustains the note instead of damping it.
+                         *
+                         * The real model reads the velocity where the bow
+                         * sits; there is one line per string here, so x
+                         * stands in for it. A bell-shaped friction curve is
+                         * enough to get the stick-slip - sharper curves buy
+                         * scratchiness, not realism. */
+                        /* The knob remapped onto the part of its travel that
+                         * works, rather than the physics changed to suit it.
+                         * Measured across FORCE, the string only reached the
+                         * slip region and self-oscillated above about 0.7 -
+                         * so 0..1 on the panel becomes 0.62..1.0 here, and
+                         * every position bows. Raising the drive instead made
+                         * it worse: past the friction peak d*fric falls again,
+                         * and the hair simply skates. */
+                        const float fUse = 0.62f + 0.38f * force;
+                        const float bowV = gate01[c] * (0.12f + 0.5f * fUse);
+                        const float d    = bowV - x;
+                        const float fric = 1.0f / (1.0f + 22.0f * d * d);
+                        /* The friction curve reads the whole difference,
+                         * standing pressure included - that is what decides
+                         * whether the hair is sticking or slipping. Only what
+                         * gets injected is stripped of DC. */
+                        /* Scaled so the knob is useful across its travel.
+                         * Measured, the string only reached the slip region
+                         * and self-oscillated above FORCE 0.7, which left two
+                         * thirds of the knob doing nothing but scrape. */
+                        e += excDc[c][k].step(d * fric) * (0.25f + 0.75f * fUse) * 0.5f;
+                    } else if (excite == 2) {
+                        /* A reed. The player's pressure pushes it open and the
+                         * pipe's own pressure pushes it shut, so the valve is
+                         * driven by the difference between them - which is
+                         * what makes a clarinet oscillate rather than hiss.
+                         *
+                         * Clipped hard on one side because a reed can close
+                         * completely and cannot open past its rest position. */
+                        const float mouth = gate01[c] * (0.2f + 0.8f * force);
+                        const float dp    = mouth - x;
+                        float reed = 1.0f - 1.6f * dp;
+                        if (reed >  1.0f) reed =  1.0f;
+                        if (reed < -0.2f) reed = -0.2f;
+                        nz[c] = nz[c] * 1103515245u + 12345u;
+                        const float br = (float)((int)(nz[c] >> 9) & 0x7fff) / 16384.0f - 1.0f;
+                        /* Quieter than it wants to be: a reed drives a loop
+                         * far harder than a hammer does, and this came out
+                         * three times the level of the struck string. */
+                        /* Bounded, and not by the output clamp.
+                         *
+                         * A reed is a relaxation oscillator: the amplitude it
+                         * settles at is set by where its nonlinearity
+                         * saturates, not by how hard it is driven - which is
+                         * why turning the drive down changed the level not at
+                         * all and the string sat on its 8 V rail for an eighth
+                         * of every cycle. Limiting what goes in bounds what
+                         * comes out. */
+                        e += excDc[c][k].step(softClip((dp * reed) * 1.2f) * 0.16f +
+                                              0.012f * br * mouth);
+                    }
+
+                    if (excite == 0 && burst[c] > 0) {
                         /* A raised cosine, not noise.
                          *
                          * The first version excited the string with filtered
@@ -861,6 +946,13 @@ private:
     float   ap1[BS_MAX_POLY][2][AP], ap2[BS_MAX_POLY][2][AP];
     float   last[BS_MAX_POLY], vel[BS_MAX_POLY];
     int     burst[BS_MAX_POLY], burstLen[BS_MAX_POLY];
+    float   gate01[BS_MAX_POLY];   /* the gate itself, for the bow and the reed */
+    /* A bow and a reed both push in one direction, and a delay loop with a
+     * gain near one has a DC gain near a hundred - so the string leans on the
+     * bridge and stops oscillating. A real string cannot hold a displacement
+     * either; the bridge terminates it. Only the continuous exciters use
+     * this: a hammer's burst is over before DC could accumulate. */
+    DCBlock excDc[BS_MAX_POLY][2];
     unsigned nz[BS_MAX_POLY];
 };
 

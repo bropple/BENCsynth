@@ -908,6 +908,86 @@ static void test_grand_tour()
  * almost for free, because a cable already carries every voice separately -
  * so what is worth checking is that the per-voice number reaches the pitch and
  * that it reaches only the voice it was aimed at. */
+
+/* Three ways to set a string going.
+ *
+ * The waveguide does not care what excites it - that is the point of modelling
+ * the string rather than the instrument. What separates them is not timbre but
+ * what happens while the key is held: a struck string decays, a bowed or blown
+ * one does not, because the player keeps putting energy in.
+ *
+ * Also checked: that neither continuous exciter drives the string into its own
+ * clamp. Both did at first. A bow and a reed push in one direction and a delay
+ * loop with a gain near one has a DC gain near a hundred, so the string leaned
+ * on the bridge and stopped oscillating; a reed then turned out to be a
+ * relaxation oscillator whose amplitude is set by where its nonlinearity
+ * saturates rather than by how hard it is driven, and sat on the rail for an
+ * eighth of every cycle no matter what the drive was set to. */
+static void test_string_exciters()
+{
+    std::printf("string exciters\n");
+
+    const char *names[3] = { "hammer", "bow", "blow" };
+    for (int mode = 0; mode < 3; mode++) {
+        Engine e;
+        e.init(48000.0f);
+        e.clear();
+        const int kbd = e.addModule("KBD", 20, 20);
+        const int str = e.addModule("STRING", 200, 20);
+        const int out = e.addModule("OUT", 400, 20);
+        e.patch.connect(kbd, 0, str, 0);      /* V/OCT */
+        e.patch.connect(kbd, 1, str, 1);      /* GATE -> TRIG */
+        e.patch.connect(str, 0, out, 0);
+        Module *m = e.patch.module(str);
+        m->params[7].value = (float)mode;     /* EXCITE */
+        m->params[8].value = 0.7f;            /* FORCE  */
+
+        e.noteOn(57, 0.9f, 0);                /* A3 */
+
+        std::vector<float> buf(512), mono;
+        double railed = 0, counted = 0, rawPeak = 0;
+        for (int i = 0; i < 96000; i += 256) {
+            e.render(&buf[0], 256);
+            for (int k = 0; k < 256; k++) mono.push_back(buf[(size_t)k * 2]);
+            if (i > 48000)
+                for (int k = 0; k < BS_BLOCK; k++) {
+                    const double v = m->outs[0].v[0][k];
+                    if (v > rawPeak) rawPeak = v;
+                    if (v > 7.99 || v < -7.99) railed++;
+                    counted++;
+                }
+        }
+
+        struct L {
+            static double rms(const std::vector<float> &v, size_t a, size_t b)
+            {
+                double s = 0; size_t n = 0;
+                for (size_t i = a; i < b && i < v.size(); i++) { s += v[i] * v[i]; n++; }
+                return n ? std::sqrt(s / (double)n) : 0.0;
+            }
+        };
+        const double early = L::rms(mono, 7200, 16800);     /* 0.15 - 0.35 s */
+        const double late  = L::rms(mono, 76800, 86400);    /* 1.60 - 1.80 s */
+        const double ratio = early > 1e-9 ? late / early : 0.0;
+
+        std::printf("  %s: early %.4f late %.4f ratio %.2f peak %.2f V\n",
+                    names[mode], early, late, ratio, rawPeak);
+
+        if (mode == 0)
+            okf(ratio < 0.4, "a struck string decays to %.2f of its early "
+                "level, wanted under %.1f", ratio, 0.4);
+        else
+            okf(ratio > 0.6, "a bowed or blown string holds at %.2f of its "
+                "early level, wanted over %.1f", ratio, 0.6);
+
+        okf(railed == 0, "%.0f samples sat on the 8 V rail, wanted %.0f",
+            railed, 0.0);
+        okf(late > 1e-4, "it makes a sound at all: %.5f, wanted over %.5f",
+            late, 1e-4);
+        (void)counted;
+    }
+}
+
 static void test_note_expression()
 {
     std::printf("per-note expression\n");
@@ -1038,6 +1118,7 @@ int main()
     test_arp();
     test_clock_and_func();
     test_grand_tour();
+    test_string_exciters();
     test_note_expression();
     test_sample_rates();
     test_patchfile();
