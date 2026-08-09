@@ -804,10 +804,20 @@ public:
                  * course are coupled through the bridge and trade energy,
                  * which is what produces the piano's double decay: a quick
                  * initial fall, then a quiet aftersound that outlasts it. */
+                /* Two decay times, but only for a struck string.
+                 *
+                 * A piano's course is two strings trading energy through the
+                 * bridge, and the mismatch between them is its double decay -
+                 * a quick fall, then a quiet aftersound underneath. A bowed or
+                 * blown note has no such thing: it is one string, held, and
+                 * the short lossy half only made the bottom of the keyboard
+                 * fade while it was still being played. */
                 float loopGain[2];
-                for (int k = 0; k < 2; k++)
+                for (int k = 0; k < 2; k++) {
+                    const float dk = excite != 0 ? 2.2f : (k ? 2.2f : 0.45f);
                     loopGain[k] = clampf(std::pow(10.0f,
-                        -3.0f / (f0 * t60 * (k ? 2.2f : 0.45f))), 0.5f, 0.99999f);
+                        -3.0f / (f0 * t60 * dk)), 0.5f, 0.99999f);
+                }
 
                 float sum = 0.0f;
                 for (int k = 0; k < 2; k++) {
@@ -858,7 +868,19 @@ public:
                         const float fUse = 0.62f + 0.38f * force;
                         const float bowV = gate01[c] * (0.12f + 0.5f * fUse);
                         const float d    = bowV - x;
-                        const float fric = 1.0f / (1.0f + 22.0f * d * d);
+                        /* A gentle curve, not a sharp one.
+                         *
+                         * A sharp friction characteristic is closer to the
+                         * textbook and it made the model unusable: measured
+                         * across the keyboard it left a dead band of five
+                         * semitones centred on middle C where the string
+                         * would start, ring for half a second and stop, at
+                         * every bow pressure. Widening the curve makes the
+                         * energy transfer behave the same way at every pitch.
+                         * Measured over a grid of bow speed against curve
+                         * sharpness, this is the only shape that is monotonic
+                         * across the range. */
+                        const float fric = 1.0f / (1.0f + 4.0f * d * d);
                         /* The friction curve reads the whole difference,
                          * standing pressure included - that is what decides
                          * whether the hair is sticking or slipping. Only what

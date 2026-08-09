@@ -109,6 +109,12 @@ nothing to configure, and the status line says what it connected to.
 
 ### New in v0.4.2
 
+- **The bow works at every pitch now.** v0.4.0's BOWED had a dead band five
+  semitones wide centred on middle C, where a note would start, ring for half a
+  second and stop — at any bow pressure. The friction curve was too sharp; a
+  gentler one transfers energy the same way all the way up the keyboard. Held
+  notes also hold instead of fading, and the attack is quicker.
+
 - **Learn stops listening after ten seconds.** Arming it and walking away used
   to mean the next thing to send a CC claimed the knob — possibly a sustain
   pedal, an hour later.

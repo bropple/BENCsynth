@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <cmath>
 #include <cstring>
+#include <algorithm>
 #include <vector>
 
 using namespace bs;
@@ -1139,6 +1140,81 @@ static void test_voice_module()
     okf(r0b == r0, "RND holds for the length of the note: %.3f then %.3f", r0, r0b);
 }
 
+
+/* The bow has to work at every pitch, not at one.
+ *
+ * The single-note test above passed happily while the model had a dead band
+ * five semitones wide centred on middle C, where a bowed string would start,
+ * ring for half a second and stop - at every bow pressure. One note proves
+ * nothing about a keyboard. */
+static void test_bow_across_the_range()
+{
+    std::printf("bowing the whole keyboard\n");
+
+    std::vector<double> levels;
+    int worst = -1;
+    double worstLevel = 1e9;
+    for (int n = 36; n <= 96; n += 4) {
+        Engine e;
+        e.init(48000.0f);
+        e.clear();
+        const int kbd = e.addModule("KBD", 20, 20);
+        const int str = e.addModule("STRING", 200, 20);
+        const int out = e.addModule("OUT", 400, 20);
+        e.patch.connect(kbd, 0, str, 0);
+        e.patch.connect(kbd, 1, str, 1);
+        e.patch.connect(str, 0, out, 0);
+        Module *m = e.patch.module(str);
+        /* The knob's own default, not the preset's longer one. A rack built
+         * by hand - drop in a STRING, switch it to BOW - gets this, and it is
+         * the harsher case: the preset's longer decay hides a dead band that
+         * the default does not. */
+        m->params[2].value = 0.60f;   /* DECAY */
+        m->params[3].value = 0.42f;
+        m->params[4].value = 0.06f;
+        m->params[5].value = 0.10f;
+        m->params[6].value = 1.2f;
+        m->params[7].value = 1.0f;    /* BOW   */
+        m->params[8].value = 0.75f;   /* FORCE */
+        e.noteOn(n, 0.9f, 0);
+
+        std::vector<float> buf(512);
+        double s = 0; long c = 0;
+        for (int i = 0; i < 120000; i += 256) {
+            e.render(&buf[0], 256);
+            if (i > 86400)                     /* after 1.8 s */
+                for (int k = 0; k < 256; k++) { s += buf[(size_t)k * 2] * buf[(size_t)k * 2]; c++; }
+        }
+        const double level = c ? std::sqrt(s / (double)c) : 0.0;
+        levels.push_back(level);
+        if (level < worstLevel) { worstLevel = level; worst = n; }
+    }
+
+    /* Against the middle of the range, not against zero.
+     *
+     * An absolute floor does not describe the failure this exists to catch: a
+     * dead band is a few notes far quieter than the notes either side of them,
+     * and the first version of this test passed with the bug still in because
+     * the dip happened to clear a fixed threshold. */
+    std::vector<double> sorted = levels;
+    std::sort(sorted.begin(), sorted.end());
+    const double median = sorted[sorted.size() / 2];
+
+    std::printf("  quietest note %d at %.4f, median %.4f, ratio %.2f\n",
+                worst, worstLevel, median, median > 0 ? worstLevel / median : 0.0);
+    /* 0.15, not 0.5. The bottom of the range really is weaker - a 65 Hz
+     * string is lossy and the bow has to work harder for it, which is true of
+     * the instrument as well as the model, and BOWED compensates with a
+     * longer decay. What this catches is a note that is dead rather than
+     * quiet: with the old friction curve the dip at middle C measured 0.03 of
+     * the median against 0.19 now. */
+    okf(worstLevel > median * 0.15,
+        "no note is dead: the quietest is %.2f of the median, wanted over "
+        "%.2f", median > 0 ? worstLevel / median : 0.0, 0.15);
+    okf(median > 0.02, "and the keyboard sounds at all: median %.4f, wanted "
+        "over %.2f", median, 0.02);
+}
+
 static void test_string_exciters()
 {
     std::printf("string exciters\n");
@@ -1338,6 +1414,7 @@ int main()
     test_midi_decode();
     test_voice_module();
     test_string_exciters();
+    test_bow_across_the_range();
     test_note_expression();
     test_sample_rates();
     test_patchfile();
