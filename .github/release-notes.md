@@ -107,6 +107,20 @@ rack.
 **The standalone takes MIDI now.** Plug a keyboard in and play it; there is
 nothing to configure, and the status line says what it connected to.
 
+### New in v0.5.0
+
+- **SAMPLE** — load a `.wav` and play it like an oscillator. Right-click the
+  module → **LOAD SAMPLE**. It is polyphonic and pitched at one volt per
+  octave, so a chord plays the file at several speeds at once, and it accounts
+  for the file's own sample rate — a 44.1 kHz recording plays at the pitch it
+  was made at. `LOOP`, a `START` position with its own CV, and an `EOS` pulse
+  when a voice reaches the end, so one sample can start the next thing.
+
+  The path is saved with the rack and travels to the plugin with it, so a
+  sampler in a DAW project finds its file again. PCM at 8, 16, 24 and 32 bits
+  and float at 32 and 64 are read; compressed files are refused by name rather
+  than played as noise.
+
 ### New in v0.4.2
 
 - **The bow works at every pitch now.** v0.4.0's BOWED had a dead band five

@@ -22,10 +22,11 @@ has a `.tar.gz`, a `.dmg` and a `.zip` attached.
 rendered offline by `make render`, which needs neither a window nor a sound
 card.
 
-Thirty module types, eight-voice polyphony carried in the cables themselves, a
-Moog-style ladder filter, a plucked-string waveguide, and a keyboard along the
-bottom you can play with the mouse or with the computer keyboard. Thirty-seven
-example racks, each with a panel explaining what it does.
+Thirty-two module types, eight-voice polyphony carried in the cables
+themselves, a Moog-style ladder filter, a plucked string you can strike, bow or
+blow, a sampler that plays any `.wav`, and a keyboard along the bottom you can
+play with the mouse or with the computer keyboard. Thirty-eight example racks,
+each with a panel explaining what it does.
 
 The mascot is **S. Tarr**, who is the program's icon, sits in the header, and
 otherwise stays out of the way.
@@ -128,7 +129,7 @@ and says so, rather than refusing.
 
 ## The factory racks
 
-`RACKS` in the toolbar replaces everything with one of twenty-seven worked
+`RACKS` in the toolbar replaces everything with one of thirty-eight worked
 examples. Every one has a SCOPE across its output so you can see the waveform,
 and a NOTES panel saying what it is doing and which knob to turn.
 A modular's problem is not that it cannot make a sound, it is that it makes no

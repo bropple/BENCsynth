@@ -3,6 +3,8 @@
 A polyphonic virtual analog modular synth. C++17 + raylib, physics-based patch
 cables. Ships as a standalone program and as CLAP / VST3 / AU / LV2 plugins.
 
+Thirty-two module types, thirty-eight racks.
+
 This file is for the things that are **expensive to re-derive** — the release
 sequence, and the traps that have actually cost a build. It is not a tour of
 the code; `ARCHITECTURE.md` and `docs/PLUGIN.md` are that, and the Makefile
@@ -25,7 +27,7 @@ style only — do not copy code from it.
 ## Before you commit anything
 
 ```sh
-make && make test                     # 536 checks
+make && make test                     # 549 checks
 make clap  && make clap-test          #  68
 make lv2   && make lv2-test           #  27
 make ipc-test && xvfb-run -a --server-args="-screen 0 1400x900x24" \
