@@ -15,6 +15,9 @@
 #include "bs_keyboard.h"
 #include "bs_patchfile.h"
 #include "bs_racklib.h"
+#include "bs_record.h"
+
+#include <ctime>
 #include "bs_shm.h"
 #include "bs_embed.h"
 #include "bs_log.h"
@@ -50,6 +53,10 @@ static bs::Engine g_engine;
 static void audio_cb(void *buffer, unsigned int frames)
 {
     g_engine.render((float *)buffer, (int)frames);
+    /* After the render, not instead of it: what gets recorded is exactly what
+     * went to the speakers. Wait-free, and does nothing at all when the
+     * recorder is off. */
+    bs::recPush((const float *)buffer, (int)frames);
 }
 
 /* ------------------------------------------------------------------ *
@@ -263,6 +270,8 @@ typedef struct {
      * for - but only defaulted, not removed, because clicking a key to hear
      * what a patch does is worth keeping either way. */
     int   showKeys;
+    /* Where the current recording is going, kept so stopping can name it. */
+    char  recPath[BS_PATH];
 } bs_app;
 
 /* The name shown in the title bar and on the SAVE button's tooltip-in-spirit.
@@ -447,6 +456,51 @@ static void draw_toolbar(bs_app *app, bs_ui *ui, bs_rack *rack, bs_keyboard *kb,
         say(app, "all notes off");
     }
     x += 68.0f;
+
+    /* Recording the master bus. Named for the moment it started, so a session
+     * of takes sorts itself and nothing is ever silently overwritten. */
+    {
+        const bool on = bs::recActive();
+        char label[32];
+        if (on) std::snprintf(label, sizeof label, "REC %.0fs", bs::recSeconds());
+        else    std::snprintf(label, sizeof label, "REC");
+
+        b = (Rectangle){ x, y, on ? 84.0f : 54.0f, h };
+        if (bs_button(ui, 8009, b, label, 1)) {
+            if (on) {
+                const double secs = bs::recSeconds();
+                const int lost = bs::recDropped();
+                bs::recStop();
+                if (lost)
+                    std::snprintf(app->status, sizeof app->status,
+                                  "recorded %.1f s to %s - %d frames lost, the "
+                                  "disk could not keep up", secs, app->recPath, lost);
+                else
+                    std::snprintf(app->status, sizeof app->status,
+                                  "recorded %.1f s to %s", secs, app->recPath);
+                app->statusAge = 0.0f;
+            } else {
+                const char *dir = patch_dir();
+                MakeDirectory(dir);
+                const time_t now = time(0);
+                struct tm tmv;
+#if defined(_WIN32)
+                localtime_s(&tmv, &now);
+#else
+                localtime_r(&now, &tmv);
+#endif
+                char stamp[32];
+                std::strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", &tmv);
+                std::snprintf(app->recPath, sizeof app->recPath,
+                              "%s/bencsynth-%s.wav", dir, stamp);
+                if (bs::recStart(app->recPath, (int)g_engine.sampleRate()))
+                    say(app, "recording - press REC again to stop");
+                else
+                    say(app, "could not open a file to record into");
+            }
+        }
+        x += (on ? 90.0f : 60.0f);
+    }
 
 
     /* The status line fades rather than disappearing, so a message that has
@@ -1024,6 +1078,10 @@ int main(int argc, char **argv)
         bs::bs_shm_write(&shm.block->snap, t.c_str(), (uint32_t)t.size());
         bs::bs_shm_close(&shm);
     } else {
+        /* Before the stream goes: a half-written WAV has no sizes in its
+         * header and most things will refuse to open it. Closing the window
+         * mid-take should still leave a file that plays. */
+        if (bs::recActive()) bs::recStop();
         UnloadAudioStream(stream);
         CloseAudioDevice();
     }
