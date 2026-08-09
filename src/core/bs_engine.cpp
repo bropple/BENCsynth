@@ -118,6 +118,18 @@ void Engine::setSustain(bool on, int atFrame)
     events.push(ev(NE_SUSTAIN, 0, on ? 1.0f : 0.0f, atFrame));
 }
 
+int Engine::macroCcBase() const
+{
+    /* The first MACRO panel wins. Two of them with different assignments is
+     * not a thing worth defining behaviour for; it is a thing to not do. */
+    for (int i = 0; i < patch.slotCount(); i++) {
+        const Module *m = patch.module(i);
+        if (m && m->typeId == "MACRO" && m->paramCount() > BS_MACROS)
+            return (int)(m->params[(size_t)BS_MACROS].value + 0.5f);
+    }
+    return 0;
+}
+
 void Engine::setMacro(int index, float value01)
 {
     if (index < 0 || index >= BS_MACROS) return;

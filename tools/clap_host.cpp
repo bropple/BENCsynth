@@ -169,9 +169,24 @@ static const clap_event_header_t *ev_get(const clap_input_events_t *list, uint32
     return (const clap_event_header_t *)(e->bytes.data() + e->offsets[i]);
 }
 
-/* Output events are required to exist; nothing here reads them back. */
-static bool out_try_push(const clap_output_events_t *, const clap_event_header_t *)
+/* Output events. A plugin puts its own parameter changes here - the ones it
+ * made itself rather than the ones the host sent - and a host reads them back
+ * to keep its knobs and its automation in step. Captured, because a CC that
+ * moves the sound and not the host's value is a project that saves the wrong
+ * number. */
+static int    g_outParamCount = 0;
+static clap_id g_outParamId    = (clap_id)-1;
+static double g_outParamValue  = -1;
+
+static bool out_try_push(const clap_output_events_t *, const clap_event_header_t *h)
 {
+    if (h && h->space_id == CLAP_CORE_EVENT_SPACE_ID &&
+        h->type == CLAP_EVENT_PARAM_VALUE) {
+        const clap_event_param_value_t *e = (const clap_event_param_value_t *)h;
+        g_outParamCount++;
+        g_outParamId    = e->param_id;
+        g_outParamValue = e->value;
+    }
     return true;
 }
 
@@ -433,6 +448,82 @@ int main(int argc, char **argv)
             ok(pa->get_value(p, 8, &v) && (int)(v + 0.5) == (int)info.max_value,
                "and selecting it sticks - the file loaded");
         }
+    }
+
+    /* --- a hardware knob row driving the macros --------------------------
+     *
+     * A MACRO panel claims eight consecutive CCs starting at its CC BASE
+     * knob. The default rack has a MACRO panel, and CC BASE defaults to zero,
+     * which is off - so this sets it first, the way a person would, then
+     * plays a controller at it. */
+    {
+        char text[64] = "";
+        /* Off by default: CC 20 must do nothing to macro 0. */
+        double before = -1;
+        pa->get_value(p, 0, &before);
+        evs.clear();
+        evs.midi(0, 0xb0, 20, 127);
+        p->process(p, &proc);
+        double after = -1;
+        pa->get_value(p, 0, &after);
+        ok(std::fabs(after - before) < 1e-6,
+           "an unassigned CC leaves the macros alone");
+
+        /* Now a rack that does assign them. ZZ_CC_RACK is GRAND TOUR with
+         * its MACRO panel's CC BASE set to 20, saved to disk - so this also
+         * proves the assignment survives being written and read. */
+        int ccRack = -1;
+        clap_param_info_t ri;
+        if (pa->get_info(p, 8, &ri)) {
+            for (int i = 0; i <= (int)ri.max_value; i++) {
+                char nm[64] = "";
+                if (pa->value_to_text(p, 8, i, nm, sizeof nm) &&
+                    std::strstr(nm, "ZZ_CC_RACK")) { ccRack = i; break; }
+            }
+        }
+        if (ccRack >= 0) {
+            g_callbackRequested = false;
+            evs.clear();
+            evs.param(0, 8, ccRack);
+            p->process(p, &proc);
+            if (g_callbackRequested) p->on_main_thread(p);
+
+            g_outParamCount = 0;
+            g_outParamId    = (clap_id)-1;
+            g_outParamValue = -1;
+
+            evs.clear();
+            evs.midi(0, 0xb0, 20, 127);        /* the first assigned CC, full */
+            p->process(p, &proc);
+
+            double v = -1;
+            ok(pa->get_value(p, 0, &v) && v > 0.9,
+               "an assigned CC moves the macro it was assigned to");
+            ok(g_outParamCount > 0 && g_outParamId == 0 && g_outParamValue > 0.9,
+               "and the plugin tells the host, so the project saves it");
+
+            /* The seventh of the eight, to show it is a run and not one CC. */
+            evs.clear();
+            evs.midi(0, 0xb0, 26, 64);
+            p->process(p, &proc);
+            double v6 = -1;
+            ok(pa->get_value(p, 6, &v6) && v6 > 0.4 && v6 < 0.6,
+               "and the rest of the row lands on the rest of the macros");
+
+            /* One past the end belongs to nobody. */
+            double v7before = -1;
+            pa->get_value(p, 7, &v7before);
+            evs.clear();
+            evs.midi(0, 0xb0, 28, 127);
+            p->process(p, &proc);
+            double v7 = -1;
+            pa->get_value(p, 7, &v7);
+            ok(std::fabs(v7 - v7before) < 1e-6,
+               "a CC past the end of the row is not claimed");
+        } else {
+            std::printf("  skip  no ZZ_CC_RACK - run through 'make clap-test'\n");
+        }
+        (void)text;
     }
 
     /* --- changing the rack happens on the main thread, not in process() --- */

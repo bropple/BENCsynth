@@ -7,6 +7,10 @@
  *
  *   bencsynth-save-rack CLASSIC out.bencsynth
  *   bencsynth-save-rack 0       out.bencsynth
+ *   bencsynth-save-rack "GRAND TOUR" out.bencsynth --cc-base 20
+ *
+ * --cc-base sets the MACRO panel's CC BASE knob before saving, which is how
+ * the host test gets a rack whose macros answer to a controller.
  */
 
 #include "bs_engine.h"
@@ -41,6 +45,24 @@ int main(int argc, char **argv)
     bs::Engine e;
     e.init(48000.0f);
     e.buildPreset(idx);
+
+    for (int i = 3; i + 1 < argc; i++) {
+        if (std::strcmp(argv[i], "--cc-base") != 0) continue;
+        const int base = std::atoi(argv[i + 1]);
+        bool set = false;
+        for (int k = 0; k < e.patch.slotCount(); k++) {
+            bs::Module *m = e.patch.module(k);
+            if (!m || m->typeId != "MACRO") continue;
+            if (m->paramCount() <= bs::BS_MACROS) continue;
+            m->params[(size_t)bs::BS_MACROS].value = (float)base;
+            set = true;
+        }
+        if (!set) {
+            std::fprintf(stderr, "no MACRO panel in '%s' to assign a CC to\n", argv[1]);
+            return 1;
+        }
+        std::printf("CC BASE = %d\n", base);
+    }
 
     char status[256] = "";
     if (!bs_patch_save(&e, argv[2], status, sizeof status)) {

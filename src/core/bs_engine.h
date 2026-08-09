@@ -111,6 +111,12 @@ public:
      * is: a float written while the audio thread reads it is either the old
      * value or the new one. */
     void  setMacro(int index, float value01);
+
+    /* The first CC a MACRO panel answers to, or 0 when it answers to none.
+     * The eight macros take this CC and the seven after it, so a controller's
+     * knob row drives a whole rack. Read from the rack, because that is where
+     * it is set and where it is saved. */
+    int macroCcBase() const;
     float macroValue(int index) const;
 
     /* A complete subtractive voice, patched the way the front of a Moog manual

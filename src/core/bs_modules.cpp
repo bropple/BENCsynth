@@ -2063,6 +2063,20 @@ public:
         };
         for (int i = 0; i < BS_MACROS; i++)
             addKnob(NAMES[i], 0.0f, 1.0f, 0.0f, "%.2f");
+
+        /* Which hardware controls these.
+         *
+         * Appended after the eight, so a saved rack keeps the parameter
+         * numbers it was written with, and saved with the rack because it is
+         * an ordinary knob - no second table, no second file format, and the
+         * editor already syncs it to the plugin.
+         *
+         * One number rather than eight: a controller with eight knobs sends
+         * eight consecutive CCs, so the base is all there is to say. Zero is
+         * off, and zero is bank select, which nobody assigns to a knob.
+         * Stops at 120 so the eighth macro still has a CC to land on. */
+        addKnob("CC BASE", 0.0f, 120.0f, 0.0f, "%.0f", PC_LIN, 1.0f);
+
         for (int i = 0; i < BS_MACROS; i++)
             addOutput(NAMES[i]);
     }

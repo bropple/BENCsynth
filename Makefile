@@ -514,6 +514,7 @@ $(SAVERACK): tools/save_rack.cpp $(CORE_LIB)
 clap-test: clap $(CLAPHOST) $(SAVERACK)
 	@rm -rf build/testracks && mkdir -p build/testracks
 	@./$(SAVERACK) CLASSIC build/testracks/ZZ_TEST_RACK.$(BS_PATCH_EXT) >/dev/null
+	@./$(SAVERACK) "GRAND TOUR" build/testracks/ZZ_CC_RACK.$(BS_PATCH_EXT) --cc-base 20 >/dev/null
 	BENCSYNTH_RACKS="$(CURDIR)/build/testracks" ./$(CLAPHOST) $(CLAP_BINARY)
 
 $(CLAPHOST): tools/clap_host.cpp

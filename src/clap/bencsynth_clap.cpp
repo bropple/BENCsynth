@@ -676,7 +676,8 @@ static inline void mirror(BencSynthClap *s, uint8_t kind, uint8_t note, float v)
 }
 
 /* One event, already known to be due. */
-static void handleEvent(BencSynthClap *s, const clap_event_header_t *h, int at)
+static void handleEvent(BencSynthClap *s, const clap_event_header_t *h, int at,
+                        const clap_output_events_t *out)
 {
     if (h->space_id != CLAP_CORE_EVENT_SPACE_ID) return;
 
@@ -771,7 +772,40 @@ static void handleEvent(BencSynthClap *s, const clap_event_header_t *h, int at)
             if (mn >= 0) s->engine.noteExpression(mn, 1, (float)m[1] / 127.0f, at);
             break;
         }
-        case 0xb0:
+        case 0xb0: {
+            /* A MACRO panel can claim a run of eight CCs, which is how a
+             * controller's knob row ends up driving a whole rack. Checked
+             * first: if a CC has been assigned to a macro, that is what it
+             * does, and the fixed meanings below do not also fire. */
+            const int base = s->engine.macroCcBase();
+            if (base > 0 && m[1] >= base && m[1] < base + bs::BS_MACROS) {
+                const int which = m[1] - base;
+                const double v = (double)m[2] / 127.0;
+                applyParam(s, (clap_id)which, v);
+                s->macro[which] = (float)v;
+
+                /* And tell the host, by putting the change in the output
+                 * event list where a host reads its own automation back from.
+                 * Without this the hardware moves the sound and the host's
+                 * knob stays where it was - so the project saves the old
+                 * value, and the next automation point snaps it back. */
+                if (out) {
+                    clap_event_param_value_t pe;
+                    std::memset(&pe, 0, sizeof pe);
+                    pe.header.size     = sizeof pe;
+                    pe.header.time     = (uint32_t)(at < 0 ? 0 : at);
+                    pe.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
+                    pe.header.type     = CLAP_EVENT_PARAM_VALUE;
+                    pe.header.flags    = 0;
+                    pe.param_id        = (clap_id)which;
+                    pe.cookie          = 0;
+                    pe.note_id = -1; pe.port_index = -1;
+                    pe.channel = -1; pe.key = -1;
+                    pe.value           = v;
+                    out->try_push(out, &pe.header);
+                }
+                break;
+            }
             if (m[1] == 1) {
                 s->engine.setMod((float)m[2] / 127.0f, at);
                 mirror(s, bs::NE_MOD, 0, (float)m[2] / 127.0f);
@@ -788,6 +822,7 @@ static void handleEvent(BencSynthClap *s, const clap_event_header_t *h, int at)
                 mirror(s, bs::NE_ALL_OFF, 0, 0.0f);
             }
             break;
+        }
         default:
             break;
         }
@@ -854,7 +889,7 @@ static clap_process_status pl_process(const clap_plugin_t *p,
             /* An event stamped before where the buffer has reached is late
              * rather than invalid - it lands at the start of the chunk. */
             const int64_t rel = (int64_t)h->time - (int64_t)done;
-            handleEvent(s, h, rel < 0 ? 0 : (int)rel);
+            handleEvent(s, h, rel < 0 ? 0 : (int)rel, proc->out_events);
             evIndex++;
         }
 
