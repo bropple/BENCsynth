@@ -15,6 +15,8 @@
 
 #include <clap/clap.h>
 
+#include "bs_shm.h"
+
 #include <dlfcn.h>
 #if defined(__linux__)
 #  include <X11/Xlib.h>
@@ -696,6 +698,83 @@ int main(int argc, char **argv)
                 std::printf("  skip  DISPLAY/BENCSYNTH_EDITOR unset "
                             "- not starting a real editor\n");
             }
+            /* --- MIDI learn, which needs both halves ------------------
+             *
+             * The knob is in the editor and the MIDI is in the plugin, so
+             * neither can do it alone: the editor writes a macro index into
+             * the shared block, the plugin catches the next CC and puts the
+             * assignment in the rack.
+             *
+             * This stands in for the editor. The plugin's block is named for
+             * the process that made it, and that process is this one - the
+             * plugin is a library loaded here - so it can be opened by name.
+             */
+            {
+                bs::ShmMap sm;
+                char nm[64];
+                bool attached = false;
+                for (int salt = 1; salt <= 4 && !attached; salt++) {
+                    std::snprintf(nm, sizeof nm, "/bencsynth-%ld-%d",
+                                  (long)getpid(), salt);
+                    attached = bs::bs_shm_open(&sm, nm);
+                }
+                if (attached) {
+                    /* A rack with a MACRO panel in it. The default rack has
+                     * none, and an assignment with nowhere to go goes
+                     * nowhere - which is right, but makes for a test that
+                     * proves nothing. */
+                    clap_param_info_t ri;
+                    if (pa->get_info(p, 8, &ri)) {
+                        for (int i = 0; i <= (int)ri.max_value; i++) {
+                            char nmr[64] = "";
+                            if (!pa->value_to_text(p, 8, i, nmr, sizeof nmr)) continue;
+                            if (std::strstr(nmr, "GRAND TOUR")) {
+                                g_callbackRequested = false;
+                                evs.clear();
+                                evs.param(0, 8, i);
+                                p->process(p, &proc);
+                                if (g_callbackRequested) p->on_main_thread(p);
+                                break;
+                            }
+                        }
+                    }
+
+                    const int macro = 3, cc = 91;
+                    sm.block->learnMacro.store(macro, std::memory_order_release);
+
+                    g_callbackRequested = false;
+                    evs.clear();
+                    evs.midi(0, 0xb0, cc, 100);
+                    p->process(p, &proc);
+                    ok(g_callbackRequested,
+                       "a CC arriving while learning asks for the main thread");
+                    p->on_main_thread(p);
+
+                    ok(sm.block->learnMacro.load(std::memory_order_acquire) < 0,
+                       "and the plugin says it is done");
+
+                    /* The proof is behaviour, not a field: that CC must now
+                     * drive that macro and nothing else. */
+                    double before = -1, after = -1;
+                    pa->get_value(p, macro, &before);
+                    evs.clear();
+                    evs.midi(0, 0xb0, cc, 127);
+                    p->process(p, &proc);
+                    pa->get_value(p, macro, &after);
+                    ok(after > 0.9 && after != before,
+                       "and that CC now drives that macro");
+
+                    double other = -1;
+                    pa->get_value(p, 0, &other);
+                    ok(other < 0.9, "and not a different one");
+
+                    bs::bs_shm_close(&sm);
+                } else {
+                    std::printf("  skip  could not attach to the plugin's "
+                                "shared block\n");
+                }
+            }
+
             g->destroy(p);
             ok(true, "the GUI is destroyed");
 

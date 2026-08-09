@@ -100,7 +100,9 @@ directions.
 **A hardware knob row can drive the macros.** Set `CC BASE` on a MACRO panel
 to the first CC your controller sends and its eight knobs take the eight
 macros. Or assign one at a time: right-click a macro knob, choose **LEARN MIDI
-CC**, and turn the control you want. Either way it saves with the rack.
+CC**, and turn the control you want — this works inside a DAW too, where the
+knob and the MIDI are in different processes. Either way it saves with the
+rack.
 
 **The standalone takes MIDI now.** Plug a keyboard in and play it; there is
 nothing to configure, and the status line says what it connected to.
@@ -120,9 +122,9 @@ nothing to configure, and the status line says what it connected to.
   behave unlike the first means patching it differently. `IDX`, a per-note
   `RND` fixed when the note lands, `AGE`, and `PRESS`. It is what lets a
   sequencer play expressively rather than evenly.
-- **Learn a MIDI CC per knob.** Right-click a MACRO knob → **LEARN MIDI CC**,
-  turn something on your controller, done. `CC BASE` still claims a whole row
-  of eight for a controller that sends one.
+- **Learn a MIDI CC per knob**, in the standalone *and* in a DAW. Right-click a
+  MACRO knob → **LEARN MIDI CC**, turn something on your controller, done.
+  `CC BASE` still claims a whole row of eight for a controller that sends one.
 
 ### New in v0.3.0
 

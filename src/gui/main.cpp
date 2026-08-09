@@ -809,6 +809,23 @@ int main(int argc, char **argv)
         if (editing) {
             bs::ShmBlock *b = shm.block;
             b->alive.fetch_add(1, std::memory_order_relaxed);
+
+            /* MIDI learn, from this side.
+             *
+             * The knob is here and the MIDI is over there, so arming it is
+             * all this half can do. The plugin catches the next CC, writes
+             * the assignment into the rack and puts this back to -1 - and the
+             * rack comes back through the host channel below like any other
+             * change the plugin made, so the knob updates itself. */
+            if (bs_rack_learn_macro >= 0) {
+                b->learnMacro.store(bs_rack_learn_macro, std::memory_order_release);
+                say(&app, "learning - turn a knob on your controller");
+            }
+            if (b->learnMacro.load(std::memory_order_acquire) < 0 &&
+                bs_rack_learn_macro >= 0) {
+                bs_rack_learn_macro = -1;
+                say(&app, "learned");
+            }
             if (b->quit.load(std::memory_order_acquire)) break;
 
             /* The host changed the rack under us - a preset was chosen from

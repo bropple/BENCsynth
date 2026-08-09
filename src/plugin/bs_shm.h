@@ -46,7 +46,9 @@
 namespace bs {
 
 static const uint32_t BS_SHM_MAGIC     = 0x42534831u;   /* "BSH1" */
-static const uint32_t BS_SHM_VERSION   = 1u;
+/* 2: learnMacro. A mismatched pair refuses to attach rather than reading the
+ * block at the wrong offsets, which is the whole reason this number exists. */
+static const uint32_t BS_SHM_VERSION   = 2u;
 static const uint32_t BS_SHM_RACK_MAX  = 192u * 1024u;  /* a rack as text     */
 static const uint32_t BS_SHM_PARAM_MAX = 4096u;         /* knobs in one rack  */
 static const uint32_t BS_SHM_NOTE_MAX  = 256u;          /* must be a power of 2 */
@@ -146,6 +148,18 @@ struct ShmBlock {
      * this is the host's native handle (an HWND on Windows, an X11 Window
      * elsewhere) that the editor reparents itself into. The host then owns the
      * geometry, so it also tells us what size to be. */
+    /* MIDI learn, which needs a round trip.
+     *
+     * The knob is in the editor and the MIDI is in the plugin, so neither can
+     * do this alone. The editor writes the macro's index here when someone
+     * chooses LEARN; the plugin takes the next CC, writes the assignment into
+     * the rack, and puts this back to -1. The editor sees the rack come back
+     * through the host channel like any other change the plugin made.
+     *
+     * One integer, because the assignment itself is already an ordinary knob
+     * and travels the way every other knob does. */
+    std::atomic<int32_t>  learnMacro;
+
     std::atomic<uint64_t> embedParent;
     std::atomic<uint32_t> wantW;
     std::atomic<uint32_t> wantH;

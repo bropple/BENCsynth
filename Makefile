@@ -529,8 +529,11 @@ clap-test: clap $(CLAPHOST) $(SAVERACK)
 	@./$(SAVERACK) "GRAND TOUR" build/testracks/ZZ_CC_RACK.$(BS_PATCH_EXT) --cc-base 20 >/dev/null
 	BENCSYNTH_RACKS="$(CURDIR)/build/testracks" ./$(CLAPHOST) $(CLAP_BINARY)
 
-$(CLAPHOST): tools/clap_host.cpp
-	$(CXX) $(CXXFLAGS) -I$(CLAP_INCLUDE) -o $@ $< -ldl $(IPC_X11)
+# Links the shared-memory half as well: the learn test stands in for the
+# editor, and to do that it has to open the block the plugin made.
+$(CLAPHOST): tools/clap_host.cpp $(PLUGIN_SRC) $(PLUGIN_HDR)
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -I$(CLAP_INCLUDE) -Isrc/plugin -o $@ $< \
+	    $(PLUGIN_SRC) -ldl $(IPC_X11) $(CLAP_RT)
 
 # ------------------------------------------------------------------
 # VST3 targets

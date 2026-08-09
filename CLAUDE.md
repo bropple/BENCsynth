@@ -26,7 +26,7 @@ style only — do not copy code from it.
 
 ```sh
 make && make test                     # 532 checks
-make clap  && make clap-test          #  65
+make clap  && make clap-test          #  69
 make lv2   && make lv2-test           #  27
 make ipc-test && xvfb-run -a --server-args="-screen 0 1400x900x24" \
     ./bencsynth-ipc-test ./bencsynth  #  46
@@ -229,6 +229,12 @@ or the silent voices drown the one playing — this cost an hour on the MPE work
 **Goertzel drifts over a long window.** It reported 261 Hz for a note an octave
 up. Use direct sin/cos correlation for pitch over more than a few thousand
 samples.
+
+**Changing `ShmBlock` means bumping `BS_SHM_VERSION`.** The handshake refuses
+a mismatched pair rather than reading the block at the wrong offsets, which is
+the only reason that number exists. And the block is `memset` to zero, so any
+field whose zero is a real value — `learnMacro`, where 0 is macro one — has to
+be initialised explicitly at both creation sites.
 
 **CLAP parameter IDs are permanent.** There are 16 exposed slots whose *names*
 change via `rescan(INFO|TEXT)`; the IDs never do.
