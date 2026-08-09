@@ -107,6 +107,13 @@ rack.
 **The standalone takes MIDI now.** Plug a keyboard in and play it; there is
 nothing to configure, and the status line says what it connected to.
 
+### New in v0.4.1
+
+- **MIDI learn works inside a DAW**, not only in the standalone. v0.4.0 shipped
+  it half-connected: the knob is in one process and the MIDI is in the other,
+  and only the standalone had both. Right-click a MACRO knob → **LEARN MIDI
+  CC** and turn something on your controller, wherever you are running it.
+
 ### New in v0.4.0
 
 - **MIDI in, for the standalone.** A keyboard plugged into the machine used to
