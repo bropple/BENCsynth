@@ -107,6 +107,19 @@ rack.
 **The standalone takes MIDI now.** Plug a keyboard in and play it; there is
 nothing to configure, and the status line says what it connected to.
 
+### New in v0.5.1
+
+- **A file picker that works everywhere.** BENCsynth draws its own now, in its
+  own window — no `zenity`, no `kdialog`, nothing to install. It is used on
+  Linux always, and on every platform when running inside a DAW, where asking
+  the desktop to spawn a dialog is at best rude and at worst refused by a
+  sandboxed host. Windows and macOS still get their own system dialog when
+  running standalone, because there it is the right thing.
+- **`ROOT` on the sampler** — which key plays the file untouched. Set it to the
+  note the recording actually is and the keyboard is in tune with it: play that
+  key and you hear the file, play a fifth up and you hear it a fifth up. Reads
+  out as a note name rather than a number.
+
 ### New in v0.5.0
 
 - **SAMPLE** — load a `.wav` and play it like an oscillator. Right-click the

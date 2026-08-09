@@ -1048,6 +1048,41 @@ static void test_sample_module()
         L::mag(mono, 880.0), L::mag(mono, 440.0));
     m->params[0].value = 0.0f;
 
+    /* ROOT: which key plays the file untouched.
+     *
+     * The fixture is 440 Hz. Set ROOT to C3 and play C3, and it must come out
+     * at 440 - not transposed by the distance from middle C. Play a fifth
+     * above C3 and it must come out a fifth up. */
+    {
+        Engine k;
+        k.init(48000.0f);
+        k.clear();
+        const int kbd = k.addModule("KBD", 20, 20);
+        const int sm2 = k.addModule("SAMPLE", 200, 20);
+        const int o2  = k.addModule("OUT", 400, 20);
+        k.patch.connect(kbd, 0, sm2, 0);      /* V/OCT */
+        k.patch.connect(sm2, 0, o2, 0);
+        std::string e2;
+        ok(k.loadSample(sm2, path, &e2), "the same file, on a keyboard");
+        Module *ms = k.patch.module(sm2);
+        ms->params[4].value = 1.0f;           /* LOOP */
+        ms->params[5].value = 48.0f;          /* ROOT = C3 */
+
+        k.noteOn(48, 0.9f, 0);                /* play C3 */
+        std::vector<float> m3;
+        L::render(k, m3);
+        okf(L::mag(m3, 440.0) > L::mag(m3, 220.0) * 4.0,
+            "the root note plays the file as recorded: %.4f at 440 against "
+            "%.4f at 220", L::mag(m3, 440.0), L::mag(m3, 220.0));
+
+        k.panic();
+        k.noteOn(55, 0.9f, 0);                /* a fifth above C3 */
+        L::render(k, m3);
+        okf(L::mag(m3, 659.3) > L::mag(m3, 440.0) * 3.0,
+            "and a fifth up plays it a fifth up: %.4f at 659 against %.4f at "
+            "440", L::mag(m3, 659.3), L::mag(m3, 440.0));
+    }
+
     /* A file that is not one says so, and leaves what was there alone. */
     std::string why;
     ok(!e.loadSample(smp, "src/core/bs_engine.h", &why),

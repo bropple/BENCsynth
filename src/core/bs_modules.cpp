@@ -2085,6 +2085,18 @@ public:
         addKnob("START",   0.0f, 1.0f, 0.0f, "%.2f");
         addKnob("LEVEL",   0.0f, 2.0f, 1.0f, "%.2f");
         addToggle("LOOP", 0.0f);
+        /* Which key plays the file untouched.
+         *
+         * Without this a sampler is only usable if the recording happens to be
+         * at middle C. Set ROOT to the note the sample actually is and the
+         * keyboard is in tune with it: play that key and you hear the file,
+         * play a fifth up and you hear it a fifth up.
+         *
+         * Appended after LOOP rather than sitting next to TUNE where it
+         * belongs on the panel, because SAMPLE shipped in v0.5.0 and a rack
+         * saved by it stores its knobs by position. Inserting this in the
+         * middle would have loaded LEVEL into ROOT. */
+        addKnob("ROOT",    0.0f, 127.0f, 60.0f, "%note", PC_LIN, 1.0f);
 
         addInput("V/OCT");
         addInput("TRIG");
@@ -2149,6 +2161,7 @@ public:
         const float tune = pv(0) + pv(1) / 100.0f;
         const float start = pv(2), level = pv(3);
         const bool  loop = pv(4) >= 0.5f;
+        const float root = pv(5);
         const int   n = wav.frames;
 
         /* The file's rate against the engine's: a 44.1 kHz file played on a
@@ -2189,8 +2202,12 @@ public:
 
                     /* One volt per octave, as everything else here is, with
                      * the knobs as a fixed offset on top. */
+                    /* ROOT is where the recording sits on the keyboard, so
+                     * it is subtracted: playing that note gives a step of one
+                     * and the file comes out as recorded. */
                     const double step = std::pow(2.0,
-                        (double)in(0).get(c, i) + (double)tune / 12.0) * rateRatio;
+                        (double)in(0).get(c, i) + (double)tune / 12.0 -
+                        ((double)root - 60.0) / 12.0) * rateRatio;
                     pos[c] += step;
 
                     if (pos[c] >= (double)(n - 1)) {

@@ -18,6 +18,7 @@
 #include "bs_record.h"
 #include "bs_midimsg.h"
 #include "bs_midiin.h"
+#include "bs_browser.h"
 
 #include <ctime>
 #include "bs_shm.h"
@@ -348,6 +349,24 @@ static const char *patch_dir(void)
     return dir;
 }
 
+/* Which picker.
+ *
+ * The system's own where it exists and where using it is polite: on Windows
+ * and macOS that is a real dialog people recognise. Ours everywhere else, and
+ * ours always inside a host - a plugin editor asking the desktop to spawn
+ * osascript or zenity is at best rude and at worst refused outright by a
+ * sandboxed DAW, and on a Linux box with neither tool installed there was no
+ * dialog at all.
+ *
+ * Set once at startup, because it cannot change while the program runs. */
+static int g_ownPicker = 0;
+
+/* What the in-window browser is being used for, since it lives across frames
+ * rather than blocking like a system dialog does. */
+enum { PICK_NONE = 0, PICK_SAMPLE, PICK_OPEN, PICK_SAVE };
+static int g_pick       = PICK_NONE;
+static int g_pickModule = -1;
+
 static void app_save(bs_app *app, bs::Engine *eng, int askForName)
 {
     char chosen[BS_PATH];
@@ -357,11 +376,23 @@ static void app_save(bs_app *app, bs::Engine *eng, int askForName)
         std::snprintf(suggest, sizeof suggest, "%s.%s",
                       app->path[0] ? app_name(app) : "rack", BS_PATCH_EXT);
 
+        if (g_ownPicker) {
+            bs_browser_save(patch_dir(), BS_PATCH_EXT, "Save rack", suggest);
+            g_pick = PICK_SAVE;
+            return;                     /* the browser answers in a later frame */
+        }
+
         const int r = bs_save_dialog(GetWindowHandle(), "Save rack", suggest,
                                      BS_PATCH_DESC, BS_PATCH_EXT,
                                      chosen, sizeof chosen);
         if (r == BS_DLG_CANCELLED) return;
         if (r == BS_DLG_UNAVAILABLE) {
+            /* Not a guess any more - ask, with our own list. */
+            bs_browser_save(patch_dir(), BS_PATCH_EXT, "Save rack", suggest);
+            g_pick = PICK_SAVE;
+            return;
+        }
+        if (false) {
             /* No zenity, no kdialog. Rather than refuse, put it somewhere
              * findable and say exactly where - a machine without a file dialog
              * is not a machine that should be unable to save. */
@@ -393,14 +424,20 @@ static void app_save(bs_app *app, bs::Engine *eng, int askForName)
 static void app_open(bs_app *app, bs::Engine *eng, bs_rack *rack, bs_keyboard *kb)
 {
     char chosen[BS_PATH];
+    if (g_ownPicker) {
+        bs_browser_open(patch_dir(), BS_PATCH_EXT, "Open rack");
+        g_pick = PICK_OPEN;
+        return;                         /* the browser answers in a later frame */
+    }
     const int r = bs_open_dialog(GetWindowHandle(), "Open rack", patch_dir(),
                                  BS_PATCH_DESC, BS_PATCH_EXT,
                                  chosen, sizeof chosen);
     if (r != BS_DLG_OK) {
-        if (r == BS_DLG_UNAVAILABLE)
-            std::snprintf(app->status, sizeof app->status,
-                          "no file dialog here - install zenity or kdialog, or "
-                          "pass a rack on the command line");
+        if (r == BS_DLG_UNAVAILABLE) {
+            bs_browser_open(patch_dir(), BS_PATCH_EXT, "Open rack");
+            g_pick = PICK_OPEN;
+            return;
+        }
         app->statusAge = 0.0f;
         return;
     }
@@ -740,6 +777,14 @@ int main(int argc, char **argv)
 
     app_retitle(&app);
 
+    /* Ours inside a host always, and on any machine whose system dialog we
+     * cannot reach. See the note on g_ownPicker. */
+#if defined(_WIN32) || defined(__APPLE__)
+    g_ownPicker = editing ? 1 : 0;
+#else
+    g_ownPicker = 1;
+#endif
+
     AudioStream stream = { 0 };
     if (!editing) {
         InitAudioDevice();
@@ -815,10 +860,15 @@ int main(int argc, char **argv)
             const int which = bs_rack_load_sample;
             bs_rack_load_sample = -1;
             char chosen[BS_PATH] = "";
-            const int r = bs_open_dialog(GetWindowHandle(), "Load a sample",
+            const int r = g_ownPicker ? BS_DLG_UNAVAILABLE
+                        : bs_open_dialog(GetWindowHandle(), "Load a sample",
                                          patch_dir(), "WAV audio", "wav",
                                          chosen, sizeof chosen);
-            if (r == BS_DLG_OK && chosen[0]) {
+            if (r == BS_DLG_UNAVAILABLE) {
+                bs_browser_open(patch_dir(), "wav", "Load a sample");
+                g_pick = PICK_SAMPLE;
+                g_pickModule = which;
+            } else if (r == BS_DLG_OK && chosen[0]) {
                 std::string why;
                 if (g_engine.loadSample(which, chosen, &why)) {
                     char m2[224];
@@ -832,8 +882,6 @@ int main(int argc, char **argv)
                     std::snprintf(m2, sizeof m2, "%s", why.c_str());
                     say(&app, m2);
                 }
-            } else if (r == BS_DLG_UNAVAILABLE) {
-                say(&app, "no file dialog here - install zenity or kdialog");
             }
         }
 
@@ -1007,7 +1055,12 @@ int main(int argc, char **argv)
                                    : "keyboard hidden - the rack gets the room");
         }
 
-        ui.suppress = app.about;
+        /* The rack and the toolbar are drawn first, so blocking them means
+         * setting this before they run - the same way the about overlay does.
+         * The browser must not set it itself: bs_button honours suppress, so
+         * a browser that blocked everything would block its own buttons, and
+         * the first version did exactly that. */
+        ui.suppress = app.about || bs_browser_active();
         draw_toolbar(&app, &ui, &rack, &kb, &g_engine, toolbar, rview);
         bs_rack_frame(&rack, &ui, &g_engine, rview, dt);
         if (app.showKeys) bs_keyboard_frame(&kb, &ui, &g_engine, keys);
@@ -1026,6 +1079,53 @@ int main(int argc, char **argv)
                 say(&app, line);
             }
         }
+        /* The in-window browser, above the rack and below the menus. It has
+         * to be drawn inside the frame, so unlike a system dialog it answers
+         * on some later frame rather than blocking here. */
+        if (bs_browser_active()) {
+            char picked[BS_PATH] = "";
+            const Rectangle screen = { 0.0f, 0.0f, (float)GetScreenWidth(),
+                                       (float)GetScreenHeight() };
+            const int got = bs_browser_frame(&ui, screen, picked, sizeof picked);
+            if (got != 0) {
+                const int what = g_pick;
+                const int which = g_pickModule;
+                g_pick = PICK_NONE;
+                g_pickModule = -1;
+                if (got > 0 && picked[0]) {
+                    if (what == PICK_SAMPLE) {
+                        std::string why;
+                        char m2[224];
+                        if (g_engine.loadSample(which, picked, &why)) {
+                            std::snprintf(m2, sizeof m2, "loaded %s%s%s",
+                                          app_base_name(picked),
+                                          why.empty() ? "" : " - ", why.c_str());
+                            rack.edited = 1;
+                        } else {
+                            std::snprintf(m2, sizeof m2, "%s", why.c_str());
+                        }
+                        say(&app, m2);
+                    } else if (what == PICK_OPEN) {
+                        std::snprintf(app.path, sizeof app.path, "%s", picked);
+                        if (bs_patch_load(&g_engine, app.path, app.status,
+                                          (int)sizeof app.status)) {
+                            bs_rack_patch_replaced(&rack);
+                            bs_keyboard_release_all(&kb, &g_engine);
+                            rack.edited = 1;
+                        }
+                        app.statusAge = 0.0f;
+                        app_retitle(&app);
+                    } else if (what == PICK_SAVE) {
+                        std::snprintf(app.path, sizeof app.path, "%s", picked);
+                        bs_patch_save(&g_engine, app.path, app.status,
+                                      (int)sizeof app.status);
+                        app.statusAge = 0.0f;
+                        app_retitle(&app);
+                    }
+                }
+            }
+        }
+
         bs_ui_overlay(&ui);
 
         if (fbMode && fbTarget.id != 0) EndTextureMode();

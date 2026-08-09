@@ -121,9 +121,11 @@ system's own file dialog — `Ctrl-O`, `Ctrl-S`, `Ctrl-Shift-S`. The window titl
 shows which rack is loaded. `./bencsynth some-rack.bencsynth` opens one
 directly.
 
-On a Linux box with neither `zenity` nor `kdialog` installed there is no dialog
-to ask with, so `SAVE` writes to `patches/rack.bencsynth` beside the program
-and says so, rather than refusing.
+The picker is the system's own on Windows and macOS, and BENCsynth's own
+everywhere else — and always its own inside a DAW, where asking the desktop to
+spawn a dialog is at best rude and at worst refused by a sandboxed host. The
+built-in one needs nothing installed, so a Linux box with neither `zenity` nor
+`kdialog` can still open and save.
 
 ---
 

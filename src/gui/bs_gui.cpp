@@ -358,6 +358,20 @@ static void format_value(const bs::Param *p, char *buf, size_t cap)
         snprintf(buf, cap, "%s", p->on() ? "ON" : "OFF");
         return;
     }
+    /* A knob that reads out as a note rather than a number. "60" means
+     * nothing to anybody; "C4" is the thing being chosen. The sentinel goes in
+     * the format string because Param already carries one and a whole new
+     * field for one module would be worse. */
+    if (p->fmt && strcmp(p->fmt, "%note") == 0) {
+        static const char *const N[12] = { "C", "C#", "D", "D#", "E", "F",
+                                           "F#", "G", "G#", "A", "A#", "B" };
+        const int n = p->asInt();
+        if (n < 0 || n > 127) { snprintf(buf, cap, "-"); return; }
+        /* Middle C is 60 and is called C4 here, which is the convention the
+         * keyboard along the bottom already uses. */
+        snprintf(buf, cap, "%s%d", N[n % 12], n / 12 - 1);
+        return;
+    }
     snprintf(buf, cap, p->fmt, (double)p->value);
 }
 

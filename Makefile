@@ -73,7 +73,8 @@ GUI_SRC  := src/gui/main.cpp \
             src/gui/bs_filedlg.cpp \
             src/gui/bs_input.cpp \
             src/gui/bs_record.cpp \
-            src/gui/bs_midiin.cpp
+            src/gui/bs_midiin.cpp \
+            src/gui/bs_browser.cpp
 # The standalone is also the plugin's editor (--editor), so it carries the
 # same shared-memory half the plugin does.
 GUI_SRC  += $(PLUGIN_SRC) $(EDITOR_SRC)

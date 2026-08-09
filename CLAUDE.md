@@ -27,7 +27,7 @@ style only — do not copy code from it.
 ## Before you commit anything
 
 ```sh
-make && make test                     # 549 checks
+make && make test                     # 552 checks
 make clap  && make clap-test          #  68
 make lv2   && make lv2-test           #  27
 make ipc-test && xvfb-run -a --server-args="-screen 0 1400x900x24" \
@@ -243,6 +243,11 @@ a mismatched pair rather than reading the block at the wrong offsets, which is
 the only reason that number exists. And the block is `memset` to zero, so any
 field whose zero is a real value — `learnMacro`, where 0 is macro one — has to
 be initialised explicitly at both creation sites.
+
+**`bs_button` honours `ui->suppress`.** A modal panel that sets it to block the
+rack blocks its own buttons too — the browser did exactly that and its OK
+button was dead while row clicks worked, because those are hit-tested by hand.
+Set it in `main()` before the rack draws, the way the about overlay does.
 
 **CLAP parameter IDs are permanent.** There are 16 exposed slots whose *names*
 change via `rescan(INFO|TEXT)`; the IDs never do.
