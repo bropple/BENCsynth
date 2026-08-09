@@ -11,16 +11,6 @@
 #include <string>
 #include <vector>
 
-#if defined(_WIN32)
-#  include <windows.h>
-#  define BS_SEP '\\'
-#else
-#  include <dirent.h>
-#  include <sys/stat.h>
-#  include <unistd.h>
-#  define BS_SEP '/'
-#endif
-
 namespace {
 
 struct Entry {
@@ -49,52 +39,21 @@ struct Browser {
 
 Browser g;
 
-bool isDir(const std::string &path)
-{
-#if defined(_WIN32)
-    const DWORD a = GetFileAttributesA(path.c_str());
-    return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
-#else
-    struct stat st;
-    return stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
-#endif
-}
-
+/* raylib hands back full paths already, so this is only needed for the name
+ * typed into the save field. Forward slashes: Windows takes them everywhere it
+ * takes backslashes, and raylib's own path helpers emit them. */
 std::string join(const std::string &dir, const std::string &name)
 {
     if (dir.empty()) return name;
-    if (dir[dir.size() - 1] == BS_SEP || dir[dir.size() - 1] == '/')
-        return dir + name;
-    return dir + BS_SEP + name;
-}
-
-/* The directory above, or the same one at the root. */
-std::string parentOf(const std::string &dir)
-{
-    if (dir.empty()) return dir;
-    size_t end = dir.size();
-    while (end > 1 && (dir[end - 1] == BS_SEP || dir[end - 1] == '/')) end--;
-    size_t cut = dir.find_last_of("/\\", end - 1);
-    if (cut == std::string::npos) return dir;
-    if (cut == 0) return std::string(1, dir[0]);
-#if defined(_WIN32)
-    if (cut == 2 && dir[1] == ':') return dir.substr(0, 3);
-#endif
-    return dir.substr(0, cut);
+    const char last = dir[dir.size() - 1];
+    if (last == '/' || last == '\\') return dir + name;
+    return dir + "/" + name;
 }
 
 bool matches(const std::string &name, const std::string &ext)
 {
     if (ext.empty()) return true;
-    if (name.size() <= ext.size() + 1) return false;
-    if (name[name.size() - ext.size() - 1] != '.') return false;
-    for (size_t i = 0; i < ext.size(); i++) {
-        const char a = name[name.size() - ext.size() + i], b = ext[i];
-        const char la = (a >= 'A' && a <= 'Z') ? (char)(a + 32) : a;
-        const char lb = (b >= 'A' && b <= 'Z') ? (char)(b + 32) : b;
-        if (la != lb) return false;
-    }
-    return true;
+    return IsFileExtension(name.c_str(), ("." + ext).c_str());
 }
 
 void scan()
@@ -103,40 +62,31 @@ void scan()
     g.sel = -1;
     g.top = 0;
 
-#if defined(_WIN32)
-    WIN32_FIND_DATAA fd;
-    const std::string glob = join(g.dir, "*");
-    HANDLE h = FindFirstFileA(glob.c_str(), &fd);
-    if (h != INVALID_HANDLE_VALUE) {
-        do {
-            const std::string n = fd.cFileName;
-            if (n == "." || n == "..") continue;
-            if (n.size() && n[0] == '.') continue;
-            const bool d = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-            if (!d && !matches(n, g.ext)) continue;
-            Entry e; e.name = n; e.dir = d;
-            g.entries.push_back(e);
-        } while (FindNextFileA(h, &fd));
-        FindClose(h);
+    /* raylib's, rather than dirent and FindFirstFile behind an #if. It is
+     * already linked, it is already cross-platform, and doing it by hand meant
+     * including windows.h into a file that also includes raylib - which
+     * redefines Rectangle, CloseWindow and ShowCursor and will not compile.
+     *
+     * Everything, then filtered here. LoadDirectoryFilesEx takes an extension
+     * filter and a "DIR" token to keep directories, but the two together want
+     * a spelling this got wrong first time and the list came back empty.
+     * Asking for everything and deciding here needs no guessing. */
+    FilePathList files = LoadDirectoryFiles(g.dir.c_str());
+    for (unsigned i = 0; i < files.count; i++) {
+        const char *full = files.paths[i];
+        if (!full || !*full) continue;
+        const char *name = GetFileName(full);
+        if (!name || !*name) continue;
+        /* Hidden files stay hidden. Somebody who wants one knows where it is
+         * and can put the path in the rack file. */
+        if (name[0] == '.') continue;
+        Entry e;
+        e.name = name;
+        e.dir  = !IsPathFile(full);
+        if (!e.dir && !matches(e.name, g.ext)) continue;
+        g.entries.push_back(e);
     }
-#else
-    DIR *d = opendir(g.dir.c_str());
-    if (d) {
-        struct dirent *de;
-        while ((de = readdir(d))) {
-            const std::string n = de->d_name;
-            if (n == "." || n == "..") continue;
-            /* Hidden files stay hidden. Somebody looking for one knows where
-             * it is and can type the path into the rack file. */
-            if (n.size() && n[0] == '.') continue;
-            const bool isd = isDir(join(g.dir, n));
-            if (!isd && !matches(n, g.ext)) continue;
-            Entry e; e.name = n; e.dir = isd;
-            g.entries.push_back(e);
-        }
-        closedir(d);
-    }
-#endif
+    UnloadDirectoryFiles(files);
 
     /* Directories first, then names, so the list does not reshuffle itself
      * between one visit and the next. */
@@ -149,13 +99,10 @@ void scan()
 
 const char *homeDir()
 {
-#if defined(_WIN32)
-    const char *h = getenv("USERPROFILE");
-    return h ? h : "C:\\";
-#else
     const char *h = getenv("HOME");
-    return h ? h : "/";
-#endif
+    if (!h || !*h) h = getenv("USERPROFILE");
+    if (!h || !*h) h = GetWorkingDirectory();
+    return h ? h : ".";
 }
 
 }  /* namespace */
@@ -166,7 +113,7 @@ void bs_browser_open(const char *startDir, const char *ext, const char *title)
     g.ext    = ext ? ext : "";
     g.title  = title ? title : "Open";
     g.dir    = startDir && *startDir ? startDir : homeDir();
-    if (!isDir(g.dir)) g.dir = homeDir();
+    if (!DirectoryExists(g.dir.c_str())) g.dir = homeDir();
     g.saving = false;
     g.name.clear();
     g.lastClickAt = -1.0;
@@ -341,7 +288,7 @@ int bs_browser_frame(bs_ui *ui, Rectangle screen, char *out, int cap)
     }
 
     if (chosenRow == -1) {
-        g.dir = parentOf(g.dir);
+        g.dir = GetPrevDirectoryPath(g.dir.c_str());
         scan();
         return 0;
     }
