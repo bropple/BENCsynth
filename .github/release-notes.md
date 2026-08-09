@@ -91,6 +91,36 @@ Everything else saves too — the patch, where the rack was scrolled and how far
 it was zoomed. You do not have to save inside BENCsynth for the DAW's project
 to come back the way you left it.
 
+**MPE controllers work per note.** A Seaboard, a Linnstrument or a Push sends
+bend, pressure and slide for each finger separately, and BENCsynth carries all
+of it — `V/OCT` follows each note's own bend, and `PRESS` and `SLIDE` on the
+KBD panel are cables like any other. Two notes can bend in opposite
+directions.
+
+**A hardware knob row can drive the macros.** Set `CC BASE` on a MACRO panel
+to the first CC your controller sends and its eight knobs take the eight
+macros. It saves with the rack.
+
+### New in v0.3.0
+
+- **The racks you saved are in the host's chooser.** The Rack parameter used to
+  offer only the 37 presets compiled in; it now lists whatever is in your rack
+  folder as well. Built-in entries keep their positions, so old projects are
+  unaffected.
+- **MPE and CLAP note expressions.** Per-note bend, pressure and slide, with
+  `PRESS` and `SLIDE` added to KBD and a note's own bend folded into `V/OCT`.
+  Two notes can bend in opposite directions at once — which is the thing a
+  single pitch wheel cannot do, and most of why MPE exists. A cable already
+  carries every voice separately, so a rack patches per-note expression like
+  anything else.
+- **Record to a .wav.** A `REC` button on the toolbar writes the master bus.
+  Takes are named for the moment they started. If the disk falls behind, the
+  block is dropped rather than the audio stalling, and the count is reported
+  when you stop.
+- **A hardware knob row drives the macros.** A MACRO panel's new `CC BASE`
+  knob claims eight consecutive CCs. It saves with the rack, and the plugin
+  reports the changes back to the host so your project stores them.
+
 ### New in v0.2.3
 
 - **The AU is validated.** `auval` passes every section; it shipped in v0.2.2

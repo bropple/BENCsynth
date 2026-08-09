@@ -25,8 +25,8 @@ style only — do not copy code from it.
 ## Before you commit anything
 
 ```sh
-make && make test                     # 480 checks
-make clap  && make clap-test          #  58
+make && make test                     # 488 checks
+make clap  && make clap-test          #  65
 make lv2   && make lv2-test           #  27
 make ipc-test && xvfb-run -a --server-args="-screen 0 1400x900x24" \
     ./bencsynth-ipc-test ./bencsynth  #  46
@@ -211,6 +211,10 @@ it with the new one — do not reason about it.
 **The AU's four-character codes are permanent** — `aumu` / `BNCS` / `BNCO`. A
 host remembers a plugin by type, subtype and manufacturer; change any of them
 and every saved project stops finding it.
+
+**A plugin that changes its own parameter must say so in the output event
+list.** Otherwise the hardware moves the sound, the host's knob stays put, the
+project saves the old value, and the next automation point snaps it back.
 
 **CLAP parameter IDs are permanent.** There are 16 exposed slots whose *names*
 change via `rescan(INFO|TEXT)`; the IDs never do.
