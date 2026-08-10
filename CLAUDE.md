@@ -228,6 +228,18 @@ use-after-free that aborts on shutdown.
 0 V, which is middle C. Any measurement of a polyphonic rack needs a gated VCA
 or the silent voices drown the one playing — this cost an hour on the MPE work.
 
+**A level is not a note.** rms, peak, "it makes a sound", and a
+whole-keyboard uniformity sweep are all passed by a DC offset — and passed
+especially well, because a constant is extremely uniform. The bow shipped in
+v0.6.0 producing a flat 0.1188 and every one of those checks was green. Guard
+anything that is supposed to oscillate with crest factor: peak/rms is 1.41 for
+a sine, above 1.2 for anything periodic, 1.00 for a constant.
+
+**When pitch estimators disagree, print the samples.** Five of them — Goertzel,
+sin/cos correlation, wide search, autocorrelation, zero crossings — gave five
+different answers on that same DC signal, each railing at some search edge.
+Dumping 368 samples as ASCII settled it in one look.
+
 **Measure a decay over longer than you think.** The bow was reported as
 sustaining on the strength of a 1.6-1.8 s window; over eight seconds every note
 was decaying and the bottom of the keyboard died. Anything that settles slowly
