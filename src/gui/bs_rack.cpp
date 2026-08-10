@@ -306,6 +306,12 @@ void bs_rack_frame(bs_rack *r, bs_ui *ui, bs::Engine *eng, Rectangle view, float
     const Vector2 sm = GetMousePosition();
     const int overView = CheckCollisionPointRec(sm, view) && !bs_ui_blocked(ui);
 
+    /* What the caller set - the about overlay and the file browser block the
+     * whole frame through this flag. The per-panel logic below borrows it and
+     * used to hand back zero, which unblocked everything drawn after the rack:
+     * with the browser open, the on-screen keyboard still played. */
+    const int callerSuppress = ui->suppress;
+
     r->edited = 0;
     r->presetLoaded = -1;
     r->deleteRequest = -1;
@@ -419,7 +425,7 @@ void bs_rack_frame(bs_rack *r, bs_ui *ui, bs::Engine *eng, Rectangle view, float
         }
 
         /* ---- knobs ---- */
-        ui->suppress = (top != id) || r->patching;
+        ui->suppress = callerSuppress || (top != id) || r->patching;
         for (int i = 0; i < mod->paramCount(); i++) {
             Rectangle cell = paramCell(mod, i);
             bs::Param *p = &mod->params[(size_t)i];
@@ -468,7 +474,7 @@ void bs_rack_frame(bs_rack *r, bs_ui *ui, bs::Engine *eng, Rectangle view, float
                 bs_text(ui, BS_F_TINY, tag, b.x + 2.0f, b.y + 1.0f, BS_RACK);
             }
         }
-        ui->suppress = 0;
+        ui->suppress = callerSuppress;
 
         /* ---- the two panels that show something ---- */
         if (mod->extraPanelHeight() > 0) {
@@ -483,7 +489,7 @@ void bs_rack_frame(bs_rack *r, bs_ui *ui, bs::Engine *eng, Rectangle view, float
             } else if (mod->typeId == "TEXT") {
                 bs::ModuleText *t = static_cast<bs::ModuleText *>(mod);
                 if ((int)r->edits.size() <= id) r->edits.resize((size_t)id + 1);
-                ui->suppress = (top != id) || r->patching;
+                ui->suppress = callerSuppress || (top != id) || r->patching;
                 if (bs_textarea(ui, 30000 + id, er, t->text,
                                 &r->edits[(size_t)id], 1)) r->edited = 1;
                 /* The text area already scrolls itself on the wheel. Claiming
@@ -492,7 +498,7 @@ void bs_rack_frame(bs_rack *r, bs_ui *ui, bs::Engine *eng, Rectangle view, float
                  * reads as the text jumping while the world moves. */
                 if (wheel != 0.0f && top == id && !r->patching &&
                     CheckCollisionPointRec(bs_mouse(), er)) wheelTaken = 1;
-                ui->suppress = 0;
+                ui->suppress = callerSuppress;
             } else if (mod->previewAudio(0) != 0) {
                 /* A waveform, drawn by asking the module for its audio rather
                  * than by knowing which module it is. One column per pixel,

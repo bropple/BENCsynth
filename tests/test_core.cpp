@@ -1661,6 +1661,42 @@ static void test_reed_speaks()
  * it took for as long as it sounds. So the test is about identity - three
  * notes of a chord get three different values, hold them, the next note gets
  * the next step, and RESET starts the bar again. */
+/* An external clock takes over the CLK completely - the jack's own comment.
+ * It used to be inferred from the voltage, and a real clock sits at exactly
+ * zero between pulses, so the internal oscillator kept slipping its own
+ * ticks into the gaps: a 1 Hz external clock into a 120 BPM panel measured
+ * 21 edges in ten seconds instead of 10. */
+static void test_clk_external_takeover()
+{
+    std::printf("an external clock owns the clk\n");
+
+    Engine e;
+    e.init(48000.0f);
+    e.clear();
+    const int ext = e.addModule("CLK", 0, 0);
+    const int clk = e.addModule("CLK", 200, 0);
+    Module *me = e.patch.module(ext), *mc = e.patch.module(clk);
+    me->params[0].value = 60.0f;    /* 1 Hz out of X1 */
+    me->params[3].value = 0.0f;     /* SYNC off */
+    mc->params[0].value = 120.0f;   /* the internal rate that must not leak */
+    mc->params[3].value = 0.0f;
+    e.connect(ext, 0, clk, 0);
+
+    float buf[64], last = 0.0f;
+    int edges = 0;
+    for (int b = 0; b < 48000 * 6 / 32; b++) {
+        e.render(buf, 32);
+        for (int i = 0; i < BS_BLOCK; i++) {
+            const float v = mc->outs[0].v[0][i];
+            if (v > 1.0f && last <= 1.0f) edges++;
+            last = v;
+        }
+    }
+    okf(edges >= 5 && edges <= 8, "six seconds of 1 Hz external clock give "
+        "%.0f edges, wanted 5..8 - more means the internal clock is leaking "
+        "through", (double)edges, 0.0);
+}
+
 /* KRELL's entire premise is that it never repeats: a sampled random voltage
  * chooses each note's pitch and the length of the interval before the next.
  * It shipped for four releases with the end-of-cycle pulse wired into the
@@ -1906,6 +1942,7 @@ int main()
     test_reed_speaks();
     test_nseq();
     test_krell_wanders();
+    test_clk_external_takeover();
     test_note_expression();
     test_sample_rates();
     test_patchfile();

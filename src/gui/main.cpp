@@ -1106,11 +1106,18 @@ int main(int argc, char **argv)
                         }
                         say(&app, m2);
                     } else if (what == PICK_OPEN) {
-                        std::snprintf(app.path, sizeof app.path, "%s", picked);
-                        if (bs_patch_load(&g_engine, app.path, app.status,
+                        /* The path is taken only on success, the way app_open
+                         * does it: keeping a failed path made the next SAVE
+                         * write the current rack over the file that had just
+                         * refused to load. And the saved view is restored,
+                         * which this path alone forgot. */
+                        bs_keyboard_release_all(&kb, &g_engine);
+                        if (bs_patch_load(&g_engine, picked, app.status,
                                           (int)sizeof app.status)) {
+                            std::snprintf(app.path, sizeof app.path, "%s",
+                                          picked);
                             bs_rack_patch_replaced(&rack);
-                            bs_keyboard_release_all(&kb, &g_engine);
+                            bs_rack_restore_view(&rack, g_engine.patch);
                             rack.edited = 1;
                         }
                         app.statusAge = 0.0f;

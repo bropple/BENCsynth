@@ -1211,7 +1211,13 @@ public:
             int tick = 0;
             const float ext = in(0).get(0, i);
             if (ext > 1.0f && lastExt <= 1.0f) tick = 1;
-            const int external = (ext != 0.0f || lastExt != 0.0f);
+            /* Patched IS external, as the jack's comment has always said.
+             * Inferring it from the voltage instead meant every real clock -
+             * which sits at exactly zero between pulses - handed control
+             * back to the internal oscillator between its own ticks:
+             * measured, a 1 Hz external clock into a 120 BPM panel produced
+             * 21 edges in ten seconds instead of 10. */
+            const int external = patched(0);
             lastExt = ext;
 
             if (run && !external) {
