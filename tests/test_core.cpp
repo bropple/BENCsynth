@@ -1425,15 +1425,23 @@ static void test_voice_module()
 }
 
 
-/* The bow has to work at every pitch, not at one.
+/* A driven exciter has to work at every pitch, not at one.
  *
  * The single-note test above passed happily while the model had a dead band
  * five semitones wide centred on middle C, where a bowed string would start,
  * ring for half a second and stop - at every bow pressure. One note proves
- * nothing about a keyboard. */
-static void test_bow_across_the_range()
+ * nothing about a keyboard.
+ *
+ * Both driven exciters, because for a long time only the bow was swept here
+ * and the reed's own top octave was dead the whole time with nothing to say
+ * so. They share the string, the loop and the servo; a fault in any of those
+ * shows up in both, and a test that only asks one of them finds it half the
+ * time. The hammer is not swept: it is a burst into a decaying string, it
+ * has no servo to come unstuck, and the test above covers it. */
+static void test_driven_across_the_range(int exciter)
 {
-    std::printf("bowing the whole keyboard\n");
+    std::printf("%s the whole keyboard\n",
+                exciter == 1 ? "bowing" : "blowing");
 
     std::vector<double> levels;
     int worst = -1;
@@ -1458,18 +1466,52 @@ static void test_bow_across_the_range()
         m->params[4].value = 0.06f;
         m->params[5].value = 0.10f;
         m->params[6].value = 1.2f;
-        m->params[7].value = 1.0f;    /* BOW   */
+        m->params[7].value = (float)exciter;   /* BOW or BLOW */
         m->params[8].value = 0.75f;   /* FORCE */
         e.noteOn(n, 0.9f, 0);
 
+        /* Four seconds in to twenty, and not the one second at seven this
+         * used to take.
+         *
+         * A course is two strings a little apart, so a held note beats, and
+         * the beat period goes as one over the difference - which is
+         * proportional to the note. Measured, it is about seven seconds at
+         * note 56 and fourteen at note 44, and a one-second window at a
+         * fixed seven seconds lands wherever it lands on that. Note 44 read
+         * 0.0035 in the old window and 0.0214 in this one: a sixth of its
+         * own amplitude, purely because the window sat in a null. The test
+         * then blamed the bow for it.
+         *
+         * The window has to be longer than the slowest beat, or it is not
+         * measuring the note's level, it is sampling the beat's phase. */
         std::vector<float> buf(512);
-        double s = 0; long c = 0;
-        for (int i = 0; i < 384000; i += 256) {
+        double s = 0, peak = 0; long c = 0;
+        for (int i = 0; i < 960000; i += 256) {
             e.render(&buf[0], 256);
-            if (i > 336000)                    /* after 7 s */
-                for (int k = 0; k < 256; k++) { s += buf[(size_t)k * 2] * buf[(size_t)k * 2]; c++; }
+            if (i > 192000)                    /* after 4 s */
+                for (int k = 0; k < 256; k++) {
+                    const double v = buf[(size_t)k * 2];
+                    s += v * v; c++;
+                    if (std::fabs(v) > peak) peak = std::fabs(v);
+                }
         }
         const double level = c ? std::sqrt(s / (double)c) : 0.0;
+
+        /* Peak over RMS, per note, and the whole reason this line exists.
+         *
+         * Every check here used to be a level, and a level cannot tell a
+         * note from a constant. The bow spent three releases stuck at a DC
+         * offset - at middle C it sat at 1.0487 V and moved three
+         * ten-thousandths peak to peak - and this test was green for all
+         * three, because 1.0487 is a perfectly good level.
+         *
+         * A sine reads 1.41 and anything periodic reads over 1.2. A
+         * constant reads 1.00 and cannot read anything else, whatever its
+         * amplitude. */
+        const double crest = level > 0 ? peak / level : 0.0;
+        okf(crest > 1.2, "note %.0f is a note and not a constant: crest "
+            "%.2f, wanted over 1.20", (double)n, crest);
+
         levels.push_back(level);
         if (level < worstLevel) { worstLevel = level; worst = n; }
     }
@@ -1486,14 +1528,15 @@ static void test_bow_across_the_range()
 
     std::printf("  quietest note %d at %.4f, median %.4f, ratio %.2f\n",
                 worst, worstLevel, median, median > 0 ? worstLevel / median : 0.0);
-    /* 0.60, and it used to be 0.15 because the bottom of the range really was
-     * weak. It is not any more: the bow replaces what the string loses, which
-     * is pitch-compensated for free, so every note settles at the same level.
-     * Measured after seven seconds rather than two, which is what caught the
-     * slow decay this threshold used to be hiding. */
-    okf(worstLevel > median * 0.15,
+    /* 0.25. Measured over the window above, the keyboard runs 0.014 to
+     * 0.041 and the worst note is 0.40 of the median, so this is a
+     * regression bound with room in it rather than a description of the
+     * edge. The old 0.15 was set low to accommodate a bottom octave that
+     * was genuinely weak, and then kept while the number it was guarding
+     * was a beat null rather than a level - see the window above. */
+    okf(worstLevel > median * 0.25,
         "no note is dead: the quietest is %.2f of the median, wanted over "
-        "%.2f", median > 0 ? worstLevel / median : 0.0, 0.15);
+        "%.2f", median > 0 ? worstLevel / median : 0.0, 0.25);
     okf(median > 0.02, "and the keyboard sounds at all: median %.4f, wanted "
         "over %.2f", median, 0.02);
 }
@@ -1547,6 +1590,16 @@ static void test_string_exciters()
                 for (size_t i = a; i < b && i < v.size(); i++) { s += v[i] * v[i]; n++; }
                 return n ? std::sqrt(s / (double)n) : 0.0;
             }
+            /* Peak over RMS. 1.41 for a sine, over 1.2 for anything
+             * periodic, and exactly 1.00 for a constant of any size. */
+            static double crest(const std::vector<float> &v, size_t a, size_t b)
+            {
+                double p = 0;
+                for (size_t i = a; i < b && i < v.size(); i++)
+                    if (std::fabs(v[i]) > p) p = std::fabs(v[i]);
+                const double r = rms(v, a, b);
+                return r > 1e-12 ? p / r : 0.0;
+            }
         };
         const double early = L::rms(mono, 7200, 16800);     /* 0.15 - 0.35 s */
         const double late  = L::rms(mono, 355200, 374400);  /* 7.40 - 7.80 s */
@@ -1564,6 +1617,19 @@ static void test_string_exciters()
 
         okf(railed == 0, "%.0f samples sat on the 8 V rail, wanted %.0f",
             railed, 0.0);
+
+        /* The one check that would have caught it.
+         *
+         * The ratio above says the level held. It cannot say what held: a
+         * bow parked at a constant 1.0487 V holds its level perfectly, and
+         * that is exactly what shipped in three releases while this test
+         * was green. Asked in the window each mode is meant to be sounding
+         * in - the struck string early, the driven ones late. */
+        const size_t ca = mode == 0 ? 7200 : 355200;
+        const size_t cb = mode == 0 ? 16800 : 374400;
+        const double crest = L::crest(mono, ca, cb);
+        okf(crest > 1.2, "exciter %.0f is a note and not a constant: crest "
+            "%.2f, wanted over 1.20", (double)mode, crest);
         /* A struck string is meant to be gone by eight seconds, so this asks
          * the early window for it and the late one for the two that hold. */
         okf((mode == 0 ? early : late) > 1e-4,
@@ -1938,7 +2004,8 @@ int main()
     test_midi_decode();
     test_voice_module();
     test_string_exciters();
-    test_bow_across_the_range();
+    test_driven_across_the_range(1);
+    test_driven_across_the_range(2);
     test_reed_speaks();
     test_nseq();
     test_krell_wanders();

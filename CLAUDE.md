@@ -233,7 +233,9 @@ whole-keyboard uniformity sweep are all passed by a DC offset — and passed
 especially well, because a constant is extremely uniform. The bow shipped in
 v0.6.0 producing a flat 0.1188 and every one of those checks was green. Guard
 anything that is supposed to oscillate with crest factor: peak/rms is 1.41 for
-a sine, above 1.2 for anything periodic, 1.00 for a constant.
+a sine, above 1.2 for anything periodic, 1.00 for a constant. Both string
+tests now do, per note and per exciter; run against the v0.6.0 code they
+report 1.00 for the bow and 1.05 for every note on the keyboard.
 
 **When pitch estimators disagree, print the samples.** Five of them — Goertzel,
 sin/cos correlation, wide search, autocorrelation, zero crossings — gave five
@@ -244,6 +246,30 @@ Dumping 368 samples as ASCII settled it in one look.
 sustaining on the strength of a 1.6-1.8 s window; over eight seconds every note
 was decaying and the bottom of the keyboard died. Anything that settles slowly
 needs a window longer than it settles in, or the test is measuring the attack.
+
+**A held note beats, so the window has to be longer than the beat.** A STRING
+is a course of two, a little apart, and the beat period goes as one over the
+difference — about 7 s at note 56 and 14 s at note 44. A one-second window at
+a fixed 7 s reported note 44 at 0.0035 when its actual level was 0.0214: it
+sat in a null. That looked exactly like a dead band and sent three separate
+attempts hunting a bug in the exciter that was not there. If the level of a
+held note varies with *where* you measure it, you are sampling the beat's
+phase, not the note.
+
+**A servo's loop rate is per round trip, and trips arrive at f0 per second.**
+So a fixed-time-constant amplitude tracker crosses its own bandwidth at some
+pitch and the level loop starts warbling. Throttling the servo's authority to
+buy that back keeps it stable by making it too weak to reach its target — the
+top of the keyboard oscillated properly at 17 dB down. Scale the *tracker*
+with the note instead (`envTau` in `ModuleString`) and the margin can stay
+flat everywhere.
+
+**The driven exciters need the damping corner floored above the note.** At
+`2.2 * f0`. When the corner sits near the fundamental the string loses more
+per round trip than any servo will replace, and at the 1.6 this started at,
+notes 87-91 — where `fc/f0` lands near 1.7 naturally — came out a clean but
+10 dB quiet band. It costs BRIGHT some meaning at the very top and buys a
+keyboard that plays.
 
 **The rack text is capped at 192 KB and crosses on every change.** Nothing
 bulky can travel that way - embedded sample audio goes in the plugin's *state*,

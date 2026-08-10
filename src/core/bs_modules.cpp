@@ -713,7 +713,11 @@ public:
                 for (int a = 0; a < AP; a++) ap1[c][k][a] = ap2[c][k][a] = 0.0f;
             }
             last[c] = 0.0f; burst[c] = 0; burstLen[c] = 1; gate01[c] = 0.0f;
-            for (int k = 0; k < 2; k++) { excDc[c][k] = DCBlock(); excDc[c][k].setSampleRate(sr); rEnv[c][k] = 0.0f; }
+            for (int k = 0; k < 2; k++) {
+                excDc[c][k] = DCBlock();  excDc[c][k].setSampleRate(sr);
+                loopDc[c][k] = DCBlock(); loopDc[c][k].setSampleRate(sr);
+                rEnv[c][k] = 0.0f;
+            }
             vel[c] = 0.0f; nz[c] = 12345 + c * 7919;
         }
     }
@@ -745,18 +749,31 @@ public:
          * string's would carry the template's z with it and wipe out the state
          * of a note that is still ringing. */
         OnePole shape;
-        shape.setCutoff(400.0f + bright * bright * 11000.0f, sr);
+        const float dampFc = 400.0f + bright * bright * 11000.0f;
+        shape.setCutoff(dampFc, sr);
         const float dampA = shape.a;
 
-        /* The reed's amplitude tracker: settles in about 4 ms. */
-        const float envK = 1.0f - std::exp(-1.0f / (0.004f * sr));
+        /* The level servo's amplitude tracker is sized per note, further
+         * down where f0 is known. Up fast, down ten times slower:
+         * symmetric, it could swing the servo's balance at a few hundred
+         * hertz, and together with the loop highpass that made a relaxation
+         * oscillator that outcompeted the string - note 96 measured as a
+         * clean 243 Hz sine, three octaves below the note, sitting exactly
+         * on the highpass corner. A release ten times the attack pushes
+         * that loop below 25 Hz, where the corner starves it. */
 
         for (int c = 0; c < ch; c++) {
             for (int i = 0; i < BS_BLOCK; i++) {
                 const float g = in(1).get(c, i);
                 /* A hammer wants the edge; a bow and a reed want the whole
-                 * time the gate is up, and how far up it is. */
-                gate01[c] = clampf(g * 0.1f, 0.0f, 1.0f);
+                 * time the gate is up, and how far up it is. Slewed over
+                 * about 6 ms: a pressure STEP is wideband, and its energy
+                 * around the loop highpass corner seeded a corner-frequency
+                 * oscillation that could out-race the note - the top of the
+                 * keyboard came out parked a few octaves down, at 0.96 of
+                 * the corner, whatever the note. A bow lands, it does not
+                 * teleport. */
+                gate01[c] += 0.0035f * (clampf(g * 0.1f, 0.0f, 1.0f) - gate01[c]);
                 if (g > 1.0f && last[c] <= 1.0f) {
                     vel[c] = clampf(g * 0.1f, 0.05f, 1.0f);
                     /* How long the felt stays in contact, which is the most
@@ -795,16 +812,90 @@ public:
                 const float w = 2.0f * 3.14159265358979f * f0 / sr;
                 const float cw = std::cos(w), sw = std::sin(w);
 
+                /* The level tracker's time constant follows the note.
+                 *
+                 * A servo's loop rate is per round trip and trips arrive at
+                 * f0 per second, so with a fixed 4 ms tracker the level loop
+                 * crosses its own bandwidth somewhere near C6 and warbles.
+                 * Throttling the servo's authority instead - which is what
+                 * the 350/f0 margin here used to do - keeps it stable by
+                 * making it too weak to reach its target: measured at the
+                 * test's own BRIGHT of 0.42, notes above 86 oscillated
+                 * properly but 17 dB below the middle of the keyboard,
+                 * because the level settled where authority balanced loss
+                 * rather than where FORCE asked for it.
+                 *
+                 * Scaling the tracker holds the loop rate flat without
+                 * giving up authority. Floored at 1 ms: the tracker rides
+                 * on |x|, which ripples at twice the note, and below about
+                 * a millisecond that ripple starts reaching the servo. */
+                const float envTau = clampf(0.004f * (261.6256f / f0),
+                                            0.001f, 0.004f);
+                const float envK  = 1.0f - std::exp(-1.0f / (envTau * sr));
+                const float envKd = 1.0f - std::exp(-1.0f / (envTau * 10.0f * sr));
+
+                /* For a driven string the damping corner is floored at
+                 * 2.2 times the note. Below the corner a servo sized for
+                 * the fundamental's loss over-replaces every lower
+                 * frequency, and the loop is handed to the least lossy one:
+                 * with BRIGHT at 0.42, notes above ~1.5 kHz came out as a
+                 * clean tone three octaves down, parked on the loop
+                 * highpass corner. A string whose fundamental cannot ring
+                 * cannot be bowed at all; the floor keeps BRIGHT meaning
+                 * what it says for everything above the fundamental.
+                 *
+                 * 2.2 and not the 1.6 this started at, which is the point
+                 * where the corner stops sitting close enough to the
+                 * fundamental to cost it real amplitude. At 1.6 the notes
+                 * just under the crossover - 87 to 91, where fc/f0 lands
+                 * near 1.7 naturally - came out a clean but 10 dB quiet
+                 * band, oscillating properly and simply losing more per
+                 * round trip than the servo would replace. 2.2 flattens
+                 * that band; 3 and 4 are louder still and give up more of
+                 * BRIGHT for it. */
+                float dampAU = dampA;
+                if (excite != 0) {
+                    const float fcU = 2.2f * f0;
+                    if (fcU > dampFc) {
+                        const float gU = std::tan(3.14159265358979f *
+                            clampf(fcU, 1.0f, sr * 0.45f) / sr);
+                        dampAU = gU / (1.0f + gU);
+                    }
+                }
+
+
                 /* One-pole lowpass a/(1 - (1-a)z^-1): the phase is that of the
                  * denominator, negated. */
-                const float b = 1.0f - dampA;
+                const float b = 1.0f - dampAU;
                 const float lpPhase = -std::atan2(b * sw, 1.0f - b * cw);
 
                 /* First-order allpass (a + z^-1)/(1 + a z^-1), AP of them. */
                 const float apPhase = (float)AP *
                     (std::atan2(-sw, a + cw) - std::atan2(-a * sw, 1.0f + a * cw));
 
-                const float apDelay = -(lpPhase + apPhase) / w;
+                /* Driven exciters carry a highpass in the loop (below).
+                 * Its corner tracks the note, so its phase lead at f0 is a
+                 * fixed fraction of a cycle - uncompensated it is a constant
+                 * seven degrees, thirty-odd cents sharp everywhere. */
+                float hpPhase = 0.0f;
+                if (excite != 0) {
+                    const float rr = 1.0f - w * 0.125f;
+                    hpPhase = 0.5f * (3.14159265358979f - w) -
+                              std::atan2(rr * sw, 1.0f - rr * cw);
+                }
+                const float apDelay = -(lpPhase + apPhase + hpPhase) / w;
+
+                /* What one round trip actually costs the fundamental: the
+                 * declared loss, the damping filter's magnitude at f0, and
+                 * the loop highpass. The servo used to replace only the
+                 * first, and the damp filter at BOWED's own BRIGHT of 0.42
+                 * eats 28% per trip at note 84 - which is why the bow died
+                 * above roughly 740 Hz at dark settings while the same code
+                 * sang at BRIGHT 0.55. A bow replaces what the string
+                 * loses, all of it, or it is not a bow. */
+                const float bd = 1.0f - dampAU;
+                const float dampMag = dampAU /
+                    std::sqrt(1.0f - 2.0f * bd * cw + bd * bd);
 
                 /* The second string rings half again as long. Strings in a
                  * course are coupled through the bridge and trade energy,
@@ -846,9 +937,36 @@ public:
                         x = y;
                     }
 
-                    damp[c][k].a = dampA;
+                    damp[c][k].a = dampAU;
                     x = damp[c][k].lp(x);
                     x *= loopGain[k];
+
+                    /* Driven exciters only: the loop itself must not be
+                     * able to hold a displacement. DC-blocking what the bow
+                     * and reed inject is not enough - measured, the onset
+                     * step charges the loop, and the injection's own
+                     * highpass then feeds the decay just fast enough to
+                     * hold it: the bow sat at 1.05 V, crest factor 1.01, a
+                     * constant that pinned the level servo full-negative so
+                     * no oscillation could ever start. A real string cannot
+                     * hold a displacement either; the bridge terminates it.
+                     *
+                     * The corner TRACKS THE NOTE, an eighth of it. At a
+                     * fixed 3 Hz the exciter pumps offset per round trip -
+                     * per second, proportional to f0 - faster than the
+                     * blocker bleeds it, and above C5 the blocker itself
+                     * became the oscillator: note 72 measured as a smooth
+                     * 40 Hz relaxation with no sign of 523 Hz in it at all.
+                     * An eighth keeps the bleed ahead of the pump at every
+                     * pitch and costs 0.8% of the fundamental's amplitude.
+                     *
+                     * The hammer is left alone - its burst is over before
+                     * DC could accumulate, and its decay tail must not pay
+                     * a highpass it does not need. */
+                    if (excite != 0) {
+                        loopDc[c][k].r = 1.0f - w * 0.125f;
+                        x = loopDc[c][k].step(x);
+                    }
 
                     float e = in(2).get(c, i) * 0.2f;
 
@@ -871,6 +989,18 @@ public:
                          * every position bows. Raising the drive instead made
                          * it worse: past the friction peak d*fric falls again,
                          * and the hair simply skates. */
+                        /* Rebuilt in the reed's image, because the shipped
+                         * version was not a note. Measured at C4 with the
+                         * BOWED rack's own settings, the output sat at
+                         * 1.0487 V and moved three ten-thousandths peak to
+                         * peak: the old servo term fed x - DC included -
+                         * straight back into a loop whose DC gain is near a
+                         * thousand, and every level-based check in the test
+                         * suite was green on that constant for a release.
+                         * Now everything injected goes through the DC block,
+                         * and the bound is the reed's: two-sided, on a 4 ms
+                         * amplitude tracker, so it pushes toward the target
+                         * from both sides instead of fading near it. */
                         const float fUse = 0.62f + 0.38f * force;
                         const float bowV = gate01[c] * (0.12f + 0.5f * fUse);
                         const float d    = bowV - x;
@@ -920,12 +1050,51 @@ public:
                          * the string is loud enough, so the note settles at a
                          * level FORCE chooses instead of wherever the clamp
                          * happens to be. */
-                        const float target = 0.22f + 0.55f * fUse;
-                        const float over = x / target;
-                        e += x * (1.0f - loopGain[k]) * 1.8f / (1.0f + over * over);
+                        {
+                            const float ax = std::fabs(x);
+                            rEnv[c][k] += (ax > rEnv[c][k] ? envK : envKd) *
+                                          (ax - rEnv[c][k]);
+                        }
+                        /* Tilted with the note the way the reed's is, and
+                         * sized against the real swing - the old 0.22..0.77
+                         * was sized against the DC-inflated signal and never
+                         * engaged. */
+                        const float target = (0.04f + 0.16f * force) *
+                                             std::sqrt(f0 * (1.0f / 261.6256f));
+                        const float over = rEnv[c][k] / target;
+                        const float sat  = 1.0f / (1.0f + over * over);
+                        /* Flat across the keyboard: the tracker scales with
+                         * the note instead, so the level loop's rate is
+                         * already held constant and the margin does not
+                         * have to buy stability by being too weak to work.
+                         * See envTau. */
+                        const float rMargin = 0.45f;
+                        /* Asymmetric on purpose. Above the target the servo
+                         * only has to beat a few percent of growth per trip;
+                         * given the full margin downward it overshoots
+                         * through the tracker's 4 ms lag and strangles the
+                         * note to denormals - measured at note 84 as exact
+                         * silence that would have taken seconds to regrow. */
+                        float bal = 2.0f * sat - 1.0f;
+                        if (bal < 0.0f) bal *= 0.3f;
+                        const float loss = clampf(1.0f - loopGain[k] *
+                                                  dampMag * 0.992f, 0.0f, 0.6f);
+                        const float srv  = x * (loss + rMargin) *
+                                           gate01[c] * bal;
 
-                        /* And the character: stick and slip. */
-                        e += excDc[c][k].step(d * fric) * (0.25f + 0.75f * fUse) * 0.5f;
+                        /* And a breath of noise, so silence is never a fixed
+                         * point the way it was for the old constant. */
+                        nz[c] = nz[c] * 1103515245u + 12345u;
+                        const float bnz = ((float)((int)(nz[c] >> 9) & 0x7fff) /
+                                           16384.0f - 1.0f) * 0.003f * gate01[c];
+
+                        /* Servo and stick-slip drive together through the DC
+                         * block, so nothing here can lean the string on the
+                         * bridge. The friction still reads the raw d - that
+                         * is what decides sticking from slipping - and with
+                         * the bow at rest it is what damps the release. */
+                        e += excDc[c][k].step(srv + bnz +
+                                              d * fric * (0.25f + 0.75f * fUse) * 0.5f);
                     } else if (excite == 2) {
                         /* A reed. The player's pressure pushes it open and the
                          * pipe's own pressure pushes it shut, so the valve is
@@ -964,7 +1133,11 @@ public:
                          * 523 Hz showed eight peaks within 3 dB spread over
                          * 120 Hz. Four milliseconds is fast enough to speak
                          * and far too slow to distort. */
-                        rEnv[c][k] += envK * (std::fabs(x) - rEnv[c][k]);
+                        {
+                            const float ax = std::fabs(x);
+                            rEnv[c][k] += (ax > rEnv[c][k] ? envK : envKd) *
+                                          (ax - rEnv[c][k]);
+                        }
                         /* Tilted against the note: with a flat target the
                          * bottom of the keyboard settled 14 dB louder than
                          * the top, because the valve works the short string
@@ -992,9 +1165,14 @@ public:
                          * than middle C. Loss + 0.45 speaks in a handful of
                          * round trips at any pitch and holds the level where
                          * rTarget says. */
-                        const float rServo = (1.0f - loopGain[k]) + 0.45f;
-                        const float srv = x * rServo * gate01[c] *
-                                          (2.0f * sat - 1.0f);
+                        /* Flat with the note for the same reason the bow's
+                         * margin is - see rMargin and envTau there. */
+                        const float rServo = clampf(1.0f - loopGain[k] *
+                                                    dampMag * 0.992f, 0.0f, 0.6f) +
+                            0.45f;
+                        float rBal = 2.0f * sat - 1.0f;
+                        if (rBal < 0.0f) rBal *= 0.3f;   /* see the bow's bal */
+                        const float srv = x * rServo * gate01[c] * rBal;
 
                         /* And the character: the valve chopping the flow, and
                          * a little breath. Same bound, so the valve cannot
@@ -1011,7 +1189,7 @@ public:
                                                0.012f * br * mouth) * sat);
                     }
 
-                    if (excite == 0 && burst[c] > 0) {
+                    if (burst[c] > 0) {
                         /* A raised cosine, not noise.
                          *
                          * The first version excited the string with filtered
@@ -1028,7 +1206,13 @@ public:
                         const float w = 0.5f - 0.5f * std::cos(6.2831853f * t);
                         nz[c] = nz[c] * 1103515245u + 12345u;
                         const float r = (float)((int)(nz[c] >> 9) & 0x7fff) / 16384.0f - 1.0f;
-                        e += (w + 0.035f * r * w) * vel[c] * 0.55f;
+                        /* The full strike for the hammer; for the driven
+                         * exciters a third of it, as the seed that puts the
+                         * note's own frequency into the loop ahead of
+                         * anything slower - which is what decides who wins
+                         * the race the comment above describes. */
+                        e += (w + 0.035f * r * w) * vel[c] *
+                             (excite == 0 ? 0.55f : 0.18f);
                     }
 
                     line[c][k].write(x + e);
@@ -1065,6 +1249,9 @@ private:
      * either; the bridge terminates it. Only the continuous exciters use
      * this: a hammer's burst is over before DC could accumulate. */
     DCBlock excDc[BS_MAX_POLY][2];
+    /* In the loop itself, for the driven exciters - see the comment at its
+     * step() call. */
+    DCBlock loopDc[BS_MAX_POLY][2];
     /* What the reed's level servo reads. Bounding on the raw sample was an
      * injection of everything - see the comment at the servo. */
     float   rEnv[BS_MAX_POLY][2];
