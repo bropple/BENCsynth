@@ -92,8 +92,13 @@ bool wavLoad(const char *path, WavData *out, std::string *err, int maxSeconds)
         if (std::memcmp(ch, "fmt ", 4) == 0) {
             unsigned char fmt[40];
             const unsigned want = size < sizeof fmt ? size : (unsigned)sizeof fmt;
+            /* Sixteen bytes is the whole classic fmt chunk. A shorter one
+             * used to be read anyway, and the sample width came off
+             * uninitialised stack. */
+            if (want < 16) { std::fclose(f); return Fail::no(err, "WAV header makes no sense"); }
             if (std::fread(fmt, 1, want, f) != want) break;
-            if (size > want) std::fseek(f, (long)(size - want), SEEK_CUR);
+            /* Word alignment applies to this chunk like any other. */
+            if (size > want) std::fseek(f, (long)(size - want + (size & 1)), SEEK_CUR);
 
             unsigned tag = rd16(fmt);
             channels = (int)rd16(fmt + 2);
@@ -110,12 +115,31 @@ bool wavLoad(const char *path, WavData *out, std::string *err, int maxSeconds)
             haveFmt = true;
         } else if (std::memcmp(ch, "data", 4) == 0) {
             if (!haveFmt) { std::fclose(f); return Fail::no(err, "WAV has no format chunk"); }
-            if (channels < 1 || rate < 1.0) { std::fclose(f); return Fail::no(err, "WAV header makes no sense"); }
+            /* The rate is bounded above as well as below: it sizes the
+             * allocation cap, and a crafted four-billion-hertz header used
+             * to turn that cap into an out-of-memory. Twice 384 kHz covers
+             * every real file. */
+            if (channels < 1 || rate < 1.0 || rate > 768000.0) { std::fclose(f); return Fail::no(err, "WAV header makes no sense"); }
             const int bytes = bits / 8;
             if (bytes < 1 || bytes > 8) { std::fclose(f); return Fail::no(err, "unsupported sample width"); }
 
-            long frames = (long)(size / (unsigned)(bytes * channels));
-            const long cap = (long)(rate * (double)maxSeconds);
+            /* The header's opinion of the data size, capped by how many
+             * bytes the file actually has left. The allocation below used
+             * to trust the header alone, and a hundred-byte file claiming a
+             * four-gigabyte data chunk allocated all of it up front - the
+             * short-read recovery in the loop shrank it again, but only
+             * after the damage. 64-bit arithmetic throughout, because on
+             * Windows long is 32 bits and these products overflow it. */
+            const long long pos = (long long)std::ftell(f);
+            std::fseek(f, 0, SEEK_END);
+            const long long end = (long long)std::ftell(f);
+            std::fseek(f, (long)pos, SEEK_SET);
+            const long long avail = end > pos ? end - pos : 0;
+
+            long long frames = (long long)(size / (unsigned)(bytes * channels));
+            const long long inFile = avail / (long long)(bytes * channels);
+            if (frames > inFile) frames = inFile;
+            const long long cap = (long long)(rate * (double)maxSeconds);
             bool truncated = false;
             if (frames > cap) { frames = cap; truncated = true; }
             if (frames < 1) { std::fclose(f); return Fail::no(err, "the file has no audio in it"); }
@@ -128,7 +152,7 @@ bool wavLoad(const char *path, WavData *out, std::string *err, int maxSeconds)
              * file at once: a long file at 32 bits and eight channels is a lot
              * of memory to hold twice. */
             std::vector<unsigned char> row((size_t)(bytes * channels));
-            for (long i = 0; i < frames; i++) {
+            for (long long i = 0; i < frames; i++) {
                 if (std::fread(&row[0], 1, row.size(), f) != row.size()) {
                     out->frames = (int)i;
                     out->samples.resize((size_t)i * 2);

@@ -954,6 +954,81 @@ static void test_grand_tour()
  * That was the point of putting it there: text is already written to the patch
  * file and already crosses to the plugin with the rack, so a sampler in a
  * saved project finds its file again with nothing added to either. */
+/* WAVs that lie. The sampler loads whatever file a person points it at, so
+ * the header fields are attacker-controlled: a hundred-byte file claiming a
+ * four-gigabyte data chunk used to allocate all four gigabytes before the
+ * read loop noticed, a four-billion-hertz rate blew the allocation cap the
+ * same way, and a fmt chunk shorter than sixteen bytes handed the decoder
+ * a sample width off uninitialised stack. */
+static void test_wav_hostile()
+{
+    std::printf("hostile wav headers\n");
+
+    struct W {
+        static void u32(std::FILE *g, unsigned v)
+        { unsigned char b[4] = { (unsigned char)v, (unsigned char)(v >> 8),
+                                 (unsigned char)(v >> 16), (unsigned char)(v >> 24) };
+          std::fwrite(b, 1, 4, g); }
+        static void u16(std::FILE *g, unsigned v)
+        { unsigned char b[2] = { (unsigned char)v, (unsigned char)(v >> 8) };
+          std::fwrite(b, 1, 2, g); }
+        static void fmt(std::FILE *g, unsigned rate)
+        {
+            std::fwrite("fmt ", 1, 4, g); u32(g, 16);
+            u16(g, 1); u16(g, 1); u32(g, rate);
+            u32(g, rate); u16(g, 1); u16(g, 8);
+        }
+    };
+    const char *path = "bencsynth-test-hostile.wav";
+    WavData w;
+    std::string why;
+
+    /* A tiny file whose data chunk claims four gigabytes. It must load only
+     * what is there, not allocate what is claimed. */
+    {
+        std::FILE *f = std::fopen(path, "wb");
+        std::fwrite("RIFF", 1, 4, f); W::u32(f, 0xFFFFFFF0u);
+        std::fwrite("WAVE", 1, 4, f);
+        W::fmt(f, 48000);
+        std::fwrite("data", 1, 4, f); W::u32(f, 0xFFFFFF00u);
+        for (int i = 0; i < 32; i++) std::fputc(128, f);
+        std::fclose(f);
+
+        const bool okLoad = wavLoad(path, &w, &why);
+        okf(okLoad && w.frames == 32,
+            "a data chunk claiming 4 GB loads the %.0f frames the file has, "
+            "expected %.0f", (double)w.frames, 32.0);
+    }
+
+    /* A rate no converter ever wrote sizes the allocation cap; refuse it. */
+    {
+        std::FILE *f = std::fopen(path, "wb");
+        std::fwrite("RIFF", 1, 4, f); W::u32(f, 1000);
+        std::fwrite("WAVE", 1, 4, f);
+        W::fmt(f, 0xEE6B2800u);            /* four billion hertz */
+        std::fwrite("data", 1, 4, f); W::u32(f, 64);
+        for (int i = 0; i < 64; i++) std::fputc(128, f);
+        std::fclose(f);
+        ok(!wavLoad(path, &w, &why), "a four-billion-hertz rate is refused");
+    }
+
+    /* A fmt chunk with eight bytes: everything after them used to come off
+     * the stack. */
+    {
+        std::FILE *f = std::fopen(path, "wb");
+        std::fwrite("RIFF", 1, 4, f); W::u32(f, 1000);
+        std::fwrite("WAVE", 1, 4, f);
+        std::fwrite("fmt ", 1, 4, f); W::u32(f, 8);
+        W::u16(f, 1); W::u16(f, 1); W::u32(f, 48000);
+        std::fwrite("data", 1, 4, f); W::u32(f, 64);
+        for (int i = 0; i < 64; i++) std::fputc(128, f);
+        std::fclose(f);
+        ok(!wavLoad(path, &w, &why), "a truncated fmt chunk is refused");
+    }
+
+    std::remove(path);
+}
+
 static void test_sample_module()
 {
     std::printf("sampler\n");
@@ -1779,6 +1854,7 @@ int main()
     test_arp();
     test_clock_and_func();
     test_grand_tour();
+    test_wav_hostile();
     test_sample_module();
     test_macro_cc();
     test_midi_decode();
