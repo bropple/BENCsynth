@@ -1579,6 +1579,76 @@ static void test_reed_speaks()
     }
 }
 
+/* NSEQ - the deliberate half of per-voice expression.
+ *
+ * VOICE rolls a die per note; NSEQ is the version where the rack decides:
+ * the notes themselves advance a row of steps, and each note keeps the step
+ * it took for as long as it sounds. So the test is about identity - three
+ * notes of a chord get three different values, hold them, the next note gets
+ * the next step, and RESET starts the bar again. */
+static void test_nseq()
+{
+    std::printf("nseq aims a value at a note\n");
+
+    Engine e;
+    e.init(48000.0f);
+    e.clear();
+    const int kbd  = e.addModule("KBD", 20, 20);
+    const int nseq = e.addModule("NSEQ", 200, 20);
+    const int mac  = e.addModule("MACRO", 400, 20);
+    e.connect(kbd, 2, nseq, 0);          /* TRIG: a new note takes a step */
+    e.connect(mac, 0, nseq, 1);          /* macro 1 stands in for the bar */
+
+    Module *m = e.patch.module(nseq);
+    Module *mm = e.patch.module(mac);
+    for (int i = 0; i < 8; i++) m->params[(size_t)i].value = (float)(i + 1);
+    m->params[8].value = 8.0f;           /* LEN */
+
+    std::vector<float> buf(512 * 2);
+    e.noteOn(60, 0.9f);
+    e.noteOn(64, 0.9f);
+    e.noteOn(67, 0.9f);
+    e.render(&buf[0], 512);
+
+    const Signal &o = m->outs[0];
+    okf(o.channels >= 3, "three notes made %.0f channels, expected at least "
+        "%.0f", (double)o.channels, 3.0);
+    bool chord = std::fabs(o.v[0][BS_BLOCK - 1] - 1.0f) < 0.01f &&
+                 std::fabs(o.v[1][BS_BLOCK - 1] - 2.0f) < 0.01f &&
+                 std::fabs(o.v[2][BS_BLOCK - 1] - 3.0f) < 0.01f;
+    okf(chord, "a chord's members took steps 1, 2 and 3 (first is %.2f, "
+        "wanted %.2f)", (double)o.v[0][BS_BLOCK - 1], 1.0);
+
+    /* Held, not refreshed: a second of rendering must change nothing. */
+    e.render(&buf[0], 512);
+    chord = std::fabs(o.v[0][BS_BLOCK - 1] - 1.0f) < 0.01f &&
+            std::fabs(o.v[1][BS_BLOCK - 1] - 2.0f) < 0.01f &&
+            std::fabs(o.v[2][BS_BLOCK - 1] - 3.0f) < 0.01f;
+    ok(chord, "and held them while the notes sound");
+
+    /* The next note takes the next step. */
+    e.noteOn(72, 0.9f);
+    e.render(&buf[0], 512);
+    int fours = 0;
+    for (int c = 0; c < o.channels; c++)
+        if (std::fabs(o.v[c][BS_BLOCK - 1] - 4.0f) < 0.01f) fours++;
+    okf(fours == 1, "the fourth note took step 4 on %.0f channel(s), "
+        "expected %.0f", (double)fours, 1.0);
+
+    /* RESET is the bar: after it, the next note is step 1 again. */
+    mm->params[0].value = 1.0f;          /* rising edge on RESET */
+    e.render(&buf[0], 512);
+    e.noteOff(60);
+    e.render(&buf[0], 512);
+    e.noteOn(59, 0.9f);
+    e.render(&buf[0], 512);
+    int ones = 0;
+    for (int c = 0; c < o.channels; c++)
+        if (std::fabs(o.v[c][BS_BLOCK - 1] - 1.0f) < 0.01f) ones++;
+    okf(ones >= 1, "after the bar resets, %.0f channel(s) hold step 1, "
+        "expected at least %.0f", (double)ones, 1.0);
+}
+
 static void test_note_expression()
 {
     std::printf("per-note expression\n");
@@ -1716,6 +1786,7 @@ int main()
     test_string_exciters();
     test_bow_across_the_range();
     test_reed_speaks();
+    test_nseq();
     test_note_expression();
     test_sample_rates();
     test_patchfile();

@@ -3,7 +3,7 @@
 A polyphonic virtual analog modular synth. C++17 + raylib, physics-based patch
 cables. Ships as a standalone program and as CLAP / VST3 / AU / LV2 plugins.
 
-Thirty-two module types, thirty-eight racks.
+Thirty-three module types, thirty-eight racks.
 
 This file is for the things that are **expensive to re-derive** — the release
 sequence, and the traps that have actually cost a build. It is not a tour of
@@ -27,7 +27,7 @@ style only — do not copy code from it.
 ## Before you commit anything
 
 ```sh
-make && make test                     # 572 checks
+make && make test                     # 579 checks
 make clap  && make clap-test          #  74
 make lv2   && make lv2-test           #  27
 make ipc-test && xvfb-run -a --server-args="-screen 0 1400x900x24" \

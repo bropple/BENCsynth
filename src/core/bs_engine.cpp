@@ -2515,6 +2515,7 @@ void presetGrandTour(Builder &b)
 
     b.row(R4);
     const int func   = b.put("FUNC");
+    const int nseq   = b.put("NSEQ");
     const int logic  = b.put("LOGIC");
     const int sw     = b.put("SWITCH");
     const int fold   = b.put("FOLD");
@@ -2549,6 +2550,14 @@ void presetGrandTour(Builder &b)
 
     b.wire(str, 0, svf, 0);
     b.wire(func, 0, svf, 1);           /* cycling, so it is an LFO here */
+
+    /* The deliberate half of per-voice expression: the notes themselves
+     * advance a row of steps, and the fourth note of every bar opens the
+     * filter harder than its neighbours. The sequencer's gate is the note;
+     * its end-of-cycle is the bar. */
+    b.wire(seq, 1, nseq, 0);
+    b.wire(seq, 2, nseq, 1);
+    b.wire(nseq, 0, svf, 2);
 
     /* Four things to be, one at a time, on a rhythm from the logic. */
     b.wire(svf, 0, sw, 2);
@@ -2586,6 +2595,10 @@ void presetGrandTour(Builder &b)
     b.set(str, 3, 0.62f);               /* BRIGHT */
     b.set(str, 4, 0.50f);               /* INHARM - about a real piano's */
     b.set(svf, 0, 900.0f); b.set(svf, 1, 0.35f); b.set(svf, 2, 1.4f);
+    b.set(svf, 3, 0.22f);               /* CV2: what NSEQ's steps mean here */
+    b.set(nseq, 0, 1.0f); b.set(nseq, 1, 1.0f);
+    b.set(nseq, 2, 1.0f); b.set(nseq, 3, 8.0f);   /* the fourth, harder */
+    b.set(nseq, 8, 4.0f);               /* a four-step bar over eight notes */
     b.set(func, 0, 0.9f); b.set(func, 1, 1.6f); b.set(func, 4, 1.0f);  /* CYCLE */
     b.set(fold, 0, 1.7f);
     b.set(crush, 0, 9.0f); b.set(crush, 1, 12000.0f); b.set(crush, 2, 0.45f);
@@ -2749,7 +2762,7 @@ const PresetEntry PRESETS[] = {
       presetAxel },
 
     { { "GRAND TOUR",   "every module in the set, patched into one instrument", 0,
-      "GRAND TOUR\n\nEvery module type in the rack, working at once.\n\nThe signal path is ordinary: three oscillators through a mixer into the ladder, two envelopes, a delay and a reverb. What is not ordinary is everything driving it.\n\nThe keyboard never reaches the oscillators. It reaches an ARP, and the arpeggiator's clock is what plays the rack. That same clock is sent through a MULT to both envelopes AND to the noise module's sample-and-hold, so every arpeggio step also grabs a new random voltage - which an ATT scales down to something musical and sends to the filter's second CV input.\n\nA second LFO bends the delay's TIME, which is why the echoes wow like tape.\n\nTRY: hold a chord and change the ARP's MODE and OCT. Then turn the ATT's AMT 1 to zero and hear the filter stop jumping.\n\nTHE OTHER HALF: the bottom two rows are a second instrument that shares nothing with this one but the output. Turn the CLK's RUN on. A sequence steps, a QUANT rounds it to A minor pentatonic, a SLEW rounds the corners off that, and it strikes a STRING - a real one, modelled, with partials stretched sharp the way a piano's are. From there a SWITCH picks between four sources on a rhythm two clock divisions make by disagreeing through a LOGIC, and what comes out is folded, crushed and run through a CHORUS.\n\nTRY: with the clock running, turn the STRING's INHARM from 0 to 1. At the bottom it is a guitar harmonic; halfway it is a piano; at the top it is a bell. That one knob is the difference, and no filter can imitate it." },
+      "GRAND TOUR\n\nEvery module type in the rack, working at once.\n\nThe signal path is ordinary: three oscillators through a mixer into the ladder, two envelopes, a delay and a reverb. What is not ordinary is everything driving it.\n\nThe keyboard never reaches the oscillators. It reaches an ARP, and the arpeggiator's clock is what plays the rack. That same clock is sent through a MULT to both envelopes AND to the noise module's sample-and-hold, so every arpeggio step also grabs a new random voltage - which an ATT scales down to something musical and sends to the filter's second CV input.\n\nA second LFO bends the delay's TIME, which is why the echoes wow like tape.\n\nTRY: hold a chord and change the ARP's MODE and OCT. Then turn the ATT's AMT 1 to zero and hear the filter stop jumping.\n\nTHE OTHER HALF: the bottom two rows are a second instrument that shares nothing with this one but the output. Turn the CLK's RUN on. A sequence steps, a QUANT rounds it to A minor pentatonic, a SLEW rounds the corners off that, and it strikes a STRING - a real one, modelled, with partials stretched sharp the way a piano's are. From there a SWITCH picks between four sources on a rhythm two clock divisions make by disagreeing through a LOGIC, and what comes out is folded, crushed and run through a CHORUS. An NSEQ rides underneath: the notes themselves advance its steps, and the fourth note of every bar opens the filter harder than its neighbours - per-note expression with nobody touching anything.\n\nTRY: with the clock running, turn the STRING's INHARM from 0 to 1. At the bottom it is a guitar harmonic; halfway it is a piano; at the top it is a bell. That one knob is the difference, and no filter can imitate it." },
       presetGrandTour }
 };
 

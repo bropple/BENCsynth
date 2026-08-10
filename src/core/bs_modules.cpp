@@ -2762,6 +2762,79 @@ private:
 };
 
 /* ================================================================== *
+ * NSEQ - a value aimed at a note
+ *
+ * VOICE hands every voice an index, an age and a random number - values the
+ * rack rolls. This is the deliberate half of per-voice expression: a row of
+ * steps advanced not by a clock but by the notes themselves, so "the fourth
+ * note of this bar, harder" is a knob on a panel.
+ *
+ * Each rising edge on TRIG takes the next step and latches it onto the
+ * channel the edge arrived on, where it stays for the life of that note -
+ * so a chord's members each sit differently, which is the same thing MPE
+ * pressure buys except the rack is playing itself. RESET is the bar.
+ *
+ * Feed TRIG from the keyboard's TRIG rather than its GATE: TRIG also fires
+ * when a held voice is stolen for a new note, which is exactly when the new
+ * note deserves a fresh step. From a sequencer, the GATE is the note.
+ * ================================================================== */
+
+class ModuleNseq : public Module {
+public:
+    ModuleNseq()
+    {
+        configure("NSEQ", "NSEQ", 8, 4);
+        static const char *const N[8] = { "1","2","3","4","5","6","7","8" };
+        for (int i = 0; i < 8; i++)
+            addKnob(N[i], 0.0f, 10.0f, 5.0f, "%.1f V");
+        addKnob("LEN", 1.0f, 8.0f, 4.0f, "%.0f", PC_LIN, 1.0f);
+
+        addInput("TRIG");
+        addInput("RESET");
+        addOutput("OUT");
+    }
+
+    void reset()
+    {
+        count = 0;
+        lastRst = 0.0f;
+        for (int c = 0; c < BS_MAX_POLY; c++) { held[c] = 0.0f; lastT[c] = 0.0f; }
+    }
+
+    void process()
+    {
+        const int ch = polyIn();
+        setAllOutputChannels(ch);
+        int len = (int)(pv(8) + 0.5f);
+        if (len < 1) len = 1;
+        if (len > 8) len = 8;
+
+        for (int i = 0; i < BS_BLOCK; i++) {
+            const float r = in(1).get(0, i);
+            if (r > 1.0f && lastRst <= 1.0f) count = 0;
+            lastRst = r;
+
+            /* Notes landing on the same sample - a chord - take successive
+             * steps in channel order, which is the order the allocator
+             * handed them out. */
+            for (int c = 0; c < ch; c++) {
+                const float t = in(0).get(c, i);
+                if (t > 1.0f && lastT[c] <= 1.0f) {
+                    held[c] = pv((int)(count % (unsigned)len));
+                    count++;
+                }
+                lastT[c] = t;
+                outs[0].v[c][i] = held[c];
+            }
+        }
+    }
+
+private:
+    unsigned count;
+    float    held[BS_MAX_POLY], lastT[BS_MAX_POLY], lastRst;
+};
+
+/* ================================================================== *
  * Registry
  * ================================================================== */
 
@@ -2799,7 +2872,10 @@ static const ModuleType TYPES[] = {
     { "SWITCH","SWITCH",     "UTILITY",makeT<ModuleSwitch> },
     { "CHORUS","CHORUS",     "EFFECT", makeT<ModuleChorus> },
     { "PAN",   "PAN",        "UTILITY",makeT<ModulePan>   },
-    { "OUT",   "OUT",        "OUTPUT", makeT<ModuleOut>   }
+    { "OUT",   "OUT",        "OUTPUT", makeT<ModuleOut>   },
+    /* Appended, never inserted: the registry's order is nothing a patch file
+     * depends on, but keeping the habit costs nothing. */
+    { "NSEQ",  "NSEQ",       "UTILITY",makeT<ModuleNseq>  }
 };
 
 int moduleTypeCount() { return (int)(sizeof TYPES / sizeof TYPES[0]); }
