@@ -1058,8 +1058,14 @@ public:
                         /* Tilted with the note the way the reed's is, and
                          * sized against the real swing - the old 0.22..0.77
                          * was sized against the DC-inflated signal and never
-                         * engaged. */
-                        const float target = (0.04f + 0.16f * force) *
+                         * engaged.
+                         *
+                         * The scale is set against the hammer on the same
+                         * string, which averages 0.98 V peak across the
+                         * keyboard: a rack that switches EXCITE should not
+                         * also change volume by ten decibels. The reed
+                         * already lands at 0.81 and is left alone. */
+                        const float target = (0.076f + 0.304f * force) *
                                              std::sqrt(f0 * (1.0f / 261.6256f));
                         const float over = rEnv[c][k] / target;
                         const float sat  = 1.0f / (1.0f + over * over);
