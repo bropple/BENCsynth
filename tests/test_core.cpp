@@ -1498,6 +1498,87 @@ static void test_string_exciters()
     }
 }
 
+/* The reed has to speak, not swell - and at every FORCE, not just the top.
+ *
+ * The exciter test above runs at FORCE 0.7, and the old reed happened to
+ * sustain there; below about 0.7 it spoke its pressure step and then died
+ * away to nothing over eight seconds, and at 1.0 it swelled to its level
+ * over a second and three quarters. Real reeds start in tens of
+ * milliseconds. So this one runs at FORCE 0.4, inside the old dead zone,
+ * and asks for all three things at once: the first fifth of a second is
+ * already at the held level, the held level is still there after seven
+ * seconds, and the note is the note that was played - the first servo that
+ * fixed the attack pulled the pitch thirty cents and then stopped being
+ * periodic at all above middle C. */
+static void test_reed_speaks()
+{
+    std::printf("the reed speaks\n");
+
+    Engine e;
+    e.init(48000.0f);
+    e.clear();
+    const int kbd = e.addModule("KBD", 20, 20);
+    const int str = e.addModule("STRING", 200, 20);
+    const int out = e.addModule("OUT", 400, 20);
+    e.patch.connect(kbd, 0, str, 0);
+    e.patch.connect(kbd, 1, str, 1);
+    e.patch.connect(str, 0, out, 0);
+    Module *m = e.patch.module(str);
+    m->params[7].value = 2.0f;      /* BLOW */
+    m->params[8].value = 0.4f;      /* FORCE, in the old dead zone */
+
+    e.noteOn(69, 0.9f, 0);          /* A4: above middle C, where the first
+                                     * fix warbled */
+
+    std::vector<float> buf(512), mono;
+    for (int i = 0; i < 384000; i += 256) {
+        e.render(&buf[0], 256);
+        for (int k = 0; k < 256; k++) mono.push_back(buf[(size_t)k * 2]);
+    }
+
+    struct L {
+        static double rms(const std::vector<float> &v, size_t a, size_t b)
+        {
+            double s = 0; size_t n = 0;
+            for (size_t i = a; i < b && i < v.size(); i++) { s += v[i] * v[i]; n++; }
+            return n ? std::sqrt(s / (double)n) : 0.0;
+        }
+    };
+    const double attack = L::rms(mono, 2400, 9600);      /* 0.05 - 0.20 s */
+    const double held   = L::rms(mono, 192000, 216000);  /* 4.0  - 4.5  s */
+    const double late   = L::rms(mono, 355200, 374400);  /* 7.4  - 7.8  s */
+
+    std::printf("  attack %.4f held %.4f late %.4f\n", attack, held, late);
+    okf(held > 1e-3, "the note is there at all: %.4f, wanted over %.3f",
+        held, 1e-3);
+    okf(attack > held * 0.5, "it speaks rather than swells: the first fifth "
+        "of a second is %.2f of the held level, wanted over %.1f",
+        held > 0 ? attack / held : 0.0, 0.5);
+    okf(late > held * 0.75, "and holds while held: %.2f of the 4 s level "
+        "after 7.4 s, wanted over %.2f", held > 0 ? late / held : 0.0, 0.75);
+
+    /* Pitch by direct correlation - Goertzel drifts over a window this long.
+     * The strongest line within +-60 cents of A4 must sit within +-12. */
+    {
+        const double fExp = 440.0;
+        double bestF = fExp, bestM = 0.0;
+        for (int c = -60; c <= 60; c += 2) {
+            const double f = fExp * std::pow(2.0, c / 1200.0);
+            const double w = 2.0 * 3.14159265358979 * f / 48000.0;
+            double re = 0, im = 0;
+            for (size_t i = 192000; i < 374400 && i < mono.size(); i++) {
+                re += mono[i] * std::cos(w * (double)i);
+                im -= mono[i] * std::sin(w * (double)i);
+            }
+            const double mm = re * re + im * im;
+            if (mm > bestM) { bestM = mm; bestF = f; }
+        }
+        const double cents = 1200.0 * std::log(bestF / fExp) / std::log(2.0);
+        okf(std::fabs(cents) <= 12.0, "and is in tune: %+.0f cents of A4, "
+            "wanted within %.0f", cents, 12.0);
+    }
+}
+
 static void test_note_expression()
 {
     std::printf("per-note expression\n");
@@ -1634,6 +1715,7 @@ int main()
     test_voice_module();
     test_string_exciters();
     test_bow_across_the_range();
+    test_reed_speaks();
     test_note_expression();
     test_sample_rates();
     test_patchfile();

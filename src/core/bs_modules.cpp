@@ -713,7 +713,7 @@ public:
                 for (int a = 0; a < AP; a++) ap1[c][k][a] = ap2[c][k][a] = 0.0f;
             }
             last[c] = 0.0f; burst[c] = 0; burstLen[c] = 1; gate01[c] = 0.0f;
-            for (int k = 0; k < 2; k++) { excDc[c][k] = DCBlock(); excDc[c][k].setSampleRate(sr); }
+            for (int k = 0; k < 2; k++) { excDc[c][k] = DCBlock(); excDc[c][k].setSampleRate(sr); rEnv[c][k] = 0.0f; }
             vel[c] = 0.0f; nz[c] = 12345 + c * 7919;
         }
     }
@@ -747,6 +747,9 @@ public:
         OnePole shape;
         shape.setCutoff(400.0f + bright * bright * 11000.0f, sr);
         const float dampA = shape.a;
+
+        /* The reed's amplitude tracker: settles in about 4 ms. */
+        const float envK = 1.0f - std::exp(-1.0f / (0.004f * sr));
 
         for (int c = 0; c < ch; c++) {
             for (int i = 0; i < BS_BLOCK; i++) {
@@ -938,30 +941,74 @@ public:
                         if (reed < -0.2f) reed = -0.2f;
                         nz[c] = nz[c] * 1103515245u + 12345u;
                         const float br = (float)((int)(nz[c] >> 9) & 0x7fff) / 16384.0f - 1.0f;
-                        /* Quieter than it wants to be: a reed drives a loop
-                         * far harder than a hammer does, and this came out
-                         * three times the level of the struck string. */
-                        /* Bounded, and not by the output clamp.
+
+                        /* Two parts, the same two the bow has.
                          *
-                         * A reed is a relaxation oscillator: the amplitude it
-                         * settles at is set by where its nonlinearity
-                         * saturates, not by how hard it is driven - which is
-                         * why turning the drive down changed the level not at
-                         * all and the string sat on its 8 V rail for an eighth
-                         * of every cycle. Limiting what goes in bounds what
-                         * comes out. */
-                        /* Bounded the same way the bow is.
+                         * The first replaces what the loop loses, so the note
+                         * holds at a level FORCE chooses instead of what the
+                         * valve curve happens to sustain - measured, the old
+                         * reed spoke its pressure step and then died away to
+                         * 0.03 V over eight seconds at every FORCE below 0.7.
+                         * (1 - loopGain) is the loss, so the factor is
+                         * pitch-compensated for free; gate01 is what stops it
+                         * being a drone after the breath stops. The bound is
+                         * the bow's 1/(1+(x/target)^2), with the target in the
+                         * units x actually reaches - the old bound's target
+                         * sat at 0.9..3.1 over a signal of 0.1, so it never
+                         * did anything at all. */
+                        /* The bound reads a tracked amplitude, not the sample.
+                         * Bounding on instantaneous x flips the servo's sign
+                         * twice a cycle, which is an injection of everything;
+                         * below middle C the loop filtered it out, above it
+                         * the note stopped being a note - a 4-second FFT at
+                         * 523 Hz showed eight peaks within 3 dB spread over
+                         * 120 Hz. Four milliseconds is fast enough to speak
+                         * and far too slow to distort. */
+                        rEnv[c][k] += envK * (std::fabs(x) - rEnv[c][k]);
+                        /* Tilted against the note: with a flat target the
+                         * bottom of the keyboard settled 14 dB louder than
+                         * the top, because the valve works the short string
+                         * so much less. Half a power of frequency levels it
+                         * to within a few dB. */
+                        const float rTarget = (0.05f + 0.22f * force) *
+                                              std::sqrt(f0 * (1.0f / 261.6256f));
+                        const float rOver   = rEnv[c][k] / rTarget;
+                        const float sat     = 1.0f / (1.0f + rOver * rOver);
+                        /* (1-over^2)/(1+over^2), not the bow's 1/(1+over^2):
+                         * that one only fades toward zero, so the last few dB
+                         * arrive at twice the loop loss - measured, a 1.2 s
+                         * creep from half level to nine tenths. This goes
+                         * negative past the target, so it pushes toward it
+                         * from both sides at thirty times the loss, and the
+                         * note is simply there. */
+                        /* The loss replaced in full, plus a fixed margin that
+                         * outweighs the valve's own small-signal gain (about
+                         * 0.4 per trip at full FORCE). A margin proportional
+                         * to the loss was tried first and failed at both ends:
+                         * clamped low it could not out-vote the valve, so the
+                         * loudest corner of the knob range swelled to 2.7 V
+                         * over a second; clamped high the bottom of the
+                         * keyboard with DECAY at zero settled 11 dB louder
+                         * than middle C. Loss + 0.45 speaks in a handful of
+                         * round trips at any pitch and holds the level where
+                         * rTarget says. */
+                        const float rServo = (1.0f - loopGain[k]) + 0.45f;
+                        const float srv = x * rServo * gate01[c] *
+                                          (2.0f * sat - 1.0f);
+
+                        /* And the character: the valve chopping the flow, and
+                         * a little breath. Same bound, so the valve cannot
+                         * push the level past where the first term settles.
                          *
-                         * The reed's own saturation sets the amplitude, and
-                         * left alone it climbs: held for eight seconds the
-                         * string reached its 8 V rail, which two seconds of
-                         * measurement had not shown. This falls away as the
-                         * string gets loud, so the note settles instead. */
-                        const float rTarget = 0.9f + 2.2f * force;
-                        const float rOver = x / rTarget;
-                        e += excDc[c][k].step(softClip((dp * reed) * 1.2f) * 0.16f +
-                                              0.012f * br * mouth) /
-                             (1.0f + rOver * rOver);
+                         * Both terms go through the DC block, servo included.
+                         * Left out of it, the servo holds the string's DC at
+                         * the target as faithfully as its oscillation - the
+                         * note came out riding an offset the size of its own
+                         * swing, which is the leaning-on-the-bridge failure
+                         * the comment on excDc describes. */
+                        e += excDc[c][k].step(srv +
+                                              (softClip((dp * reed) * 1.2f) * 0.16f +
+                                               0.012f * br * mouth) * sat);
                     }
 
                     if (excite == 0 && burst[c] > 0) {
@@ -1018,6 +1065,9 @@ private:
      * either; the bridge terminates it. Only the continuous exciters use
      * this: a hammer's burst is over before DC could accumulate. */
     DCBlock excDc[BS_MAX_POLY][2];
+    /* What the reed's level servo reads. Bounding on the raw sample was an
+     * injection of everything - see the comment at the servo. */
+    float   rEnv[BS_MAX_POLY][2];
     unsigned nz[BS_MAX_POLY];
 };
 
