@@ -34,8 +34,30 @@ std::string bs_patch_to_string(bs::Engine *eng);
 int bs_patch_from_string(bs::Engine *eng, const char *text,
                          char *status, int cap);
 
-/* The same, through a file. */
+/* The same, through a file.
+ *
+ * A saved file carries the audio its rack refers to, appended after the text
+ * and a NUL: the loader in every version ever shipped parses the text as a C
+ * string and stops at the NUL, so an old build opens a new file and simply
+ * has no audio in it. Loading restores any sample whose path no longer opens
+ * into the user sample folder - which is what makes a .bencsynth something
+ * you can hand to somebody. */
 int bs_patch_save(bs::Engine *eng, const char *path, char *status, int cap);
 int bs_patch_load(bs::Engine *eng, const char *path, char *status, int cap);
+
+/* The audio-embedding machinery those two and the plugin's state share.
+ *
+ * bs_embed_audio walks the rack TEXT for X records naming files, and appends
+ * "BSAU" u32 count, then { u32 pathLen, path, u64 dataLen, data } per file,
+ * to `out`. Anything that does not open, or does not start "RIFF", is simply
+ * not embedded. Returns how many files it carried, capped at `budget` bytes
+ * of audio in total.
+ *
+ * bs_restore_audio is the other end: any SAMPLE module whose path did not
+ * open gets its file written into userSampleDir() and reloaded from there.
+ * Returns how many it brought back. */
+int bs_embed_audio(const std::string &rackText, std::string &out,
+                   unsigned long long budget);
+int bs_restore_audio(bs::Engine *eng, const char *p, size_t n);
 
 #endif /* BS_PATCHFILE_H */

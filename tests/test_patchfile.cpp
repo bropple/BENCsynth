@@ -12,6 +12,7 @@
 #include "bs_engine.h"
 #include "bs_patchfile.h"
 #include "bs_modules.h"
+#include "bs_racklib.h"
 #include "test_util.h"
 
 #include <cstdio>
@@ -303,6 +304,138 @@ void test_patchfile()
             (double)liveModules(e), (double)before);
         ok(bs_patch_from_string(&e, 0, status, (int)sizeof status) == 0,
            "a null string is refused rather than crashing");
+    }
+
+    /* Audio rides inside the file. A rack refers to its samples by path,
+     * which is useless the moment the rack is handed to somebody else - so
+     * the file carries the audio after the text and a NUL, and loading
+     * restores any sample whose path no longer opens. The NUL matters for
+     * the past as much as the future: every loader ever shipped parses the
+     * text as a C string and stops there, so an old build opens a new file
+     * and simply has no audio in it. */
+    {
+        const char *wavPath = "bs-test-tmp/bs-test-embed.wav";
+        {
+            const int rate = 44100, n = rate / 5;
+            std::vector<short> pcm((size_t)n * 2);
+            for (int i = 0; i < n; i++) {
+                const double v = std::sin(2.0 * 3.14159265358979 * 330.0 * i / rate);
+                pcm[(size_t)i * 2 + 0] = (short)(v * 20000.0);
+                pcm[(size_t)i * 2 + 1] = (short)(v * 20000.0);
+            }
+            FILE *f = std::fopen(wavPath, "wb");
+            ok(f != 0, "wrote the sample fixture");
+            if (f) {
+                struct P {
+                    static void u32(FILE *g, unsigned v)
+                    { unsigned char b[4] = { (unsigned char)v, (unsigned char)(v >> 8),
+                                             (unsigned char)(v >> 16), (unsigned char)(v >> 24) };
+                      std::fwrite(b, 1, 4, g); }
+                    static void u16(FILE *g, unsigned v)
+                    { unsigned char b[2] = { (unsigned char)v, (unsigned char)(v >> 8) };
+                      std::fwrite(b, 1, 2, g); }
+                };
+                const unsigned data = (unsigned)(pcm.size() * 2);
+                std::fwrite("RIFF", 1, 4, f); P::u32(f, 36 + data);
+                std::fwrite("WAVEfmt ", 1, 8, f); P::u32(f, 16);
+                P::u16(f, 1); P::u16(f, 2); P::u32(f, (unsigned)rate);
+                P::u32(f, (unsigned)rate * 4); P::u16(f, 4); P::u16(f, 16);
+                std::fwrite("data", 1, 4, f); P::u32(f, data);
+                std::fwrite(&pcm[0], 2, pcm.size(), f);
+                std::fclose(f);
+            }
+        }
+
+        /* Scoped, so the engine lets go of its shared copy before the load
+         * below: the sample cache keeps a file alive as long as any module
+         * holds it, and a cache hit would let the reload "work" with the
+         * restore broken. A rack handed to somebody else is a fresh process
+         * with a cold cache, and that is the case being tested. */
+        {
+            Engine e;
+            e.init(48000.0f);
+            e.clear();
+            const int smp = e.addModule("SAMPLE", 40, 60);
+            const int out = e.addModule("OUT", 300, 60);
+            e.connect(smp, 0, out, 0);
+            std::string why;
+            ok(e.loadSample(smp, wavPath, &why), "the fixture wav loads");
+            ok(bs_patch_save(&e, PATH, status, (int)sizeof status) != 0,
+               "a rack with a sample saved");
+        }
+
+        /* The file: text, a NUL, then the audio. */
+        std::string blob;
+        {
+            FILE *f = std::fopen(PATH, "rb");
+            char buf[4096]; size_t n;
+            while (f && (n = std::fread(buf, 1, sizeof buf, f)) > 0)
+                blob.append(buf, n);
+            if (f) std::fclose(f);
+        }
+        const size_t nul = blob.find('\0');
+        ok(nul != std::string::npos, "the saved file carries an audio section");
+        ok(nul + 5 < blob.size() && std::memcmp(&blob[nul + 1], "BSAU", 4) == 0,
+           "and it is the layout the plugin state uses");
+
+        /* What a build from before this feature does with the file: parse the
+         * same bytes as a C string. It must see the whole rack and nothing of
+         * the audio. */
+        {
+            Engine old;
+            old.init(48000.0f);
+            ok(bs_patch_from_string(&old, blob.c_str(), status,
+                                    (int)sizeof status) != 0,
+               "an old loader reads the new file");
+            okf(liveModules(old) == 2, "and sees %.0f modules, expected %.0f",
+                (double)liveModules(old), 2.0);
+        }
+
+        /* The source file is gone; the copy in the rack file is not. */
+        std::remove(wavPath);
+        const std::string dest = std::string(userSampleDir()) +
+                                 "/bs-test-embed.wav";
+        std::remove(dest.c_str());
+
+        Engine f;
+        f.init(48000.0f);
+        ok(bs_patch_load(&f, PATH, status, (int)sizeof status) != 0,
+           "the rack loaded with its source file deleted");
+        Module *m = 0;
+        for (int i = 0; i < f.patch.slotCount(); i++)
+            if (f.patch.module(i) && f.patch.module(i)->typeId == "SAMPLE")
+                m = f.patch.module(i);
+        ok(m != 0, "the sampler came back");
+        ok(m && m->textLoaded(), "and its audio came back out of the rack file");
+
+        /* And it sounds - nothing on TRIG means play. */
+        if (m) {
+            std::vector<float> buf(24000 * 2, 0.0f);
+            f.render(&buf[0], 24000);
+            double s = 0.0;
+            for (size_t i = 0; i < buf.size(); i++) s += (double)buf[i] * buf[i];
+            const double rms = std::sqrt(s / (double)buf.size());
+            okf(rms > 0.001, "the restored sample plays at rms %.4f, "
+                "expected over %.3f", rms, 0.001);
+        }
+        std::remove(dest.c_str());
+
+        /* A rack with no samples saves the bytes it always did: no NUL. */
+        {
+            Engine g;
+            g.init(48000.0f);
+            g.buildDefaultPatch();
+            ok(bs_patch_save(&g, PATH, status, (int)sizeof status) != 0,
+               "a rack with no samples saved");
+            std::string b2;
+            FILE *fp = std::fopen(PATH, "rb");
+            char buf[4096]; size_t n;
+            while (fp && (n = std::fread(buf, 1, sizeof buf, fp)) > 0)
+                b2.append(buf, n);
+            if (fp) std::fclose(fp);
+            ok(b2.find('\0') == std::string::npos,
+               "and its file carries no audio section");
+        }
     }
 
     std::remove(PATH);

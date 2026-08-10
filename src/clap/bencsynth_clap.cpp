@@ -560,155 +560,11 @@ static const clap_plugin_params_t EXT_PARAMS = {
  *     u32 pathLen, path, u64 dataLen, data      (repeated)
  * ------------------------------------------------------------------ */
 
+/* The machinery lives in the core now - bs_embed_audio / bs_restore_audio in
+ * bs_patchfile.cpp - because a saved .bencsynth wants exactly the same thing,
+ * and two copies of a binary layout is two places for it to be wrong. The
+ * layout is unchanged: states written by older builds load, and vice versa. */
 static const uint64_t BS_EMBED_MAX = 32u * 1024u * 1024u;
-
-static void putU32(std::string &o, uint32_t v)
-{
-    for (int i = 0; i < 4; i++) o += (char)((v >> (8 * i)) & 0xff);
-}
-static void putU64(std::string &o, uint64_t v)
-{
-    for (int i = 0; i < 8; i++) o += (char)((v >> (8 * i)) & 0xff);
-}
-static uint32_t getU32(const char *p)
-{
-    return (uint32_t)(unsigned char)p[0] | ((uint32_t)(unsigned char)p[1] << 8) |
-           ((uint32_t)(unsigned char)p[2] << 16) | ((uint32_t)(unsigned char)p[3] << 24);
-}
-static uint64_t getU64(const char *p)
-{
-    uint64_t v = 0;
-    for (int i = 0; i < 8; i++) v |= (uint64_t)(unsigned char)p[i] << (8 * i);
-    return v;
-}
-
-/* Every distinct file the rack refers to.
- *
- * Read out of the rack TEXT, not out of the plugin's own engine. Those are not
- * the same rack: with an editor open the text that gets saved is the editor's
- * snapshot, and the plugin's copy is whatever it last rebuilt. Walking the
- * engine embedded the audio for one rack and saved the other, so the paths did
- * not match on the way back in and nothing was restored - which passed with no
- * editor running and failed with one.
- *
- * An X record is any module's text, so a scratchpad's contents land here too.
- * Anything that does not open as a file is simply not embedded, which is the
- * right answer for a paragraph of notes. */
-static void embedAudio(const std::string &rack, std::string &out)
-{
-    std::vector<std::string> paths;
-    size_t at = 0;
-    while (at < rack.size()) {
-        size_t nl = rack.find('\n', at);
-        if (nl == std::string::npos) nl = rack.size();
-        const std::string line = rack.substr(at, nl - at);
-        at = nl + 1;
-        if (line.size() < 3 || line[0] != 'X' || line[1] != ' ') continue;
-
-        /* "X <id> <text>" - skip the id. */
-        size_t sp = line.find(' ', 2);
-        if (sp == std::string::npos) continue;
-        std::string p = line.substr(sp + 1);
-
-        /* The same escaping the patch writer used. */
-        std::string path;
-        for (size_t i = 0; i < p.size(); i++) {
-            if (p[i] != '\\') { path += p[i]; continue; }
-            i++;
-            if (i >= p.size()) break;
-            if (p[i] == 'n') path += '\n';
-            else path += p[i];
-        }
-        if (path.empty()) continue;
-        if (std::find(paths.begin(), paths.end(), path) == paths.end())
-            paths.push_back(path);
-    }
-    if (paths.empty()) return;
-
-    std::string body;
-    uint32_t count = 0;
-    uint64_t total = 0;
-    for (size_t i = 0; i < paths.size(); i++) {
-        std::FILE *f = std::fopen(paths[i].c_str(), "rb");
-        if (!f) continue;                       /* gone, or not a path at all */
-        std::string data;
-        char buf[65536];
-        size_t n;
-        while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) data.append(buf, n);
-        std::fclose(f);
-        if (data.size() < 12 || std::memcmp(data.data(), "RIFF", 4) != 0)
-            continue;                           /* not audio: not ours to carry */
-
-        /* A cap, because a project is not an archive and a host writing one is
-         * a person waiting. Past this the path still travels and the audio
-         * does not. */
-        if (total + data.size() > BS_EMBED_MAX) {
-            bs::bs_log("  not embedding %s - past the %llu byte budget",
-                       paths[i].c_str(), (unsigned long long)BS_EMBED_MAX);
-            continue;
-        }
-        total += data.size();
-        putU32(body, (uint32_t)paths[i].size());
-        body += paths[i];
-        putU64(body, (uint64_t)data.size());
-        body += data;
-        count++;
-    }
-    if (!count) return;
-
-    out += "BSAU";
-    putU32(out, count);
-    out += body;
-    bs::bs_log("  embedded %u sample(s), %llu bytes", count,
-               (unsigned long long)total);
-}
-
-/* The other end: anything the rack could not open gets written out of the
- * project and reloaded from there. */
-static void restoreAudio(BencSynthClap *s, const char *p, size_t n)
-{
-    if (n < 8 || std::memcmp(p, "BSAU", 4) != 0) return;
-    uint32_t count = getU32(p + 4);
-    size_t at = 8;
-
-    for (uint32_t i = 0; i < count; i++) {
-        if (at + 4 > n) return;
-        const uint32_t plen = getU32(p + at); at += 4;
-        if (at + plen + 8 > n) return;
-        const std::string path(p + at, plen); at += plen;
-        const uint64_t dlen = getU64(p + at); at += 8;
-        if (at + dlen > n) return;
-        const char *data = p + at; at += (size_t)dlen;
-
-        /* Which module wanted this, and did it manage without us? */
-        for (int k = 0; k < s->engine.patch.slotCount(); k++) {
-            bs::Module *m = s->engine.patch.module(k);
-            if (!m || m->typeId != "SAMPLE") continue;
-            const std::string *t = m->textBuffer();
-            if (!t || *t != path) continue;
-            if (m->textLoaded()) break;         /* the file is still there */
-
-            const char *dir = bs::userSampleDir();
-            if (!dir || !*dir) break;
-            const size_t cut = path.find_last_of("/\\");
-            const std::string base = cut == std::string::npos ? path
-                                                              : path.substr(cut + 1);
-            const std::string dest = std::string(dir) + "/" + base;
-
-            std::FILE *f = std::fopen(dest.c_str(), "wb");
-            if (!f) break;
-            std::fwrite(data, 1, (size_t)dlen, f);
-            std::fclose(f);
-
-            std::string why;
-            if (s->engine.loadSample(k, dest.c_str(), &why))
-                bs::bs_log("  restored %s out of the project", dest.c_str());
-            else
-                bs::bs_log("  could not restore %s: %s", dest.c_str(), why.c_str());
-            break;
-        }
-    }
-}
 
 static bool st_save(const clap_plugin_t *p, const clap_ostream_t *stream)
 {
@@ -732,7 +588,8 @@ static bool st_save(const clap_plugin_t *p, const clap_ostream_t *stream)
     /* The rack, its terminator, then the audio it refers to. */
     std::string blob = s->saved;
     blob += '\0';
-    embedAudio(s->saved, blob);
+    const int carried = bs_embed_audio(s->saved, blob, BS_EMBED_MAX);
+    if (carried) bs::bs_log("  embedded %d sample(s) in the state", carried);
 
     const char *b = blob.data();
     uint64_t left = blob.size();
@@ -778,7 +635,11 @@ static bool st_load(const clap_plugin_t *p, const clap_istream_t *stream)
         return false;
 
     /* Anything the rack could not open, taken back out of the project. */
-    if (!extras.empty()) restoreAudio(s, extras.data(), extras.size());
+    if (!extras.empty()) {
+        const int back = bs_restore_audio(&s->engine, extras.data(),
+                                          extras.size());
+        if (back) bs::bs_log("  restored %d sample(s) out of the project", back);
+    }
 
     /* The rack no longer necessarily corresponds to any preset. */
     s->custom = true;

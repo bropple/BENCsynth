@@ -1,6 +1,7 @@
 #include "bs_patchfile.h"
 #include "bs_modules.h"
 
+#include <algorithm>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -242,6 +243,169 @@ int bs_patch_from_string(bs::Engine *eng, const char *text,
 }
 
 /* ------------------------------------------------------------------ *
+ * Audio inside the file
+ *
+ * A rack refers to its samples by path, which is right while the machine is
+ * the same machine and useless the moment the rack moves. So both containers
+ * - the plugin's state and a saved .bencsynth - append the files themselves
+ * after the text, in the same layout, through these two.
+ *
+ * Only the containers, never the live rack text: that crosses to the editor
+ * on every change through a 192 KB channel, and nothing bulky may travel
+ * that way. The path keeps travelling live; the audio travels once, when
+ * something saves.
+ * ------------------------------------------------------------------ */
+
+#include "bs_racklib.h"
+
+static void putU32(std::string &o, unsigned v)
+{
+    for (int i = 0; i < 4; i++) o += (char)((v >> (8 * i)) & 0xff);
+}
+static void putU64(std::string &o, unsigned long long v)
+{
+    for (int i = 0; i < 8; i++) o += (char)((v >> (8 * i)) & 0xff);
+}
+static unsigned getU32(const char *p)
+{
+    unsigned v = 0;
+    for (int i = 0; i < 4; i++) v |= (unsigned)(unsigned char)p[i] << (8 * i);
+    return v;
+}
+static unsigned long long getU64(const char *p)
+{
+    unsigned long long v = 0;
+    for (int i = 0; i < 8; i++)
+        v |= (unsigned long long)(unsigned char)p[i] << (8 * i);
+    return v;
+}
+
+/* Every distinct file the rack text refers to. Out of the TEXT rather than
+ * out of the engine, for the reason the plugin learned the hard way: with an
+ * editor open the text being saved is the editor's snapshot, and the
+ * plugin's own engine holds a different rack. An X record is any module's
+ * text, so a scratchpad's paragraph lands here too - and fails the fopen or
+ * the RIFF check, which is the right answer for a paragraph. */
+int bs_embed_audio(const std::string &rack, std::string &out,
+                   unsigned long long budget)
+{
+    std::vector<std::string> paths;
+    size_t at = 0;
+    while (at < rack.size()) {
+        size_t nl = rack.find('\n', at);
+        if (nl == std::string::npos) nl = rack.size();
+        const std::string line = rack.substr(at, nl - at);
+        at = nl + 1;
+        if (line.size() < 3 || line[0] != 'X' || line[1] != ' ') continue;
+
+        /* "X <id> <text>" - skip the id. */
+        size_t sp = line.find(' ', 2);
+        if (sp == std::string::npos) continue;
+        std::string p = line.substr(sp + 1);
+
+        /* The same escaping the patch writer used. */
+        std::string path;
+        for (size_t i = 0; i < p.size(); i++) {
+            if (p[i] != '\\') { path += p[i]; continue; }
+            i++;
+            if (i >= p.size()) break;
+            if (p[i] == 'n') path += '\n';
+            else path += p[i];
+        }
+        if (path.empty()) continue;
+        if (std::find(paths.begin(), paths.end(), path) == paths.end())
+            paths.push_back(path);
+    }
+    if (paths.empty()) return 0;
+
+    std::string body;
+    unsigned count = 0;
+    unsigned long long total = 0;
+    for (size_t i = 0; i < paths.size(); i++) {
+        std::FILE *f = std::fopen(paths[i].c_str(), "rb");
+        if (!f) continue;                       /* gone, or not a path at all */
+        std::string data;
+        char buf[65536];
+        size_t n;
+        while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) {
+            data.append(buf, n);
+            /* Stop reading once a file alone has blown the budget - the old
+             * version slurped a file of any size into memory and only then
+             * looked at the cap. */
+            if (data.size() > budget) break;
+        }
+        std::fclose(f);
+        if (data.size() < 12 || std::memcmp(data.data(), "RIFF", 4) != 0)
+            continue;                           /* not audio: not ours to carry */
+
+        /* A cap, because a project is not an archive and whoever is saving
+         * is waiting. Past it the path still travels and the audio does not. */
+        if (total + data.size() > budget) continue;
+        total += data.size();
+        putU32(body, (unsigned)paths[i].size());
+        body += paths[i];
+        putU64(body, (unsigned long long)data.size());
+        body += data;
+        count++;
+    }
+    if (!count) return 0;
+
+    out += "BSAU";
+    putU32(out, count);
+    out += body;
+    return (int)count;
+}
+
+/* The other end: anything the rack could not open, written out of the
+ * container into the user sample folder and reloaded from there. */
+int bs_restore_audio(bs::Engine *eng, const char *p, size_t n)
+{
+    if (n < 8 || std::memcmp(p, "BSAU", 4) != 0) return 0;
+    const unsigned count = getU32(p + 4);
+    size_t at = 8;
+    int restored = 0;
+
+    for (unsigned i = 0; i < count; i++) {
+        if (at + 4 > n) return restored;
+        const unsigned plen = getU32(p + at); at += 4;
+        if (plen > n - at || 8 > n - at - plen) return restored;
+        const std::string path(p + at, plen); at += plen;
+        const unsigned long long dlen = getU64(p + at); at += 8;
+        /* Compared against what is left, not added to `at` - a corrupt
+         * length near the top of the range would wrap the sum and pass. */
+        if (dlen > (unsigned long long)(n - at)) return restored;
+        const char *data = p + at; at += (size_t)dlen;
+
+        /* Which module wanted this, and did it manage without us? */
+        for (int k = 0; k < eng->patch.slotCount(); k++) {
+            bs::Module *m = eng->patch.module(k);
+            if (!m || m->typeId != "SAMPLE") continue;
+            const std::string *t = m->textBuffer();
+            if (!t || *t != path) continue;
+            if (m->textLoaded()) break;         /* the file is still there */
+
+            const char *dir = bs::userSampleDir();
+            if (!dir || !*dir) break;
+            const size_t cut = path.find_last_of("/\\");
+            const std::string base = cut == std::string::npos ? path
+                                                              : path.substr(cut + 1);
+            const std::string dest = std::string(dir) + "/" + base;
+
+            std::FILE *f = std::fopen(dest.c_str(), "wb");
+            if (!f) break;
+            const size_t wrote = std::fwrite(data, 1, (size_t)dlen, f);
+            std::fclose(f);
+            if (wrote != (size_t)dlen) break;   /* disk full: not a sample */
+
+            std::string why;
+            if (eng->loadSample(k, dest.c_str(), &why)) restored++;
+            break;
+        }
+    }
+    return restored;
+}
+
+/* ------------------------------------------------------------------ *
  * Files
  * ------------------------------------------------------------------ */
 
@@ -267,7 +431,18 @@ int bs_patch_save(bs::Engine *eng, const char *path, char *status, int cap)
         if (!dir.empty()) BS_MKDIR(dir.c_str());
     }
 
-    const std::string text = bs_patch_to_string(eng);
+    std::string text = bs_patch_to_string(eng);
+
+    /* The audio the rack refers to rides behind the text, after a NUL. Only
+     * when there is any: a rack with no samples saves the same bytes it
+     * always did. 32 MB, the same budget the plugin's state uses. */
+    {
+        std::string audio;
+        if (bs_embed_audio(text, audio, 32ull * 1024u * 1024u) > 0) {
+            text += '\0';
+            text += audio;
+        }
+    }
 
     FILE *f = std::fopen(path, "wb");
     if (!f) {
@@ -301,11 +476,25 @@ int bs_patch_load(bs::Engine *eng, const char *path, char *status, int cap)
     while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) text.append(buf, n);
     std::fclose(f);
 
+    /* Everything after the first NUL is embedded audio. bs_patch_from_string
+     * would stop there on its own - it reads a C string - so the split is
+     * for the restore, not the parse. */
+    std::string extras;
+    const size_t nul = text.find('\0');
+    if (nul != std::string::npos) {
+        extras.assign(text, nul + 1, std::string::npos);
+        text.resize(nul);
+    }
+
     char detail[192] = "";
     if (!bs_patch_from_string(eng, text.c_str(), detail, (int)sizeof detail)) {
         std::snprintf(status, (size_t)cap, "%s - %s", baseName(path), detail);
         return 0;
     }
+
+    /* Any sample whose path did not open, taken back out of the file. */
+    if (!extras.empty()) bs_restore_audio(eng, extras.data(), extras.size());
+
     std::snprintf(status, (size_t)cap, "%s - %s", baseName(path), detail);
     return 1;
 }
