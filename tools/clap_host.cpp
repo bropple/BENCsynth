@@ -706,7 +706,20 @@ int main(int argc, char **argv)
              * moment the project moves to another machine. The saved state
              * carries the file itself, so deleting the original and loading
              * the state back must still make a sound. */
-            {
+            if (std::getenv("BENCSYNTH_EDITOR")) {
+                /* Skipped with an editor attached, and not because it does not
+                 * work there - because this test cannot set it up.
+                 *
+                 * When an editor is open it owns the rack: what the plugin
+                 * saves is the editor's snapshot, not its own engine. This
+                 * pushes a rack straight into the plugin through the state
+                 * port, which the editor never sees, so the rack that gets
+                 * saved is still the editor's and has no sampler in it. In
+                 * real use the sampler is loaded IN the editor, so the
+                 * snapshot has it and the audio travels. */
+                std::printf("  skip  an editor owns the rack - the state test "
+                            "needs the plugin to own it\n");
+            } else {
                 /* Whatever the plugin is holding now, put back at the end:
                  * the checks after this one expect the rack they set up, and
                  * this block replaces it with a sampler. */

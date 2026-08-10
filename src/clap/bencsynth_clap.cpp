@@ -582,17 +582,46 @@ static uint64_t getU64(const char *p)
     return v;
 }
 
-/* Every distinct file the rack refers to, read off the disk as it stands. */
-static void embedAudio(BencSynthClap *s, std::string &out)
+/* Every distinct file the rack refers to.
+ *
+ * Read out of the rack TEXT, not out of the plugin's own engine. Those are not
+ * the same rack: with an editor open the text that gets saved is the editor's
+ * snapshot, and the plugin's copy is whatever it last rebuilt. Walking the
+ * engine embedded the audio for one rack and saved the other, so the paths did
+ * not match on the way back in and nothing was restored - which passed with no
+ * editor running and failed with one.
+ *
+ * An X record is any module's text, so a scratchpad's contents land here too.
+ * Anything that does not open as a file is simply not embedded, which is the
+ * right answer for a paragraph of notes. */
+static void embedAudio(const std::string &rack, std::string &out)
 {
     std::vector<std::string> paths;
-    for (int i = 0; i < s->engine.patch.slotCount(); i++) {
-        bs::Module *m = s->engine.patch.module(i);
-        if (!m || m->typeId != "SAMPLE") continue;
-        const std::string *t = m->textBuffer();
-        if (!t || t->empty()) continue;
-        if (std::find(paths.begin(), paths.end(), *t) == paths.end())
-            paths.push_back(*t);
+    size_t at = 0;
+    while (at < rack.size()) {
+        size_t nl = rack.find('\n', at);
+        if (nl == std::string::npos) nl = rack.size();
+        const std::string line = rack.substr(at, nl - at);
+        at = nl + 1;
+        if (line.size() < 3 || line[0] != 'X' || line[1] != ' ') continue;
+
+        /* "X <id> <text>" - skip the id. */
+        size_t sp = line.find(' ', 2);
+        if (sp == std::string::npos) continue;
+        std::string p = line.substr(sp + 1);
+
+        /* The same escaping the patch writer used. */
+        std::string path;
+        for (size_t i = 0; i < p.size(); i++) {
+            if (p[i] != '\\') { path += p[i]; continue; }
+            i++;
+            if (i >= p.size()) break;
+            if (p[i] == 'n') path += '\n';
+            else path += p[i];
+        }
+        if (path.empty()) continue;
+        if (std::find(paths.begin(), paths.end(), path) == paths.end())
+            paths.push_back(path);
     }
     if (paths.empty()) return;
 
@@ -601,14 +630,16 @@ static void embedAudio(BencSynthClap *s, std::string &out)
     uint64_t total = 0;
     for (size_t i = 0; i < paths.size(); i++) {
         std::FILE *f = std::fopen(paths[i].c_str(), "rb");
-        if (!f) continue;                       /* gone: nothing to carry */
+        if (!f) continue;                       /* gone, or not a path at all */
         std::string data;
         char buf[65536];
         size_t n;
         while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) data.append(buf, n);
         std::fclose(f);
+        if (data.size() < 12 || std::memcmp(data.data(), "RIFF", 4) != 0)
+            continue;                           /* not audio: not ours to carry */
 
-        /* A cap, because a project is not an archive and a host writing it is
+        /* A cap, because a project is not an archive and a host writing one is
          * a person waiting. Past this the path still travels and the audio
          * does not. */
         if (total + data.size() > BS_EMBED_MAX) {
@@ -701,7 +732,7 @@ static bool st_save(const clap_plugin_t *p, const clap_ostream_t *stream)
     /* The rack, its terminator, then the audio it refers to. */
     std::string blob = s->saved;
     blob += '\0';
-    embedAudio(s, blob);
+    embedAudio(s->saved, blob);
 
     const char *b = blob.data();
     uint64_t left = blob.size();
