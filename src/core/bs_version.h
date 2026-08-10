@@ -10,7 +10,7 @@
 #define BS_VERSION_H
 
 #define BS_VERSION_MAJOR 0
-#define BS_VERSION_MINOR 6
+#define BS_VERSION_MINOR 7
 #define BS_VERSION_PATCH 0
 
 #define BS_STR2(x) #x

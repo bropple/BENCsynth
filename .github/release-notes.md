@@ -79,7 +79,7 @@ the rack instead of a row of sliders. The Windows installer and the macOS
 On Windows, also note that `%LOCALAPPDATA%` is not `%APPDATA%`; putting a
 plug-in in the wrong one fails with no message at all.
 
-The **Rack** parameter steps through all 37 presets and saves with your
+The **Rack** parameter steps through all 38 presets and saves with your
 project. The eight **Macro** parameters are automatable.
 
 So is any knob you choose: **right-click a knob → EXPOSE** and it takes one of
@@ -107,6 +107,88 @@ rack.
 **The standalone takes MIDI now.** Plug a keyboard in and play it; there is
 nothing to configure, and the status line says what it connected to.
 
+### New in v0.7.0
+
+- **The bow and the reed make notes.** They have not since v0.4.2. What
+  BOWED actually produced was a DC offset — at middle C, a constant 1.0487 V
+  moving three ten-thousandths peak to peak. Three releases described it as
+  working, including this file, because every check that could have caught it
+  measured a *level*, and a constant passes a level check especially well: it
+  is perfectly uniform, it sustains forever, and it never dies at the bottom
+  of the keyboard.
+
+  Four faults were stacked. The servo fed the returning wave back into the
+  loop with its DC included, and a delay loop with a gain near one has a DC
+  gain near a thousand. It replaced only the string's declared loss and not
+  the damping filter's, which at BOWED's own brightness eats 28% per round
+  trip — so the bow died at dark settings and sang at bright ones. Stability
+  at the top of the keyboard had been bought by weakening the servo, which
+  left the top octave oscillating correctly at 17 dB down. And the damping
+  corner sat close enough to the fundamental around notes 87–91 that the
+  string lost more per round trip than any servo would replace.
+
+  Now: every note from the bottom of the keyboard to the top oscillates, in
+  tune within a couple of cents above note 48, and at a level that matches
+  the hammer driving the identical string — so switching `EXCITE` changes the
+  timbre and not the volume. **BLOW** had the same faults, shares the same
+  string, and is fixed by the same change.
+
+- **A saved `.bencsynth` carries its audio.** The plug-in's state has
+  embedded a rack's samples since v0.5.0, but a rack saved to a file still
+  carried only paths — so handing somebody the file handed them the silence
+  where their drums were. The audio now rides in the file itself. Older
+  versions open the new files and simply find no audio in them.
+
+- **NSEQ** — eight steps advanced by the *notes*, not by a clock. VOICE rolls
+  a die per note; this is the deliberate half. Each note takes the next step
+  and keeps it for as long as it sounds, so "the fourth note of every bar,
+  harder" is literally a knob: steps 1 1 1 8, `LEN` 4, `RESET` from whatever
+  defines your bar. Polyphonic — a chord's notes take successive steps and
+  each holds its own.
+
+- **KRELL never sampled anything.** Its end-of-cycle pulse was wired into the
+  sample-and-hold's signal input instead of its clock, so the rack played one
+  pitch, metronomically, for four releases — while its own notes panel
+  explained the self-generating rhythm at length. Measured: 1 distinct pitch
+  over twenty seconds before, 14 after.
+
+- **GRAND TOUR's sampler reached nothing.** Its inputs were patched and its
+  outputs went nowhere, under a comment claiming it went through the same
+  filter as everything else. Right-click, LOAD SAMPLE, silence. It is
+  connected now.
+
+- **CLK's EXT jack works.** It says an external clock takes over when
+  patched, but "external" was inferred from the voltage — and a real clock
+  sits at exactly zero between its pulses, so the internal oscillator slipped
+  its own ticks into every gap. A 1 Hz external clock into a 120 BPM panel
+  gave 21 edges in ten seconds instead of 10.
+
+- **A dimmed panel is really dimmed.** With the About panel or the file
+  browser open, the on-screen keyboard underneath still played notes and the
+  wheels still moved.
+
+- **Opening a rack that fails to load no longer claims the filename.** It
+  did, which meant the next SAVE wrote your current rack over the file that
+  had just refused to open.
+
+- **The sampler stops trusting the file's header.** A `.wav` claiming a
+  four-gigabyte data chunk had all of it allocated before the read loop
+  noticed the file was a hundred bytes long, a four-billion-hertz sample rate
+  blew up the same allocation, and a truncated format chunk was read anyway
+  so the sample width came off uninitialised stack. This is the one module
+  that opens arbitrary files somebody else made.
+
+- **Five races and a deadlock in the plug-in**, found by reading rather than
+  by crashing — which is the right time. Closing the editor window while
+  something played could take the host's audio thread down with it; the
+  MIDI-CC path walked a list the main thread reallocates. The engine also
+  allocated inside `render()` when the graph changed, which is the one thing
+  the audio thread promises never to do.
+
+- **Two tests that could not fail now can.** One ended in `|| true`; the
+  other checked that a saved default rack restored into a default rack, which
+  a `restore()` that did nothing passed perfectly.
+
 ### New in v0.6.0
 
 - **The sampler shows its waveform**, with a marker where `START` lands.
@@ -116,11 +198,9 @@ nothing to configure, and the status line says what it connected to.
   sample files themselves, so a project that moves to another machine — or
   whose samples get tidied away — still plays. Up to 32 MB; past that the path
   travels and the audio does not.
-- **The bow sustains.** It did not before: measured over eight seconds every
-  note decayed and the bottom of the keyboard died outright, which a
-  two-second look had made appear fine. A bow replaces exactly what the string
-  loses each round trip, and now it does — so every note holds, at the same
-  level, all the way down.
+- ~~**The bow sustains.**~~ This was wrong, and stayed wrong until v0.7.0.
+  What it actually shipped was a DC offset holding a perfectly steady level —
+  see v0.7.0 above.
 
 ### New in v0.5.2
 
