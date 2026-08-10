@@ -61,16 +61,19 @@ void Patch::clear()
     viewZoom = 0.0f;
     for (int i = 0; i < BS_EXPOSED; i++) { exposed[i].module = -1; exposed[i].param = -1; }
     order.clear();
-    orderDirty = true;
+    /* An empty patch's evaluation order is the empty list it already has.
+     * Leaving the flag dirty here handed the rebuild to the audio thread's
+     * next block, which is the one place it must not run. */
+    orderDirty = false;
     rev++;
 }
 
 int Patch::add(Module *m, float x, float y)
 {
+    if (!m) return -1;
+
     /* Every module can see the host's tempo without being handed it. */
     m->xport = &transport;
-
-    if (!m) return -1;
 
     /* Reuse a hole left by a deleted module, so ids stay dense and a long
      * session of adding and removing does not grow the slot array without

@@ -257,6 +257,28 @@ int main(int argc, char **argv)
         LV2_Handle hc = d->instantiate(d, RATE, "build/bencsynth.lv2/", features);
         ok(hb != 0 && hc != 0, "two more instances for the restore");
 
+        /* The saved state is doctored before the restore. Restoring the
+         * default rack's text into a default-built instance proves nothing:
+         * a restore() that did nothing at all passed every check here, and
+         * the byte-for-byte re-save below was equally blind because the
+         * instance's own default serialises to the same text. A cutoff
+         * moved to 3371 Hz is visible in the re-saved bytes and audible
+         * against an untouched instance. */
+        {
+            std::string doctored = g_state.begin()->second.bytes;
+            const size_t vcfAt = doctored.find(" VCF ");
+            ok(vcfAt != std::string::npos, "the saved rack has a VCF to doctor");
+            if (vcfAt != std::string::npos) {
+                /* "M <id> VCF <x> <y> <n> <cutoff> ..." */
+                size_t p = vcfAt + 5;
+                for (int skip = 0; skip < 3; skip++)
+                    p = doctored.find(' ', p) + 1;
+                const size_t q = doctored.find(' ', p);
+                doctored.replace(p, q - p, "3371");
+                g_state.begin()->second.bytes = doctored;
+            }
+        }
+
         if (hb && hc) {
             std::vector<float> lb(N, 0.0f), rb(N, 0.0f), lc(N, 0.0f), rc(N, 0.0f);
             MidiSeq sb, sc;
@@ -291,8 +313,12 @@ int main(int argc, char **argv)
             const float c = rmsOf(lc, rc);
             std::printf("        restored rms %.5f, untouched rms %.5f\n", b, c);
             ok(b > 0.005f, "the restored instance makes sound");
-            ok(std::fabs(b - c) < c * 0.02f + 1e-5f,
-               "and matches one built the same way from scratch");
+            /* The doctored cutoff has to be audible against an instance
+             * that never saw the state - which is what proves the restore
+             * touched the engine at all. */
+            ok(std::fabs(b - c) > c * 0.02f,
+               "and no longer sounds like one built from scratch, so the "
+               "state landed");
 
             /* Saving the restored one has to give back the same text it was
              * handed. A serialiser that drifts turns a song into a slightly

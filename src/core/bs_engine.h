@@ -94,6 +94,11 @@ public:
      * not something called per note. */
     void panic();
 
+    /* The same, for a caller already holding graphLock() - the CLAP editor
+     * pump runs under it, and std::mutex does not survive being taken twice
+     * on one thread. */
+    void panicNoLock();
+
     /* What the interface may read while audio is running: published once a
      * block, and nothing else about the voice allocator is safe to look at. */
     int voicesSounding() const { return keys.sounding.load(std::memory_order_relaxed); }

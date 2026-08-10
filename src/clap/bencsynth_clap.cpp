@@ -219,9 +219,6 @@ static void pushRackToEditor(BencSynthClap *s)
  * noticed here but handed to the main thread. */
 static void pumpEditorRealtime(BencSynthClap *s)
 {
-    if (!s->shmOpen) return;
-    bs::ShmBlock *b = s->shm.block;
-
     /* Under the graph lock, because this walks the module list.
      *
      * Engine::render takes the same lock, but everything else the audio thread
@@ -232,6 +229,14 @@ static void pumpEditorRealtime(BencSynthClap *s)
      * enough session. The lock is already on this thread's critical path once
      * per block; these traversals are shorter than a render. */
     std::lock_guard<std::mutex> guard(s->engine.graphLock());
+
+    /* Checked under the lock, used under the lock: gui_destroy unmaps the
+     * block under this same lock, so the audio thread can never be halfway
+     * through the mapping when it goes away. Checked before the lock, that
+     * was a SIGSEGV in the host's audio thread whenever the window closed
+     * while something played. */
+    if (!s->shmOpen) return;
+    bs::ShmBlock *b = s->shm.block;
 
     /* Structure first. Until the rebuild has happened the param vector belongs
      * to a rack this instance does not have, and applying it would write knob
@@ -251,7 +256,10 @@ static void pumpEditorRealtime(BencSynthClap *s)
         switch (nv.kind) {
         case bs::NE_NOTE_ON:  s->engine.noteOn(nv.note, nv.value, 0); break;
         case bs::NE_NOTE_OFF: s->engine.noteOff(nv.note, 0);          break;
-        case bs::NE_ALL_OFF:  s->engine.panic();                      break;
+        /* Not panic(): that takes the lock this function already holds,
+         * and relocking a std::mutex on its own thread is a deadlock with
+         * the audio thread on the inside. */
+        case bs::NE_ALL_OFF:  s->engine.panicNoLock();                break;
         case bs::NE_SUSTAIN:  s->engine.setSustain(nv.value >= 0.5f, 0); break;
         case bs::NE_BEND:     s->engine.setBend(nv.value, 0);         break;
         case bs::NE_MOD:      s->engine.setMod(nv.value, 0);          break;
@@ -721,6 +729,8 @@ static void pl_reset(const clap_plugin_t *p)
  * or a held key would bounce between the two processes forever. */
 static inline void mirror(BencSynthClap *s, uint8_t kind, uint8_t note, float v)
 {
+    /* The lock is what orders this against gui_destroy unmapping the block. */
+    std::lock_guard<std::mutex> guard(s->engine.graphLock());
     if (s->shmOpen) bs::bs_shm_push_host_note(s->shm.block, kind, note, v);
 }
 
@@ -799,19 +809,30 @@ static void handleEvent(BencSynthClap *s, const clap_event_header_t *h, int at,
         if ((m[0] & 0xf0) == 0xb0) {
             /* Learning takes precedence over playing: the CC that gets
              * assigned should not also move whatever it used to move. */
-            if (s->shmOpen) {
-                const int learn =
-                    s->shm.block->learnMacro.load(std::memory_order_acquire);
-                if (learn >= 0 && learn < bs::BS_MACROS && m[1] > 0) {
-                    /* Reported, not applied. The editor owns the rack and
-                     * turns the knob; see learnCc in bs_shm.h. */
-                    s->shm.block->learnCc.store((int32_t)m[1],
-                                                std::memory_order_release);
-                    break;
+            bool learned = false;
+            int which = -1;
+            {
+                /* Locked for two reasons at once: the shared block must not
+                 * be unmapped mid-read (gui_destroy holds the same lock),
+                 * and macroForCc walks the module list the main thread
+                 * reallocates on a preset change or a state load - the same
+                 * use-after-free pumpEditorRealtime's comment describes,
+                 * missed on this path. */
+                std::lock_guard<std::mutex> guard(s->engine.graphLock());
+                if (s->shmOpen) {
+                    const int learn =
+                        s->shm.block->learnMacro.load(std::memory_order_acquire);
+                    if (learn >= 0 && learn < bs::BS_MACROS && m[1] > 0) {
+                        /* Reported, not applied. The editor owns the rack and
+                         * turns the knob; see learnCc in bs_shm.h. */
+                        s->shm.block->learnCc.store((int32_t)m[1],
+                                                    std::memory_order_release);
+                        learned = true;
+                    }
                 }
+                if (!learned) which = s->engine.macroForCc(m[1]);
             }
-
-            const int which = s->engine.macroForCc(m[1]);
+            if (learned) break;
             if (which >= 0) {
                 const double v = (double)m[2] / 127.0;
                 applyParam(s, (clap_id)which, v);
@@ -917,7 +938,9 @@ static clap_process_status pl_process(const clap_plugin_t *p,
         done += n;
     }
 
-    /* What only this side knows. Once per block, and never read here. */
+    /* What only this side knows. Once per block, and never read here.
+     * Locked against gui_destroy unmapping the block mid-store. */
+    std::lock_guard<std::mutex> guard(s->engine.graphLock());
     if (s->shmOpen) {
         bs::ShmBlock *sb = s->shm.block;
         sb->load.store(s->engine.load, std::memory_order_relaxed);
@@ -1149,8 +1172,15 @@ static void gui_destroy(const clap_plugin_t *p)
         if (bs::bs_shm_read(&s->shm.block->snap, s->textBuf.data(), &len) && len)
             s->snapshot.assign(s->textBuf.data(), len);
 
-        bs::bs_shm_close(&s->shm);
-        s->shmOpen = false;
+        /* Only the unmap is under the lock - the 1.5 s editor wait above
+         * must not stall the audio thread. Every audio-side use checks
+         * shmOpen under this same lock, so after this block none of them
+         * can be holding the mapping. */
+        {
+            std::lock_guard<std::mutex> guard(s->engine.graphLock());
+            bs::bs_shm_close(&s->shm);
+            s->shmOpen = false;
+        }
     }
     s->guiCreated = false;
 }

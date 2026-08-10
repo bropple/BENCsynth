@@ -226,7 +226,11 @@ static void run(LV2_Handle instance, uint32_t nframes)
         uint32_t n = nframes - done;
         if (n > CHUNK) n = CHUNK;
 
-        while (ev && (uint32_t)ev->time.frames < done + n) {
+        /* Signed comparison on purpose: a negative timestamp cast to
+         * unsigned is four billion, which not only never matches but jams
+         * every event queued behind it for the rest of the buffer. The
+         * rel < 0 clamp below already knows what to do with a late one. */
+        while (ev && ev->time.frames < (int64_t)(done + n)) {
             const uint8_t *m = (const uint8_t *)(ev + 1);
             if (ev->body.type == self->uridMidiEvent && ev->body.size >= 2) {
                 /* Rebased onto this chunk. An event stamped before the point
@@ -331,8 +335,12 @@ static LV2_State_Status restore(LV2_Handle instance,
 
     self->state = bs_patch_to_string(&self->engine);
     /* Whatever the macro ports are currently holding belongs to the rack that
-     * just arrived, so let the next run() push them in again. */
-    for (int i = 0; i < bs::BS_MACROS; i++) self->macroSeen[i] = -1.0f;
+     * just arrived, so let the next run() push them in again. Locked for the
+     * same reason work() locks: run() owns this array under the graph lock. */
+    {
+        std::lock_guard<std::mutex> guard(self->engine.graphLock());
+        for (int i = 0; i < bs::BS_MACROS; i++) self->macroSeen[i] = -1.0f;
+    }
     return LV2_STATE_SUCCESS;
 }
 
@@ -359,8 +367,12 @@ static LV2_Worker_Status work(LV2_Handle instance,
     self->engine.buildPreset(which);
 
     /* The macro ports still hold whatever the host has them at, and they
-     * belong to this rack now. */
-    for (int i = 0; i < bs::BS_MACROS; i++) self->macroSeen[i] = -1.0f;
+     * belong to this rack now. Under the graph lock, because run() reads and
+     * writes this array under it on the audio thread. */
+    {
+        std::lock_guard<std::mutex> guard(self->engine.graphLock());
+        for (int i = 0; i < bs::BS_MACROS; i++) self->macroSeen[i] = -1.0f;
+    }
     return LV2_WORKER_SUCCESS;
 }
 

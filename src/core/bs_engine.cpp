@@ -44,25 +44,36 @@ int Engine::addModule(const char *typeId, float x, float y)
     m->bindKeys(&keys);
 
     std::lock_guard<std::mutex> g(mutex);
-    return patch.add(m, x, y);
+    /* The output cache is rebuilt here, under the same lock, in every
+     * structural mutator - so the check in render() never fires and the
+     * audio thread never grows the vector. It used to be left to render(),
+     * which contradicted the "process() never allocates" rule the first
+     * time a rack gained more OUT modules than the vector had capacity. */
+    const int id = patch.add(m, x, y);
+    refreshOutputs();
+    return id;
 }
 
 void Engine::removeModule(int moduleId)
 {
     std::lock_guard<std::mutex> g(mutex);
     patch.removeModule(moduleId);
+    refreshOutputs();
 }
 
 int Engine::connect(int src, int srcPort, int dst, int dstPort)
 {
     std::lock_guard<std::mutex> g(mutex);
-    return patch.connect(src, srcPort, dst, dstPort);
+    const int id = patch.connect(src, srcPort, dst, dstPort);
+    refreshOutputs();
+    return id;
 }
 
 void Engine::disconnect(int cableId)
 {
     std::lock_guard<std::mutex> g(mutex);
     patch.disconnect(cableId);
+    refreshOutputs();
 }
 
 void Engine::clear()
@@ -72,6 +83,7 @@ void Engine::clear()
     patch.clear();
     patch.setSampleRate(sr);
     keys.allNotesOff();
+    refreshOutputs();
 }
 
 static NoteEvent ev(int kind, int note, float value, int atFrame)
@@ -105,6 +117,9 @@ void Engine::noteExpression(int note, int kind, float value, int atFrame)
 {
     static const uint8_t KIND[3] = { NE_NOTE_BEND, NE_NOTE_PRESS, NE_NOTE_TIMBRE };
     if (kind < 0 || kind > 2) return;
+    /* Range-checked like noteOn: the cast below used to truncate first, so
+     * expression for note 300 landed on note 44. */
+    if (note < 0 || note > 127) return;
     events.push(ev(KIND[kind], (uint8_t)note, value, atFrame));
 }
 
@@ -239,6 +254,11 @@ float Engine::macroValue(int index) const
 void Engine::panic()
 {
     std::lock_guard<std::mutex> g(mutex);
+    panicNoLock();
+}
+
+void Engine::panicNoLock()
+{
     /* Drop anything queued before silencing, so an event posted a moment ago
      * cannot arrive after the panic and restart a note. */
     NoteEvent e;

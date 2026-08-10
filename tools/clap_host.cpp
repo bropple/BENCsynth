@@ -399,7 +399,7 @@ int main(int argc, char **argv)
     std::fill(L.begin(), L.end(), 0.0f);
     p->process(p, &proc);
     for (int i = 0; i < 4; i++) { evs.clear(); p->process(p, &proc); }
-    ok(peak(L.data(), BLOCK) > 0.001f || true, "raw MIDI note-on is accepted");
+    ok(peak(L.data(), BLOCK) > 0.001f, "raw MIDI note-on is accepted");
     evs.clear();
     evs.midi(0, 0x80, 64, 0);
     p->process(p, &proc);
