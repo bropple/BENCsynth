@@ -1212,7 +1212,7 @@ void presetKrell(Builder &b)
     const int out  = b.put("OUT");
 
     /* The clock is its own end-of-cycle. */
-    b.wire(func, 1, nse, 0);          /* EOC samples the noise            */
+    b.wire(func, 1, nse, 1);          /* EOC clocks the S&H               */
     b.wire(func, 1, env, 0);          /* and starts the note              */
     b.wire(nse, NOISE_SH, quan, 0);
     b.wire(quan, 0, vco, VCO_IN_PITCH);
@@ -2545,14 +2545,19 @@ void presetGrandTour(Builder &b)
     const int mixL   = b.put("MIX");
     const int mixR   = b.put("MIX");
 
-    /* The sampler plays whatever is loaded at the pitch being played, and
-     * goes through the same filter as everything else. Silent with no file,
-     * which is how it ships. */
+    /* The sampler plays whatever is loaded at the pitch being played, into
+     * the mixers both halves of the rack share. Silent with no file, which
+     * is how it ships - its output used to be wired to nothing at all, so
+     * loading a file gave silence too. */
     b.wire(kbd, KBD_PITCH, smp, 0);
     b.wire(kbd, KBD_GATE,  smp, 1);
+    b.wire(smp, 0, mixL, 2);
+    b.wire(smp, 1, mixR, 2);
 
-    /* Every voice gets its own small detune, so a chord is eight strings
-     * rather than one string played eight times. */
+    /* Not a detune - the string has no detune input. RND leans on each
+     * voice's string with its own small constant force, and the cable's
+     * real work is its width: VOICE is eight channels, so the string runs
+     * one per voice and a chord is eight strings rather than one. */
     b.wire(voice, 1, str, 2);          /* RND into the string's own input */
     b.set(voice, 0, 0.35f);            /* a little of it */
 
@@ -2626,6 +2631,7 @@ void presetGrandTour(Builder &b)
     b.set(pan, 0, 0.8f);
     b.set(mixL, MIX_1, 0.85f); b.set(mixL, MIX_2, 0.42f);
     b.set(mixR, MIX_1, 0.85f); b.set(mixR, MIX_2, 0.42f);
+    b.set(mixL, MIX_3, 0.80f); b.set(mixR, MIX_3, 0.80f);
     b.set(out,  OUT_LEVEL, 0.55f);
 }
 

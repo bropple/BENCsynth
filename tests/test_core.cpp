@@ -1661,6 +1661,48 @@ static void test_reed_speaks()
  * it took for as long as it sounds. So the test is about identity - three
  * notes of a chord get three different values, hold them, the next note gets
  * the next step, and RESET starts the bar again. */
+/* KRELL's entire premise is that it never repeats: a sampled random voltage
+ * chooses each note's pitch and the length of the interval before the next.
+ * It shipped for four releases with the end-of-cycle pulse wired into the
+ * sample-and-hold's SIGNAL input instead of its clock, so nothing ever
+ * sampled anything: one pitch, metronomic, while the panel notes explained
+ * the mechanism at length. The audibility sweep cannot catch that - a wrong
+ * KRELL is still audible and finite - so this asks for the thing the rack
+ * is FOR: different notes. */
+static void test_krell_wanders()
+{
+    std::printf("krell wanders\n");
+
+    int idx = -1;
+    for (int i = 0; i < rackPresetCount(); i++)
+        if (std::strcmp(rackPresetAt(i)->name, "KRELL") == 0) idx = i;
+    ok(idx >= 0, "KRELL is there");
+    if (idx < 0) return;
+
+    Engine e;
+    e.init(48000.0f);
+    e.buildPreset(idx);
+    Module *q = 0;
+    for (int i = 0; i < e.patch.slotCount(); i++)
+        if (e.patch.module(i) && e.patch.module(i)->typeId == "QUANT")
+            q = e.patch.module(i);
+    ok(q != 0, "and has the quantizer the pitch comes through");
+    if (!q) return;
+
+    std::vector<int> seen;
+    float buf[64];
+    for (int b = 0; b < 48000 * 12 / 32; b++) {
+        e.render(buf, 32);
+        const int p = (int)std::lround(q->outs[0].v[0][BS_BLOCK - 1] * 120.0f);
+        bool has = false;
+        for (size_t i = 0; i < seen.size(); i++) if (seen[i] == p) has = true;
+        if (!has) seen.push_back(p);
+    }
+    okf(seen.size() >= 3, "twelve seconds visit %.0f pitches, wanted at "
+        "least %.0f - one means the sample-and-hold is not being clocked",
+        (double)seen.size(), 3.0);
+}
+
 static void test_nseq()
 {
     std::printf("nseq aims a value at a note\n");
@@ -1863,6 +1905,7 @@ int main()
     test_bow_across_the_range();
     test_reed_speaks();
     test_nseq();
+    test_krell_wanders();
     test_note_expression();
     test_sample_rates();
     test_patchfile();
