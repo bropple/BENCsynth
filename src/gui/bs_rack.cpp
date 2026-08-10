@@ -493,6 +493,56 @@ void bs_rack_frame(bs_rack *r, bs_ui *ui, bs::Engine *eng, Rectangle view, float
                 if (wheel != 0.0f && top == id && !r->patching &&
                     CheckCollisionPointRec(bs_mouse(), er)) wheelTaken = 1;
                 ui->suppress = 0;
+            } else if (mod->previewAudio(0) != 0) {
+                /* A waveform, drawn by asking the module for its audio rather
+                 * than by knowing which module it is. One column per pixel,
+                 * min and max across the frames that fall in it - the shape of
+                 * a recording is its peaks, and averaging them away leaves a
+                 * grey smear that says nothing. */
+                int frames = 0;
+                const float *pcm = mod->previewAudio(&frames);
+                bs_panel(er, BS_PANEL_HI, BS_BORDER);
+                if (pcm && frames > 1) {
+                    const int cols = (int)er.width - 2;
+                    const float midY = er.y + er.height * 0.5f;
+                    const float halfH = er.height * 0.5f - 2.0f;
+                    for (int cx = 0; cx < cols; cx++) {
+                        const long a = (long)((double)cx / cols * frames);
+                        long b = (long)((double)(cx + 1) / cols * frames);
+                        if (b <= a) b = a + 1;
+                        if (b > frames) b = frames;
+                        float lo = 1e9f, hi = -1e9f;
+                        for (long i = a; i < b; i++) {
+                            const float v = 0.5f * (pcm[(size_t)i * 2] +
+                                                    pcm[(size_t)i * 2 + 1]);
+                            if (v < lo) lo = v;
+                            if (v > hi) hi = v;
+                        }
+                        if (lo > hi) continue;
+                        if (lo < -1.0f) lo = -1.0f;
+                        if (hi >  1.0f) hi =  1.0f;
+                        const float y0 = midY - hi * halfH;
+                        const float y1 = midY - lo * halfH;
+                        DrawRectangleRec((Rectangle){ er.x + 1.0f + (float)cx, y0,
+                                                      1.0f, (y1 - y0) < 1.0f ? 1.0f
+                                                                             : (y1 - y0) },
+                                         BS_ACCENT);
+                    }
+                    /* Where playback begins, which is the one thing the START
+                     * knob cannot tell you on its own. */
+                    if (mod->paramCount() > 2) {
+                        const float st = mod->params[2].value;
+                        if (st > 0.001f) {
+                            const float mx = er.x + 1.0f + st * (er.width - 2.0f);
+                            DrawRectangleRec((Rectangle){ mx, er.y + 1.0f, 1.0f,
+                                                          er.height - 2.0f },
+                                             BS_AMBER);
+                        }
+                    }
+                } else {
+                    bs_text(ui, BS_F_TINY, "no sample", er.x + 6.0f,
+                            er.y + er.height * 0.5f - 6.0f, BS_DIM);
+                }
             } else if (mod->typeId == "OUT") {
                 bs::ModuleOut *o = static_cast<bs::ModuleOut *>(mod);
                 Rectangle mr = { er.x, er.y + 14.0f, er.width, er.height - 20.0f };

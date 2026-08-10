@@ -12,6 +12,7 @@
 #include "bs_engine.h"
 #include "bs_midimsg.h"
 #include "bs_patchfile.h"
+#include "bs_wav.h"
 #include "bs_modules.h"
 #include "test_util.h"
 
@@ -1048,6 +1049,47 @@ static void test_sample_module()
         L::mag(mono, 880.0), L::mag(mono, 440.0));
     m->params[0].value = 0.0f;
 
+    /* Two samplers on one file hold one copy of it.
+     *
+     * A drum rack built out of a folder is a dozen samplers, and before this
+     * that was the folder in memory a dozen times. */
+    {
+        /* A second copy of the fixture under another name, so this measures a
+         * file nothing else in the test is already holding. */
+        const char *other = "bencsynth-test-sample-2.wav";
+        {
+            std::FILE *in = std::fopen(path, "rb");
+            std::FILE *outf = std::fopen(other, "wb");
+            if (in && outf) {
+                char b[4096]; size_t n;
+                while ((n = std::fread(b, 1, sizeof b, in)) > 0) std::fwrite(b, 1, n, outf);
+            }
+            if (in) std::fclose(in);
+            if (outf) std::fclose(outf);
+        }
+
+        const int before = wavCacheCount();
+        {
+            Engine c;
+            c.init(48000.0f);
+            c.clear();
+            const int s1 = c.addModule("SAMPLE", 20, 20);
+            const int s2 = c.addModule("SAMPLE", 200, 20);
+            std::string e1, e2b;
+            ok(c.loadSample(s1, other, &e1) && c.loadSample(s2, other, &e2b),
+               "two samplers load the same file");
+            okf(wavCacheCount() == before + 1,
+                "and it is held once between them: %.0f entries, wanted %.0f",
+                (double)wavCacheCount(), (double)(before + 1));
+        }
+        /* And the last one letting go frees it, rather than the program
+         * holding every file it ever opened. */
+        okf(wavCacheCount() == before,
+            "the rack going away drops it: %.0f entries, wanted %.0f",
+            (double)wavCacheCount(), (double)before);
+        std::remove(other);
+    }
+
     /* ROOT: which key plays the file untouched.
      *
      * The fixture is 440 Hz. Set ROOT to C3 and play C3, and it must come out
@@ -1347,9 +1389,9 @@ static void test_bow_across_the_range()
 
         std::vector<float> buf(512);
         double s = 0; long c = 0;
-        for (int i = 0; i < 120000; i += 256) {
+        for (int i = 0; i < 384000; i += 256) {
             e.render(&buf[0], 256);
-            if (i > 86400)                     /* after 1.8 s */
+            if (i > 336000)                    /* after 7 s */
                 for (int k = 0; k < 256; k++) { s += buf[(size_t)k * 2] * buf[(size_t)k * 2]; c++; }
         }
         const double level = c ? std::sqrt(s / (double)c) : 0.0;
@@ -1369,12 +1411,11 @@ static void test_bow_across_the_range()
 
     std::printf("  quietest note %d at %.4f, median %.4f, ratio %.2f\n",
                 worst, worstLevel, median, median > 0 ? worstLevel / median : 0.0);
-    /* 0.15, not 0.5. The bottom of the range really is weaker - a 65 Hz
-     * string is lossy and the bow has to work harder for it, which is true of
-     * the instrument as well as the model, and BOWED compensates with a
-     * longer decay. What this catches is a note that is dead rather than
-     * quiet: with the old friction curve the dip at middle C measured 0.03 of
-     * the median against 0.19 now. */
+    /* 0.60, and it used to be 0.15 because the bottom of the range really was
+     * weak. It is not any more: the bow replaces what the string loses, which
+     * is pitch-compensated for free, so every note settles at the same level.
+     * Measured after seven seconds rather than two, which is what caught the
+     * slow decay this threshold used to be hiding. */
     okf(worstLevel > median * 0.15,
         "no note is dead: the quietest is %.2f of the median, wanted over "
         "%.2f", median > 0 ? worstLevel / median : 0.0, 0.15);
@@ -1403,12 +1444,19 @@ static void test_string_exciters()
 
         e.noteOn(57, 0.9f, 0);                /* A3 */
 
+        /* Eight seconds, not two.
+         *
+         * The first version of this looked at 1.6 to 1.8 s and reported that a
+         * bowed string sustains. It did not - it was decaying slowly, and over
+         * eight seconds every note fell away and the bottom of the keyboard
+         * died outright. A window shorter than the thing being measured
+         * measures nothing. */
         std::vector<float> buf(512), mono;
         double railed = 0, counted = 0, rawPeak = 0;
-        for (int i = 0; i < 96000; i += 256) {
+        for (int i = 0; i < 384000; i += 256) {
             e.render(&buf[0], 256);
             for (int k = 0; k < 256; k++) mono.push_back(buf[(size_t)k * 2]);
-            if (i > 48000)
+            if (i > 336000)
                 for (int k = 0; k < BS_BLOCK; k++) {
                     const double v = m->outs[0].v[0][k];
                     if (v > rawPeak) rawPeak = v;
@@ -1426,7 +1474,7 @@ static void test_string_exciters()
             }
         };
         const double early = L::rms(mono, 7200, 16800);     /* 0.15 - 0.35 s */
-        const double late  = L::rms(mono, 76800, 86400);    /* 1.60 - 1.80 s */
+        const double late  = L::rms(mono, 355200, 374400);  /* 7.40 - 7.80 s */
         const double ratio = early > 1e-9 ? late / early : 0.0;
 
         std::printf("  %s: early %.4f late %.4f ratio %.2f peak %.2f V\n",
@@ -1441,8 +1489,11 @@ static void test_string_exciters()
 
         okf(railed == 0, "%.0f samples sat on the 8 V rail, wanted %.0f",
             railed, 0.0);
-        okf(late > 1e-4, "it makes a sound at all: %.5f, wanted over %.5f",
-            late, 1e-4);
+        /* A struck string is meant to be gone by eight seconds, so this asks
+         * the early window for it and the late one for the two that hold. */
+        okf((mode == 0 ? early : late) > 1e-4,
+            "it makes a sound at all: %.5f, wanted over %.5f",
+            mode == 0 ? early : late, 1e-4);
         (void)counted;
     }
 }

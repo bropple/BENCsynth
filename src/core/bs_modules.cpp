@@ -15,6 +15,8 @@
 
 #include "bs_modules.h"
 #include "bs_wav.h"
+
+#include <memory>
 #include "bs_keys.h"
 
 #include <cstring>
@@ -890,6 +892,36 @@ public:
                          * Measured, the string only reached the slip region
                          * and self-oscillated above FORCE 0.7, which left two
                          * thirds of the knob doing nothing but scrape. */
+                        /* Two parts, and the first is the one that was
+                         * missing.
+                         *
+                         * A bow sustains a note by replacing exactly what the
+                         * string loses each round trip - that is what bowing
+                         * is. Without that term this was a damped resonance
+                         * with a little regeneration from the friction curve,
+                         * and it decayed: measured over eight seconds every
+                         * note fell away and the bottom of the keyboard died
+                         * outright, while a two-second window made it look
+                         * like it was holding.
+                         *
+                         * (1 - loopGain) is the loss, so this cancels it and
+                         * then some, and it is pitch-compensated for free
+                         * because the loss is.
+                         *
+                         * The 1/(1 + (x/target)^2) is what stops it there.
+                         * Simply overpaying the loss made every note grow
+                         * without limit - the bottom of the keyboard reached
+                         * four times its starting level over eight seconds -
+                         * because the friction curve alone does not bite hard
+                         * enough at low pitch. This falls below the loss once
+                         * the string is loud enough, so the note settles at a
+                         * level FORCE chooses instead of wherever the clamp
+                         * happens to be. */
+                        const float target = 0.22f + 0.55f * fUse;
+                        const float over = x / target;
+                        e += x * (1.0f - loopGain[k]) * 1.8f / (1.0f + over * over);
+
+                        /* And the character: stick and slip. */
                         e += excDc[c][k].step(d * fric) * (0.25f + 0.75f * fUse) * 0.5f;
                     } else if (excite == 2) {
                         /* A reed. The player's pressure pushes it open and the
@@ -918,8 +950,18 @@ public:
                          * all and the string sat on its 8 V rail for an eighth
                          * of every cycle. Limiting what goes in bounds what
                          * comes out. */
+                        /* Bounded the same way the bow is.
+                         *
+                         * The reed's own saturation sets the amplitude, and
+                         * left alone it climbs: held for eight seconds the
+                         * string reached its 8 V rail, which two seconds of
+                         * measurement had not shown. This falls away as the
+                         * string gets loud, so the note settles instead. */
+                        const float rTarget = 0.9f + 2.2f * force;
+                        const float rOver = x / rTarget;
                         e += excDc[c][k].step(softClip((dp * reed) * 1.2f) * 0.16f +
-                                              0.012f * br * mouth);
+                                              0.012f * br * mouth) /
+                             (1.0f + rOver * rOver);
                     }
 
                     if (excite == 0 && burst[c] > 0) {
@@ -2077,7 +2119,7 @@ private:
 
 class ModuleSample : public Module {
 public:
-    ModuleSample() : loaded(false)
+    ModuleSample()
     {
         configure("SAMPLE", "SAMPLE", 6, 3);
         addKnob("TUNE",  -24.0f, 24.0f, 0.0f, "%+.0f st", PC_LIN, 1.0f);
@@ -2114,19 +2156,18 @@ public:
      * the audio thread. process() only ever reads what this leaves behind. */
     void onTextChanged()
     {
-        wav = WavData();
-        loaded = false;
+        wav.reset();
         status.clear();
         if (path.empty()) return;
         std::string err;
-        loaded = wavLoad(path.c_str(), &wav, &err);
+        wav = wavLoadShared(path.c_str(), &err);
         status = err;
         reset();
 
         /* The panel says which file, because otherwise a rack with three
          * samplers in it is three identical grey boxes. The title bar is
          * already drawn and already sized to fit, so it costs nothing. */
-        if (loaded) {
+        if (wav) {
             const size_t a = path.find_last_of("/\\");
             std::string base = a == std::string::npos ? path : path.substr(a + 1);
             const size_t dot = base.find_last_of('.');
@@ -2137,9 +2178,18 @@ public:
         }
     }
 
-    bool        textLoaded() const { return loaded && wav.frames > 1; }
+    bool        textLoaded() const { return wav && wav->frames > 1; }
     const char *textStatus() const { return status.c_str(); }
-    int         sampleFrames() const { return loaded ? wav.frames : 0; }
+    int         sampleFrames() const { return wav ? wav->frames : 0; }
+
+    /* Sixty pixels of waveform under the knobs. Without it a sampler is a box
+     * with a filename on it and no way to see where START lands. */
+    int extraPanelHeight() const { return 60; }
+    const float *previewAudio(int *frames) const
+    {
+        if (frames) *frames = wav ? wav->frames : 0;
+        return wav && wav->frames > 0 ? &wav->samples[0] : 0;
+    }
 
     void reset()
     {
@@ -2153,7 +2203,7 @@ public:
         const int ch = polyIn();
         setAllOutputChannels(ch);
 
-        if (!loaded || wav.frames < 2) {
+        if (!wav || wav->frames < 2) {
             for (size_t i = 0; i < outs.size(); i++) outs[i].clear();
             return;
         }
@@ -2162,12 +2212,12 @@ public:
         const float start = pv(2), level = pv(3);
         const bool  loop = pv(4) >= 0.5f;
         const float root = pv(5);
-        const int   n = wav.frames;
+        const int   n = wav->frames;
 
         /* The file's rate against the engine's: a 44.1 kHz file played on a
          * 48 kHz engine has to be read slightly faster to come out at the
          * pitch it was recorded at. */
-        const double rateRatio = wav.rate > 1.0 ? wav.rate / (double)sr : 1.0;
+        const double rateRatio = wav->rate > 1.0 ? wav->rate / (double)sr : 1.0;
 
         /* Nothing patched to TRIG means play, rather than wait forever for a
          * trigger that is not coming. Dropping this in and patching L and R
@@ -2195,8 +2245,8 @@ public:
                     const int i0 = (int)pos[c];
                     const int i1 = i0 + 1 < n ? i0 + 1 : (loop ? 0 : i0);
                     const float t = (float)(pos[c] - (double)i0);
-                    const float *a = &wav.samples[(size_t)i0 * 2];
-                    const float *b = &wav.samples[(size_t)i1 * 2];
+                    const float *a = &wav->samples[(size_t)i0 * 2];
+                    const float *b = &wav->samples[(size_t)i1 * 2];
                     l = (a[0] + (b[0] - a[0]) * t) * level;
                     r = (a[1] + (b[1] - a[1]) * t) * level;
 
@@ -2228,8 +2278,9 @@ public:
 private:
     std::string path;
     std::string status;
-    WavData     wav;
-    bool        loaded;
+    /* Shared with every other sampler on the same file. Held rather than
+     * copied, so a drum rack built from one folder holds the folder once. */
+    std::shared_ptr<const WavData> wav;
     double      pos[BS_MAX_POLY];
     bool        playing[BS_MAX_POLY];
     float       last[BS_MAX_POLY], eos[BS_MAX_POLY];

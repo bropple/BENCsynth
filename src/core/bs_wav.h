@@ -18,6 +18,7 @@
 #ifndef BS_WAV_H
 #define BS_WAV_H
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -36,6 +37,21 @@ struct WavData {
  * the whole reason it exists. */
 bool wavLoad(const char *path, WavData *out, std::string *err,
              int maxSeconds = 120);
+
+/* The same, shared.
+ *
+ * Two samplers on the same recording used to hold two copies of it, which for
+ * a drum rack built out of one folder is the whole folder in memory once per
+ * pad. Loaded files are kept by path and handed out until the last module
+ * using one lets go.
+ *
+ * Returns null on failure, with the reason in `err`. Only ever called from a
+ * thread that is allowed to touch a disk - never the audio thread. */
+std::shared_ptr<const WavData> wavLoadShared(const char *path, std::string *err,
+                                             int maxSeconds = 120);
+
+/* How many distinct files are held. For the test that says the cache works. */
+int wavCacheCount();
 
 }  /* namespace bs */
 

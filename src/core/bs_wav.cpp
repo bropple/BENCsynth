@@ -5,6 +5,8 @@
 #include "bs_wav.h"
 
 #include <cstdio>
+#include <map>
+#include <mutex>
 #include <cstring>
 
 namespace bs {
@@ -161,6 +163,59 @@ bool wavLoad(const char *path, WavData *out, std::string *err, int maxSeconds)
 
     std::fclose(f);
     return Fail::no(err, haveFmt ? "WAV has no audio in it" : "not a WAV file");
+}
+
+/* ------------------------------------------------------------------ *
+ * The cache
+ *
+ * Weak, so a file is dropped when the last sampler using it goes away rather
+ * than being held for the life of the program. A rack that loads a folder of
+ * drums and then clears itself should not still be holding the drums.
+ * ------------------------------------------------------------------ */
+
+namespace {
+std::mutex g_cacheLock;
+std::map<std::string, std::weak_ptr<const WavData> > g_cache;
+}
+
+std::shared_ptr<const WavData> wavLoadShared(const char *path, std::string *err,
+                                             int maxSeconds)
+{
+    if (!path || !*path) { if (err) *err = "no file"; return std::shared_ptr<const WavData>(); }
+    const std::string key = path;
+
+    std::lock_guard<std::mutex> lock(g_cacheLock);
+
+    /* Expired entries are swept whenever the map is walked, which is often
+     * enough that nothing else has to. */
+    for (std::map<std::string, std::weak_ptr<const WavData> >::iterator it = g_cache.begin();
+         it != g_cache.end(); ) {
+        if (it->second.expired()) g_cache.erase(it++);
+        else ++it;
+    }
+
+    std::map<std::string, std::weak_ptr<const WavData> >::iterator f = g_cache.find(key);
+    if (f != g_cache.end()) {
+        std::shared_ptr<const WavData> held = f->second.lock();
+        if (held) { if (err) err->clear(); return held; }
+    }
+
+    std::shared_ptr<WavData> fresh(new WavData);
+    if (!wavLoad(path, fresh.get(), err, maxSeconds))
+        return std::shared_ptr<const WavData>();
+
+    g_cache[key] = std::weak_ptr<const WavData>(fresh);
+    return std::shared_ptr<const WavData>(fresh);
+}
+
+int wavCacheCount()
+{
+    std::lock_guard<std::mutex> lock(g_cacheLock);
+    int n = 0;
+    for (std::map<std::string, std::weak_ptr<const WavData> >::const_iterator it = g_cache.begin();
+         it != g_cache.end(); ++it)
+        if (!it->second.expired()) n++;
+    return n;
 }
 
 }  /* namespace bs */

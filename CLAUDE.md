@@ -27,8 +27,8 @@ style only — do not copy code from it.
 ## Before you commit anything
 
 ```sh
-make && make test                     # 552 checks
-make clap  && make clap-test          #  68
+make && make test                     # 555 checks
+make clap  && make clap-test          #  74
 make lv2   && make lv2-test           #  27
 make ipc-test && xvfb-run -a --server-args="-screen 0 1400x900x24" \
     ./bencsynth-ipc-test ./bencsynth  #  46
@@ -227,6 +227,15 @@ use-after-free that aborts on shutdown.
 **A polyphonic oscillator's idle channels are not silent.** They free-run at
 0 V, which is middle C. Any measurement of a polyphonic rack needs a gated VCA
 or the silent voices drown the one playing — this cost an hour on the MPE work.
+
+**Measure a decay over longer than you think.** The bow was reported as
+sustaining on the strength of a 1.6-1.8 s window; over eight seconds every note
+was decaying and the bottom of the keyboard died. Anything that settles slowly
+needs a window longer than it settles in, or the test is measuring the attack.
+
+**The rack text is capped at 192 KB and crosses on every change.** Nothing
+bulky can travel that way - embedded sample audio goes in the plugin's *state*,
+which is a separate uncapped stream written only when the host saves.
 
 **Goertzel drifts over a long window.** It reported 261 Hz for a note an octave
 up. Use direct sin/cos correlation for pitch over more than a few thousand

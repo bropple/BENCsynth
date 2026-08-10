@@ -700,7 +700,105 @@ int main(int argc, char **argv)
                 std::printf("  skip  DISPLAY/BENCSYNTH_EDITOR unset "
                             "- not starting a real editor\n");
             }
-            /* --- MIDI learn, the plugin's half of it -------------------
+                    /* --- a project that carries its audio ----------------------
+             *
+             * A rack refers to a sample by path, which stops being true the
+             * moment the project moves to another machine. The saved state
+             * carries the file itself, so deleting the original and loading
+             * the state back must still make a sound. */
+            {
+                /* Whatever the plugin is holding now, put back at the end:
+                 * the checks after this one expect the rack they set up, and
+                 * this block replaces it with a sampler. */
+                Stream wasHolding;
+                clap_ostream_t osKeep = { &wasHolding, ostream_write };
+                stx->save(p, &osKeep);
+
+                const char *wavPath = "bencsynth-host-sample.wav";
+                {
+                    /* A second of 440 Hz, 16-bit stereo at 44100. */
+                    const int rate = 44100, n = rate;
+                    std::FILE *w = std::fopen(wavPath, "wb");
+                    if (w) {
+                        const unsigned data = (unsigned)(n * 4);
+                        unsigned char h[44];
+                        std::memcpy(h, "RIFF", 4);
+                        const unsigned riff = 36 + data;
+                        for (int i = 0; i < 4; i++) h[4 + i] = (unsigned char)(riff >> (8 * i));
+                        std::memcpy(h + 8, "WAVEfmt ", 8);
+                        const unsigned f16 = 16;
+                        for (int i = 0; i < 4; i++) h[16 + i] = (unsigned char)(f16 >> (8 * i));
+                        h[20] = 1; h[21] = 0; h[22] = 2; h[23] = 0;
+                        for (int i = 0; i < 4; i++) h[24 + i] = (unsigned char)((unsigned)rate >> (8 * i));
+                        const unsigned bps = (unsigned)rate * 4;
+                        for (int i = 0; i < 4; i++) h[28 + i] = (unsigned char)(bps >> (8 * i));
+                        h[32] = 4; h[33] = 0; h[34] = 16; h[35] = 0;
+                        std::memcpy(h + 36, "data", 4);
+                        for (int i = 0; i < 4; i++) h[40 + i] = (unsigned char)(data >> (8 * i));
+                        std::fwrite(h, 1, 44, w);
+                        for (int i = 0; i < n; i++) {
+                            const double v = std::sin(2.0 * 3.14159265358979 * 440.0 * i / rate);
+                            const short q = (short)(v * 20000.0);
+                            const unsigned char b2[4] = { (unsigned char)(q & 0xff),
+                                                          (unsigned char)((q >> 8) & 0xff),
+                                                          (unsigned char)(q & 0xff),
+                                                          (unsigned char)((q >> 8) & 0xff) };
+                            std::fwrite(b2, 1, 4, w);
+                        }
+                        std::fclose(w);
+                    }
+                }
+
+                /* A rack with one sampler pointed at it, sent the way the
+                 * editor sends a rack. */
+                std::string rack = "BENCSYNTH 1\n"
+                                   "M 0 SAMPLE 40.0 40.0 6 0 0 0 1 1 60\n"
+                                   "M 1 OUT 400.0 40.0 2 0.6 0\n"
+                                   "X 0 ";
+                rack += wavPath;
+                rack += "\nC 0 0 1 0 0\nC 0 1 1 1 1\n";
+
+                Stream in0;
+                in0.data = rack;
+                clap_istream_t is0 = { &in0, istream_read };
+                ok(stx->load(p, &is0), "a rack with a sampler loads");
+
+                Stream saved;
+                clap_ostream_t os1 = { &saved, ostream_write };
+                ok(stx->save(p, &os1), "and saves");
+                ok(saved.data.find("BSAU") != std::string::npos,
+                   "the saved state carries the audio, not only the path");
+                ok(saved.data.size() > 100000,
+                   "and it is big enough to actually be the audio");
+
+                /* Now the file goes away, as it does when a project moves. */
+                std::remove(wavPath);
+
+                Stream back;
+                back.data = saved.data;
+                clap_istream_t is1 = { &back, istream_read };
+                ok(stx->load(p, &is1), "the project loads with its file gone");
+
+                /* The proof is sound: render and look for the tone. */
+                evs.clear();
+                double energy = 0;
+                for (int i = 0; i < 40; i++) {
+                    p->process(p, &proc);
+                    for (uint32_t k = 0; k < proc.frames_count; k++)
+                        energy += (double)L[k] * L[k];
+                }
+                ok(energy > 1e-4,
+                   "and the sampler still makes a sound - the audio came out "
+                   "of the project");
+                std::remove(wavPath);
+
+                Stream restore;
+                restore.data = wasHolding.data;
+                clap_istream_t isKeep = { &restore, istream_read };
+                stx->load(p, &isKeep);
+            }
+
+    /* --- MIDI learn, the plugin's half of it -------------------
              *
              * The knob is in the editor and the MIDI is in the plugin. The
              * editor arms a macro; the plugin catches the next CC and reports

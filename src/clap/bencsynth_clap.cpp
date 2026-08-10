@@ -41,6 +41,8 @@
 #include "bs_racklib.h"
 #include "bs_midimsg.h"
 
+#include <algorithm>
+
 /* Where the .clap itself lives, filled in by entry_init. The editor is a
  * different file and nothing guarantees the two were installed together, so
  * this is a hint rather than an answer - see editorCandidates() in
@@ -540,6 +542,143 @@ static const clap_plugin_params_t EXT_PARAMS = {
  * State - the whole rack, as text, inside the host's project
  * ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ *
+ * Audio inside the project
+ *
+ * A rack refers to its samples by path, which is right while the machine is
+ * the same machine and useless the moment the project moves. So the plugin's
+ * saved state carries the files themselves, appended after the rack text.
+ *
+ * Only the state, not the rack text: that crosses to the editor on every
+ * change through a 192 KB channel, and putting megabytes of audio through a
+ * seqlock sixty times a second would be a different kind of wrong. The path
+ * keeps travelling live; the audio travels once, when the host saves.
+ *
+ * Layout, after the rack text and its terminator:
+ *
+ *   "BSAU" u32 count
+ *     u32 pathLen, path, u64 dataLen, data      (repeated)
+ * ------------------------------------------------------------------ */
+
+static const uint64_t BS_EMBED_MAX = 32u * 1024u * 1024u;
+
+static void putU32(std::string &o, uint32_t v)
+{
+    for (int i = 0; i < 4; i++) o += (char)((v >> (8 * i)) & 0xff);
+}
+static void putU64(std::string &o, uint64_t v)
+{
+    for (int i = 0; i < 8; i++) o += (char)((v >> (8 * i)) & 0xff);
+}
+static uint32_t getU32(const char *p)
+{
+    return (uint32_t)(unsigned char)p[0] | ((uint32_t)(unsigned char)p[1] << 8) |
+           ((uint32_t)(unsigned char)p[2] << 16) | ((uint32_t)(unsigned char)p[3] << 24);
+}
+static uint64_t getU64(const char *p)
+{
+    uint64_t v = 0;
+    for (int i = 0; i < 8; i++) v |= (uint64_t)(unsigned char)p[i] << (8 * i);
+    return v;
+}
+
+/* Every distinct file the rack refers to, read off the disk as it stands. */
+static void embedAudio(BencSynthClap *s, std::string &out)
+{
+    std::vector<std::string> paths;
+    for (int i = 0; i < s->engine.patch.slotCount(); i++) {
+        bs::Module *m = s->engine.patch.module(i);
+        if (!m || m->typeId != "SAMPLE") continue;
+        const std::string *t = m->textBuffer();
+        if (!t || t->empty()) continue;
+        if (std::find(paths.begin(), paths.end(), *t) == paths.end())
+            paths.push_back(*t);
+    }
+    if (paths.empty()) return;
+
+    std::string body;
+    uint32_t count = 0;
+    uint64_t total = 0;
+    for (size_t i = 0; i < paths.size(); i++) {
+        std::FILE *f = std::fopen(paths[i].c_str(), "rb");
+        if (!f) continue;                       /* gone: nothing to carry */
+        std::string data;
+        char buf[65536];
+        size_t n;
+        while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) data.append(buf, n);
+        std::fclose(f);
+
+        /* A cap, because a project is not an archive and a host writing it is
+         * a person waiting. Past this the path still travels and the audio
+         * does not. */
+        if (total + data.size() > BS_EMBED_MAX) {
+            bs::bs_log("  not embedding %s - past the %llu byte budget",
+                       paths[i].c_str(), (unsigned long long)BS_EMBED_MAX);
+            continue;
+        }
+        total += data.size();
+        putU32(body, (uint32_t)paths[i].size());
+        body += paths[i];
+        putU64(body, (uint64_t)data.size());
+        body += data;
+        count++;
+    }
+    if (!count) return;
+
+    out += "BSAU";
+    putU32(out, count);
+    out += body;
+    bs::bs_log("  embedded %u sample(s), %llu bytes", count,
+               (unsigned long long)total);
+}
+
+/* The other end: anything the rack could not open gets written out of the
+ * project and reloaded from there. */
+static void restoreAudio(BencSynthClap *s, const char *p, size_t n)
+{
+    if (n < 8 || std::memcmp(p, "BSAU", 4) != 0) return;
+    uint32_t count = getU32(p + 4);
+    size_t at = 8;
+
+    for (uint32_t i = 0; i < count; i++) {
+        if (at + 4 > n) return;
+        const uint32_t plen = getU32(p + at); at += 4;
+        if (at + plen + 8 > n) return;
+        const std::string path(p + at, plen); at += plen;
+        const uint64_t dlen = getU64(p + at); at += 8;
+        if (at + dlen > n) return;
+        const char *data = p + at; at += (size_t)dlen;
+
+        /* Which module wanted this, and did it manage without us? */
+        for (int k = 0; k < s->engine.patch.slotCount(); k++) {
+            bs::Module *m = s->engine.patch.module(k);
+            if (!m || m->typeId != "SAMPLE") continue;
+            const std::string *t = m->textBuffer();
+            if (!t || *t != path) continue;
+            if (m->textLoaded()) break;         /* the file is still there */
+
+            const char *dir = bs::userSampleDir();
+            if (!dir || !*dir) break;
+            const size_t cut = path.find_last_of("/\\");
+            const std::string base = cut == std::string::npos ? path
+                                                              : path.substr(cut + 1);
+            const std::string dest = std::string(dir) + "/" + base;
+
+            std::FILE *f = std::fopen(dest.c_str(), "wb");
+            if (!f) break;
+            std::fwrite(data, 1, (size_t)dlen, f);
+            std::fclose(f);
+
+            std::string why;
+            if (s->engine.loadSample(k, dest.c_str(), &why))
+                bs::bs_log("  restored %s out of the project", dest.c_str());
+            else
+                bs::bs_log("  could not restore %s: %s", dest.c_str(), why.c_str());
+            break;
+        }
+    }
+}
+
 static bool st_save(const clap_plugin_t *p, const clap_ostream_t *stream)
 {
     BencSynthClap *s = self_of(p);
@@ -559,8 +698,13 @@ static bool st_save(const clap_plugin_t *p, const clap_ostream_t *stream)
     }
     s->saved = s->snapshot.empty() ? bs_patch_to_string(&s->engine) : s->snapshot;
 
-    const char *b = s->saved.c_str();
-    uint64_t left = s->saved.size() + 1;   /* including the terminator */
+    /* The rack, its terminator, then the audio it refers to. */
+    std::string blob = s->saved;
+    blob += '\0';
+    embedAudio(s, blob);
+
+    const char *b = blob.data();
+    uint64_t left = blob.size();
     while (left > 0) {
         /* A short write is normal, not an error - only a negative return is a
          * failure. Treating "wrote some of it" as done truncates the rack. */
@@ -585,13 +729,25 @@ static bool st_load(const clap_plugin_t *p, const clap_istream_t *stream)
         text.append(buf, (size_t)n);
     }
     if (text.empty()) return false;
-    /* The terminator was written; the parser wants a C string and text may or
-     * may not still carry it depending on how the host stored the bytes. */
+
+    /* Split at the FIRST terminator, not by trimming the last: everything
+     * after it is embedded audio, and audio ends in whatever it ends in. A
+     * state written before this existed has no terminator at all, or only
+     * trailing ones, and still loads. */
+    std::string extras;
+    const size_t nul = text.find('\0');
+    if (nul != std::string::npos) {
+        extras.assign(text, nul + 1, std::string::npos);
+        text.resize(nul);
+    }
     while (!text.empty() && text.back() == '\0') text.pop_back();
 
     char status[192] = "";
     if (!bs_patch_from_string(&s->engine, text.c_str(), status, (int)sizeof status))
         return false;
+
+    /* Anything the rack could not open, taken back out of the project. */
+    if (!extras.empty()) restoreAudio(s, extras.data(), extras.size());
 
     /* The rack no longer necessarily corresponds to any preset. */
     s->custom = true;

@@ -107,6 +107,21 @@ rack.
 **The standalone takes MIDI now.** Plug a keyboard in and play it; there is
 nothing to configure, and the status line says what it connected to.
 
+### New in v0.6.0
+
+- **The sampler shows its waveform**, with a marker where `START` lands.
+- **One copy per file.** Two samplers on the same recording used to hold two
+  copies of it; a drum rack built from a folder held the folder once per pad.
+- **A saved project carries its audio.** The plug-in's state now contains the
+  sample files themselves, so a project that moves to another machine — or
+  whose samples get tidied away — still plays. Up to 32 MB; past that the path
+  travels and the audio does not.
+- **The bow sustains.** It did not before: measured over eight seconds every
+  note decayed and the bottom of the keyboard died outright, which a
+  two-second look had made appear fine. A bow replaces exactly what the string
+  loses each round trip, and now it does — so every note holds, at the same
+  level, all the way down.
+
 ### New in v0.5.2
 
 - **The file browser takes a typed path**, so a sample living somewhere else on

@@ -52,3 +52,5 @@ bencsynth-gen-racks
 bencsynth-save-rack
 build/testracks/
 bencsynth-test-sample.wav
+bencsynth-test-sample-2.wav
+bencsynth-host-sample.wav

@@ -42,6 +42,11 @@ const char *userRackDir(bool create = false);
  * reorder itself between runs. Returns the count. */
 int scanUserRacks(const char *extra);
 
+/* Where audio unpacked out of a saved project goes: alongside the racks, so
+ * it is somewhere a person can find and not a temporary directory that gets
+ * swept. Created on demand. */
+const char *userSampleDir();
+
 int             userRackCount();
 const UserRack *userRackAt(int i);
 

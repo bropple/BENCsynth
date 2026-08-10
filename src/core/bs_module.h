@@ -309,6 +309,13 @@ public:
      * a meter. Zero for everything that is only controls. */
     virtual int extraPanelHeight() const { return 0; }
 
+    /* A module holding audio worth looking at hands it over here, interleaved
+     * stereo. Generic so the rack can draw it without knowing which module it
+     * is - the alternative was exporting the sampler's whole class header so a
+     * static_cast could reach into it. */
+    virtual const float *previewAudio(int *frames) const
+    { if (frames) *frames = 0; return 0; }
+
     /* A module that holds free text - a scratchpad - returns it here, so that
      * saving a patch carries it and the rack knows to draw an editor. Null for
      * everything else, which is everything else. */

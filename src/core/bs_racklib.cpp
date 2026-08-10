@@ -128,6 +128,23 @@ int scanUserRacks(const char *extra)
     return (int)g_racks.size();
 }
 
+const char *userSampleDir()
+{
+    static std::string dir;
+    static bool made = false;
+    if (dir.empty()) {
+        const std::string base = userRackDir(false);
+        if (base.empty()) return "";
+        /* Beside the racks rather than inside them, so a rack folder listing
+         * is racks and a sample folder listing is samples. */
+        const size_t cut = base.find_last_of("/\\");
+        dir = (cut == std::string::npos ? base : base.substr(0, cut)) +
+              (char)BS_SEP + "samples";
+    }
+    if (!made && !dir.empty()) { makeDirs(dir); made = true; }
+    return dir.c_str();
+}
+
 int userRackCount() { return (int)g_racks.size(); }
 
 const UserRack *userRackAt(int i)
