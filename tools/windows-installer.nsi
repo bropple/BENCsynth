@@ -41,7 +41,19 @@ Name "BENCsynth ${VERSION}"
 OutFile "${OUTFILE}"
 Unicode true
 RequestExecutionLevel user
-InstallDir "$LOCALAPPDATA\Programs\BENCsynth"
+
+; Under a BENCO folder, like the rest of them: several programs from one
+; company, grouped, rather than a row of BENC-somethings that read as
+; unrelated things from unrelated people.
+;
+; Still %LOCALAPPDATA%\Programs and not Program Files, which is what lets this
+; install without administrator rights - the release notes promise that, and
+; moving it up would quietly take it away. So the grouping is the same and the
+; place is not: %LOCALAPPDATA%\Programs\BENCO\BENCsynth.
+;
+; The uninstaller takes the BENCO folder with it only when this was the last
+; one in it - see the end of the uninstall section.
+InstallDir "$LOCALAPPDATA\Programs\BENCO\BENCsynth"
 ShowInstDetails show
 ShowUninstDetails show
 
@@ -181,6 +193,19 @@ Section "Uninstall"
   Delete "$INSTDIR\uninstall.exe"
   RMDir /r "$INSTDIR\assets"
   RMDir "$INSTDIR"
+
+  ; And the BENCO folder above it, when this went to the default place.
+  ;
+  ; RMDir without /r removes a directory only when it is empty, so BENCO goes
+  ; when this was the last BENC program in it and stays when another is still
+  ; installed beside it. RMDir /r there would uninstall the neighbours.
+  ;
+  ; Only for the default directory. Setup lets the directory be changed, and
+  ; what sits above a path somebody typed themselves is not this uninstaller's
+  ; to remove - an install into D:\Apps\BENCsynth should not take D:\Apps with
+  ; it on the way out, however empty it happens to be.
+  StrCmp $INSTDIR "$LOCALAPPDATA\Programs\BENCO\BENCsynth" 0 +2
+    RMDir "$INSTDIR\.."
 
   Delete "${CLAPDIR}\bencsynth.clap"
   Delete "${CLAPDIR}\bencsynth.exe"
