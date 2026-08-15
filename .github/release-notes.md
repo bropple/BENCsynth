@@ -11,7 +11,7 @@ stopped being true, so Linux and macOS are back.
 
 | | |
 |---|---|
-| **Everything** | `bencsynth-*-windows-setup.exe` — the installer. Program and plug-ins, and it upgrades an existing install rather than sitting beside it. No administrator rights needed. |
+| **Everything** | `bencsynth-*-windows-setup.exe` — the installer. Program and plug-ins, and it upgrades an existing install rather than sitting beside it. Installs for everyone on the machine, so it asks for administrator rights once. |
 | The program alone | `bencsynth-*-windows-x86_64.zip` — unzip and run `bencsynth.exe`. |
 | The plug-ins alone | `bencsynth-*-windows-plugins.zip` — CLAP and VST3, with `INSTALL.md` for placing them by hand. |
 
@@ -106,6 +106,30 @@ rack.
 
 **The standalone takes MIDI now.** Plug a keyboard in and play it; there is
 nothing to configure, and the status line says what it connected to.
+
+### New in v0.7.2
+
+- **Windows: it installs for everyone on the machine now**, into
+  `C:\Program Files\BENCO\BENCsynth`, and asks for administrator rights once
+  to do it. It used to install into `%LOCALAPPDATA%\Programs` for the person
+  running it and no rights were needed. One copy in the place Windows keeps
+  programs is the better arrangement for a machine somebody else also sits at.
+
+  The plug-ins moved with it, from the per-user folders to
+  `%COMMONPROGRAMFILES%\CLAP`, `\VST3` and `\LV2`. Hosts search both, so
+  anything you placed by hand still works — but an elevated installer writing
+  `%LOCALAPPDATA%` writes the profile of whoever answered the UAC prompt,
+  which on a machine with a separate administrator account is not the person
+  who will open the DAW.
+
+  A previous per-user install is not removed by this one; they sit in
+  different places and Windows will list both. Uninstall the old one first, or
+  afterwards, from Apps & Features.
+
+- **The BENCO folder.** All three of these now live under one, rather than a
+  row of BENC-somethings across Program Files reading as unrelated things from
+  unrelated people. The uninstaller takes that folder too, when it is empty
+  and this was the last one in it.
 
 ### New in v0.7.1
 

@@ -246,6 +246,13 @@ It goes where hosts already look — `~/.clap` on Linux,
 is a single file; on macOS it is a bundle directory with an `Info.plist`, which
 is why that branch of the Makefile does more.
 
+Those are the per-user directories, which is what `make clap-install` writes
+and what a developer wants. The Windows **installer** is machine-wide and uses
+the system directory instead — `%COMMONPROGRAMFILES%\CLAP`, and the matching
+`VST3` and `LV2` beside it. Hosts search both, so a plug-in placed by hand in
+either is found; the difference only matters when you are looking for the one
+the installer put there.
+
 **It is not limited to one rack.** CLAP has a stepped parameter type, so the
 rack selector is parameter 9 and every preset is reachable from the host's own
 parameter list, named through `value_to_text`, saved with the project, and

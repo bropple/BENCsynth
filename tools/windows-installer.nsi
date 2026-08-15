@@ -40,37 +40,54 @@ Name "BENCsynth ${VERSION}"
 ; the script, not into the working directory.
 OutFile "${OUTFILE}"
 Unicode true
-RequestExecutionLevel user
-
-; Under a BENCO folder, like the rest of them: several programs from one
-; company, grouped, rather than a row of BENC-somethings that read as
-; unrelated things from unrelated people.
+; Machine-wide, into Program Files, under a BENCO folder with the rest of
+; them. It asks for administrator rights once and installs for everyone on the
+; box, which is what a program in a studio wants: one copy, in the place
+; Windows keeps programs, findable by whoever sits down at it.
 ;
-; Still %LOCALAPPDATA%\Programs and not Program Files, which is what lets this
-; install without administrator rights - the release notes promise that, and
-; moving it up would quietly take it away. So the grouping is the same and the
-; place is not: %LOCALAPPDATA%\Programs\BENCO\BENCsynth.
+; This used to be a per-user install into %LOCALAPPDATA%\Programs, which
+; needed no administrator rights. Elevating changes more than the path, and
+; the rest of this file changes with it - everything below that was written
+; per-user is now machine-wide, because half-elevated is the worst of both:
+; $LOCALAPPDATA in an elevated process is the profile of whoever answered the
+; UAC prompt, which on a machine with a separate administrator account is not
+; the person installing it, and the plug-ins would land in a profile nobody
+; uses.
 ;
 ; The uninstaller takes the BENCO folder with it only when this was the last
 ; one in it - see the end of the uninstall section.
-InstallDir "$LOCALAPPDATA\Programs\BENCO\BENCsynth"
+RequestExecutionLevel admin
+InstallDir "$PROGRAMFILES64\BENCO\BENCsynth"
 ShowInstDetails show
 ShowUninstDetails show
 
 !define REGKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\BENCsynth"
 
-; Where each format lives. These are the per-user directories the hosts search
-; by default - see docs/PLUGIN.md. LV2 is under Roaming and the other two under
-; Local, which is not a mistake and has cost an evening before now.
-!define CLAPDIR "$LOCALAPPDATA\Programs\Common\CLAP"
-!define VST3DIR "$LOCALAPPDATA\Programs\Common\VST3"
-!define LV2DIR  "$APPDATA\LV2"
+; Where each format lives. The machine-wide directories the hosts search, which
+; go with a machine-wide install: Common Files is where the CLAP and VST3
+; specifications both put the system-wide location, and it is where BENCmouth
+; already installs its own.
+;
+; These were the per-user directories under %LOCALAPPDATA% and %APPDATA%, and
+; the per-user locations still work - a host looks in both. What made them
+; wrong here is elevation: an installer running as an administrator writes that
+; administrator's profile, not the profile of the person who will open the DAW.
+; docs/PLUGIN.md lists both sets for anyone placing a bundle by hand.
+!define CLAPDIR "$COMMONFILES64\CLAP"
+!define VST3DIR "$COMMONFILES64\VST3"
+!define LV2DIR  "$COMMONFILES64\LV2"
 
 !define MUI_ABORTWARNING
 !define MUI_ICON "${ICONFILE}"
 !define MUI_UNICON "${ICONFILE}"
-!define MUI_FINISHPAGE_RUN "$INSTDIR\bencsynth.exe"
+; Through Explorer rather than directly. The installer runs elevated, so
+; anything it starts is elevated too, and a program launched that way writes
+; files nobody can then edit - which for this one means every rack and every
+; rendered wav lands owned by Administrator. Explorer is already running as
+; the person at the keyboard, so handing it the path starts the synth as them.
+!define MUI_FINISHPAGE_RUN
 !define MUI_FINISHPAGE_RUN_TEXT "Run BENCsynth"
+!define MUI_FINISHPAGE_RUN_FUNCTION LaunchUnelevated
 
 !insertmacro MUI_PAGE_LICENSE "${SRCDIR}/LICENSE"
 !insertmacro MUI_PAGE_COMPONENTS
@@ -80,6 +97,24 @@ ShowUninstDetails show
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "English"
+
+Function LaunchUnelevated
+  Exec '"$WINDIR\explorer.exe" "$INSTDIR\bencsynth.exe"'
+FunctionEnd
+
+; A 32-bit installer - which is what NSIS builds - sees a redirected registry
+; unless it says otherwise, so the entry Apps & Features reads would go to
+; WOW6432Node while the program itself is 64-bit. And the Start Menu shortcuts
+; belong to every user now, not to whoever answered the UAC prompt.
+Function .onInit
+  SetRegView 64
+  SetShellVarContext all
+FunctionEnd
+
+Function un.onInit
+  SetRegView 64
+  SetShellVarContext all
+FunctionEnd
 
 ; ---------------------------------------------------------------- program
 
@@ -148,18 +183,18 @@ SectionEnd
 
 Section -Post
   WriteUninstaller "$INSTDIR\uninstall.exe"
-  WriteRegStr   HKCU "${REGKEY}" "DisplayName"     "BENCsynth"
-  WriteRegStr   HKCU "${REGKEY}" "DisplayVersion"  "${VERSION}"
-  WriteRegStr   HKCU "${REGKEY}" "Publisher"       "BENCO"
-  WriteRegStr   HKCU "${REGKEY}" "URLInfoAbout"    "https://github.com/bropple/BENCsynth"
-  WriteRegStr   HKCU "${REGKEY}" "DisplayIcon"     "$INSTDIR\bencsynth.exe"
-  WriteRegStr   HKCU "${REGKEY}" "UninstallString" "$\"$INSTDIR\uninstall.exe$\""
-  WriteRegStr   HKCU "${REGKEY}" "InstallLocation" "$INSTDIR"
-  WriteRegDWORD HKCU "${REGKEY}" "NoModify" 1
-  WriteRegDWORD HKCU "${REGKEY}" "NoRepair" 1
+  WriteRegStr   HKLM "${REGKEY}" "DisplayName"     "BENCsynth"
+  WriteRegStr   HKLM "${REGKEY}" "DisplayVersion"  "${VERSION}"
+  WriteRegStr   HKLM "${REGKEY}" "Publisher"       "BENCO"
+  WriteRegStr   HKLM "${REGKEY}" "URLInfoAbout"    "https://github.com/bropple/BENCsynth"
+  WriteRegStr   HKLM "${REGKEY}" "DisplayIcon"     "$INSTDIR\bencsynth.exe"
+  WriteRegStr   HKLM "${REGKEY}" "UninstallString" "$\"$INSTDIR\uninstall.exe$\""
+  WriteRegStr   HKLM "${REGKEY}" "InstallLocation" "$INSTDIR"
+  WriteRegDWORD HKLM "${REGKEY}" "NoModify" 1
+  WriteRegDWORD HKLM "${REGKEY}" "NoRepair" 1
   ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
   IntFmt $0 "0x%08X" $0
-  WriteRegDWORD HKCU "${REGKEY}" "EstimatedSize" "$0"
+  WriteRegDWORD HKLM "${REGKEY}" "EstimatedSize" "$0"
 SectionEnd
 
 LangString DESC_APP  ${LANG_ENGLISH} \
@@ -204,7 +239,7 @@ Section "Uninstall"
   ; what sits above a path somebody typed themselves is not this uninstaller's
   ; to remove - an install into D:\Apps\BENCsynth should not take D:\Apps with
   ; it on the way out, however empty it happens to be.
-  StrCmp $INSTDIR "$LOCALAPPDATA\Programs\BENCO\BENCsynth" 0 +2
+  StrCmp $INSTDIR "$PROGRAMFILES64\BENCO\BENCsynth" 0 +2
     RMDir "$INSTDIR\.."
 
   Delete "${CLAPDIR}\bencsynth.clap"
@@ -218,5 +253,5 @@ Section "Uninstall"
 
   ; Racks a person saved are theirs. Nothing under Documents or the patches
   ; folder is touched, and neither is the log.
-  DeleteRegKey HKCU "${REGKEY}"
+  DeleteRegKey HKLM "${REGKEY}"
 SectionEnd
