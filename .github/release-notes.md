@@ -107,6 +107,34 @@ rack.
 **The standalone takes MIDI now.** Plug a keyboard in and play it; there is
 nothing to configure, and the status line says what it connected to.
 
+### New in v0.7.1
+
+- **It opens ten and a half seconds faster on Windows**, on the machines where
+  that was happening. Nothing was wrong with the synthesiser: raylib wakes
+  GLFW's joystick subsystem just before it creates the window, and on Windows
+  that enumerates every game controller the machine has ever had attached —
+  present or not, each answered by its own driver at its own pace. A rig with
+  a lot of things plugged into it pays for all of them, before the window
+  appears. This program has never read a joystick, so it no longer asks.
+
+  If a raylib program is slow to open on your machine, Windows' own Game
+  Controllers panel (`joy.cpl`) will be slow too — the same enumeration, with
+  no raylib anywhere near it.
+
+- **The multisampling hint is gone.** Measured at 703 pixels of a 972,800
+  pixel window — seven hundredths of one per cent — because this interface is
+  rectangles and text. It also asks the driver to go looking for a
+  multisampled pixel format at startup, which some are slow about.
+
+- **The VST3 build works again.** The Steinberg SDK was being cloned from
+  `master` while clap-wrapper was pinned, and on 11 August the SDK moved to
+  v3.8.1 and stopped compiling against it. Both halves are pinned now.
+
+- **The demo tracks are in the repository**, under `demo/` — the sources, not
+  the audio. Each renders about 120 MB of stems and a mixdown from a few tens
+  of kilobytes of code, and it comes back bit for bit, so the code is the part
+  worth keeping.
+
 ### New in v0.7.0
 
 - **The bow and the reed make notes.** They have not since v0.4.2. What
