@@ -151,7 +151,9 @@ jobs:
           mv vendor/clap-1.2.10 vendor/clap
           git clone -q --depth 1 --branch v0.15.1 \
             https://github.com/free-audio/clap-wrapper.git vendor/clap-wrapper
-          git clone -q --depth 1 \
+          # Pinned, not master. See the note in the Makefile: master moved to
+          # v3.8.1 and stopped compiling against clap-wrapper v0.15.1.
+          git clone -q --depth 1 --branch v3.8.0_build_66 \
             https://github.com/steinbergmedia/vst3sdk.git vendor/vst3sdk
           cd vendor/vst3sdk && git submodule update --init --depth 1 \
             base pluginterfaces public.sdk cmake

@@ -237,10 +237,16 @@ endif
 # Both SDKs are MIT: CLAP always was, and Steinberg relicensed VST3 in October
 # 2025. Pinned rather than tracked, because clap-wrapper's main branch follows
 # the CLAP SDK closely enough that an unpinned pair stops compiling.
+#
+# VST3_SDK_TAG existed and was set to master, and the clone below did not use
+# it - so half the pair was tracked after all, and on 2026-08-11 the SDK moved
+# to v3.8.1 and took wrapasvst3.h with it: "reference to 'iid' is ambiguous",
+# six times, in a header this project does not own. The last green build was
+# the day before. Pinned now, and the variable is actually read.
 # ------------------------------------------------------------------
 
 CW_VERSION   := v0.15.1
-VST3_SDK_TAG := master
+VST3_SDK_TAG := v3.8.0_build_66
 CW_DIR       := vendor/clap-wrapper
 VST3_SDK_DIR := vendor/vst3sdk
 VST3_BUILD   := build/vst3
@@ -549,7 +555,8 @@ vst3-fetch:
 	rm -rf $(CW_DIR) $(VST3_SDK_DIR)
 	git clone -q --depth 1 --branch $(CW_VERSION) \
 	    https://github.com/free-audio/clap-wrapper.git $(CW_DIR)
-	git clone -q --depth 1 https://github.com/steinbergmedia/vst3sdk.git $(VST3_SDK_DIR)
+	git clone -q --depth 1 --branch $(VST3_SDK_TAG) \
+	    https://github.com/steinbergmedia/vst3sdk.git $(VST3_SDK_DIR)
 	cd $(VST3_SDK_DIR) && git submodule update --init --depth 1 \
 	    base pluginterfaces public.sdk cmake
 	@echo "clap-wrapper $(CW_VERSION) and the VST3 SDK are in vendor/"
