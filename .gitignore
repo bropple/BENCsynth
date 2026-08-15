@@ -54,3 +54,13 @@ build/testracks/
 bencsynth-test-sample.wav
 bencsynth-test-sample-2.wav
 bencsynth-host-sample.wav
+
+# Demo tracks: the code, not the audio.
+#
+# demo/*/src is what makes each track and is a few tens of kilobytes. What it
+# renders is four hundred megabytes of wav - stems in layers/, and a mixdown
+# beside them - which this program regenerates from the sources any time it is
+# asked. Committing that would grow a thirteen megabyte repository past four
+# hundred, in every clone, permanently.
+demo/*/layers/
+demo/*/*.wav

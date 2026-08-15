@@ -657,7 +657,13 @@ int main(int argc, char **argv)
      * displays it - see src/plugin/bs_cocoa.h. */
     const unsigned fbMode = (unsigned)(editorShm && offscreen);
 
-    SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT | FLAG_VSYNC_HINT);
+    /* No multisampling hint. Measured across the BENC desktop apps: it changes
+     * 703 pixels of a 972,800 pixel window - seven hundredths of one per cent
+     * - because this interface is rectangles and text, and multisampling does
+     * nothing for either. It also asks the driver to go looking for a
+     * multisampled pixel format at startup, which some are slow about. See the
+     * desktop app conventions beside the style guide. */
+    SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_VSYNC_HINT);
     if (embedParent) SetConfigFlags(FLAG_WINDOW_UNDECORATED);
     if (fbMode)      SetConfigFlags(FLAG_WINDOW_HIDDEN);
     InitWindow(WIN_W, WIN_H, "BENCsynth");

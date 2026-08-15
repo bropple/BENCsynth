@@ -64,10 +64,20 @@ surprises:
 
 ```
 git clone --depth 1 https://github.com/raysan5/raylib
+tools/no-gamepads.sh raylib
 cmake -S raylib -B raylib/build -DCMAKE_INSTALL_PREFIX=$PWD/vendor/raylib \
       -DBUILD_EXAMPLES=OFF -DBUILD_SHARED_LIBS=OFF
 cmake --build raylib/build --target install -j
 ```
+
+That second line matters on Windows, and every workflow here runs it. GLFW
+looks for game controllers while the window is being created, and on a machine
+with a lot of things plugged into it that took ten and a half seconds before
+the window appeared — measured. Nothing in this program reads a joystick. A
+raylib built without the script works perfectly and opens slowly on exactly one
+kind of machine; the same wait shows up in Windows' own Game Controllers panel
+(`joy.cpl`) there, which is how to tell it apart from anything this program is
+doing.
 
 `make test`, `make core` and `make render` need none of it — the DSP core does
 not link raylib, deliberately.
